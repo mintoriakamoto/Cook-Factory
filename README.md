@@ -211,6 +211,29 @@ checks.
 
 ![Gate lift grouped bars: ungated 87.6% visible and 83.8% hidden versus gated 100% visible and 98.4% hidden](assets/benchmarks/gate-lift.svg)
 
+**And it holds beyond code.** The v1.9 non-code lanes ran 2 non-code tasks (a release manifest
+and a grounded research brief, 30 visible + 14 hidden checks total) through 3 lanes each. The
+gated climb was the only lane green on all 44 checks. The frontier one-shot dropped 5,
+including a placeholder signature on the manifest and ungrounded sentences in the brief. Both
+climbs engaged organically: each first probe came back exactly 1 check short and was repaired
+in-pool, no ladder escalation needed. Full traces, artifacts, and an offline verifier are
+published in [gatebench](https://github.com/FerroxLabs/gatebench) (`verify_noncode.py`).
+
+| task | lane | visible | hidden | measured $ |
+|---|---|---:|---:|---:|
+| release_manifest | **gated (Anvil)** | **16/16** | **7/7** | $0.0698 |
+| release_manifest | ungated solo | 16/16 | 7/7 | $0.0088 |
+| release_manifest | frontier one-shot | 14/16 | 6/7 | $0.0238 |
+| grounded_brief | **gated (Anvil)** | **14/14** | **7/7** | $0.0615 |
+| grounded_brief | ungated solo | 13/14 | 7/7 | $0.0021 |
+| grounded_brief | frontier one-shot | 12/14 | 7/7 | $0.0114 |
+
+Honest reading: these 2 tasks were near-saturated for the ungated pool (1 dropped check), so
+the non-code climb bought certainty rather than a big lift, and at a higher per-task cost than
+the solo lanes since the climb makes multiple calls. The claim these lanes support is precise:
+the gate turns almost-green into green, catches the frontier one-shot's misses, and does it
+for pennies. N=1 per cell, disclosed.
+
 The native v1.8 executor reproduced the discipline across 3 different domains through 1 verb:
 release-manifest 16/16, grounded-brief 14/14, code parity 18/18 visible + 10/10 hidden, every
 first probe green, $0.1246 for the whole proof wave. Charts are emitted by a committed,
