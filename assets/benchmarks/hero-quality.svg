@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Three-panel dark chart over the 4 objectively profiled lanes. Anvil, the top row of every panel, has the highest maintainability index at 51.6, the fastest measured runtime at 103 ms, and the lowest run cost at $0.012.">
+<rect width="1200" height="630" fill="#0e1113"/>
+<text x="60.0" y="48.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="23" fill="#e8eaec" text-anchor="start" font-weight="700">Better code. Faster code. A fraction of the bill.</text>
+<text x="60.0" y="74.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" fill="#a6adb3" text-anchor="start">4 leading lanes, formatting normalized before scoring; all 4 at 100% visible correctness. Objective re-score run; Anvil aggregates cover the</text>
+<text x="60.0" y="94.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" fill="#a6adb3" text-anchor="start">3 of 5 tasks that completed generation, timeouts disclosed in the repo.</text>
+<text x="60.0" y="156.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" fill="#e8eaec" text-anchor="start" font-weight="600">maintainability index (higher is better)</text>
+<text x="160.0" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="end" font-weight="700">Anvil</text>
+<rect x="172" y="192" width="133.9" height="42" rx="4" fill="#2fbf5f"/>
+<text x="313.9" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start" font-weight="700">51.6</text>
+<text x="160.0" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">opus-4-8</text>
+<rect x="172" y="282" width="123.3" height="42" rx="4" fill="#3e5a75"/>
+<text x="303.3" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">47.5</text>
+<text x="160.0" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-sol</text>
+<rect x="172" y="372" width="110.8" height="42" rx="4" fill="#3e5a75"/>
+<text x="290.8" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">42.7</text>
+<text x="160.0" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-luna</text>
+<rect x="172" y="462" width="114.3" height="42" rx="4" fill="#3e5a75"/>
+<text x="294.3" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">44.0</text>
+<text x="450.0" y="156.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" fill="#e8eaec" text-anchor="start" font-weight="600">measured runtime ms (lower is better)</text>
+<text x="550.0" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="end" font-weight="700">Anvil</text>
+<rect x="562" y="192" width="39.7" height="42" rx="4" fill="#2fbf5f"/>
+<text x="609.7" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start" font-weight="700">103 ms</text>
+<text x="550.0" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">opus-4-8</text>
+<rect x="562" y="282" width="53.4" height="42" rx="4" fill="#3e5a75"/>
+<text x="623.4" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">139 ms</text>
+<text x="550.0" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-sol</text>
+<rect x="562" y="372" width="60.1" height="42" rx="4" fill="#3e5a75"/>
+<text x="630.1" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">157 ms</text>
+<text x="550.0" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-luna</text>
+<rect x="562" y="462" width="133.9" height="42" rx="4" fill="#3e5a75"/>
+<text x="703.9" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">349 ms</text>
+<text x="840.0" y="156.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="13" fill="#e8eaec" text-anchor="start" font-weight="600">run cost USD (lower is better)</text>
+<text x="940.0" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="end" font-weight="700">Anvil</text>
+<rect x="952" y="192" width="3.5" height="42" rx="4" fill="#2fbf5f"/>
+<text x="963.5" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start" font-weight="700">$0.012</text>
+<text x="940.0" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">opus-4-8</text>
+<rect x="952" y="282" width="74.4" height="42" rx="4" fill="#3e5a75"/>
+<text x="1034.4" y="307.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">$0.251</text>
+<text x="940.0" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-sol</text>
+<rect x="952" y="372" width="133.9" height="42" rx="4" fill="#3e5a75"/>
+<text x="1093.9" y="397.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">$0.453</text>
+<text x="940.0" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#a6adb3" text-anchor="end">gpt-5-6-luna</text>
+<rect x="952" y="462" width="24.2" height="42" rx="4" fill="#3e5a75"/>
+<text x="984.2" y="487.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#e8eaec" text-anchor="start">$0.082</text>
+<text x="60.0" y="616.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#a6adb3" text-anchor="start">github.com/FerroxLabs/gatebench</text>
+<text x="1140.0" y="616.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#a6adb3" text-anchor="end">generated by assets/generate_charts.py from results/results-objective.json</text>
+</svg>

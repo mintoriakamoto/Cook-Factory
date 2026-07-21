@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="570" viewBox="0 0 920 570" role="img" aria-label="Average cost per task (log scale) versus average visible-gate percentage for 18 plotted lanes; the gate-first executor lane the Anvil lane sits in the top-left corner at 100 percent for $0.0063 per task.">
+<rect width="920" height="570" fill="#fcfcfb"/>
+<text x="64.0" y="28.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" fill="#0b0b0b" text-anchor="start" font-weight="600">Correctness vs. cost: 20-lane fold, 5 tasks, 133 visible checks</text>
+<text x="64.0" y="48.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#52514e" text-anchor="start">Each point is one lane: avg visible-gate % (y) vs measured avg cost per task (x, log scale). Top-left wins.</text>
+<text x="64.0" y="64.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="start">Excluded as flagged, not scored: fable-5 (router content-filter bug), hermes (empty output, $0 measured spend).</text>
+<line x1="64" y1="486.0" x2="890" y2="486.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="490.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">50</text>
+<line x1="64" y1="410.9" x2="890" y2="410.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="414.9" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">60</text>
+<line x1="64" y1="335.8" x2="890" y2="335.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="339.8" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">70</text>
+<line x1="64" y1="260.7" x2="890" y2="260.7" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="264.7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">80</text>
+<line x1="64" y1="185.6" x2="890" y2="185.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="189.6" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">90</text>
+<line x1="64" y1="110.5" x2="890" y2="110.5" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="114.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="end">100</text>
+<line x1="64.0" y1="88" x2="64.0" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="64.0" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.001</text>
+<line x1="156.1" y1="88" x2="156.1" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="156.1" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.002</text>
+<line x1="277.9" y1="88" x2="277.9" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="277.9" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.005</text>
+<line x1="370.0" y1="88" x2="370.0" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="370.0" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.01</text>
+<line x1="462.2" y1="88" x2="462.2" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="462.2" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.02</text>
+<line x1="584.0" y1="88" x2="584.0" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="584.0" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.05</text>
+<line x1="676.1" y1="88" x2="676.1" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="676.1" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.1</text>
+<line x1="768.2" y1="88" x2="768.2" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="768.2" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.2</text>
+<line x1="890.0" y1="88" x2="890.0" y2="486" stroke="#e1e0d9" stroke-width="1"/>
+<text x="890.0" y="504.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">$0.5</text>
+<line x1="64" y1="486" x2="890" y2="486" stroke="#c3c2b7" stroke-width="1"/>
+<text x="477.0" y="530.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#52514e" text-anchor="middle">measured avg cost per task (USD, log scale)</text>
+<text x="20" y="287.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#52514e" text-anchor="middle" transform="rotate(-90 20 287.0)">avg visible-gate %</text>
+<circle cx="309.4" cy="110.5" r="9" fill="none" stroke="#2a78d6" stroke-width="1.5"/>
+<circle cx="309.4" cy="110.5" r="4.5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<text x="309.4" y="94.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">Anvil  $0.0063</text>
+<circle cx="357.1" cy="148.1" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="367.1" y="162.1" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start">claude-haiku</text>
+<circle cx="647.5" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="649.5" y="130.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">claude-sonnet-5</text>
+<circle cx="499.6" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="495.6" y="94.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">deepseek-v4-pro</text>
+<circle cx="553.9" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="567.9" y="94.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">fugu</text>
+<circle cx="682.1" cy="260.7" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="692.1" y="264.7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start">fugu-ultra</text>
+<circle cx="756.3" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="768.3" y="80.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">gemini-3-1-pro</text>
+<circle cx="456.1" cy="115.0" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="448.1" y="135.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="end">glm-5-2</text>
+<circle cx="432.7" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="432.7" y="80.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">gpt-5-6-luna</text>
+<circle cx="646.3" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="644.3" y="94.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">gpt-5-6-sol</text>
+<circle cx="563.0" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="577.0" y="80.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">gpt-5-6-terra</text>
+<circle cx="498.5" cy="116.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="498.5" y="138.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">grok-4-5</text>
+<circle cx="750.0" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="742.0" y="94.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">kimi-k3</text>
+<circle cx="146.9" cy="203.6" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="156.9" y="207.6" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start">minimax-solo</text>
+<circle cx="165.9" cy="275.7" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="175.9" y="279.7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start">mistral-large</text>
+<circle cx="830.3" cy="416.9" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="818.3" y="420.9" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="end">openrouter-fusion</text>
+<circle cx="550.2" cy="110.5" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="576.2" y="130.5" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="middle">opus-4-8</text>
+<circle cx="480.7" cy="406.4" r="4.5" fill="#a3a29b" stroke="#fcfcfb" stroke-width="2"/>
+<text x="490.7" y="410.4" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start">qwen-plus</text>
+<text x="890.0" y="558.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#898781" text-anchor="end">generated by assets/generate_charts.py from results/results-full.json + results-pass2.json</text>
+</svg>

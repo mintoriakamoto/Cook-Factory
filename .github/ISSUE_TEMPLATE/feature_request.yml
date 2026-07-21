@@ -1,0 +1,102 @@
+name: ✨ Feature request
+description: Propose a new capability to add to Ferrox Factory
+title: "[Feature]: "
+labels: ["feature-request", "needs-review"]
+body:
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      description: Confirm all before submitting (issue-first — see CONTRIBUTING.md)
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: This is a new capability, not a bug or an enhancement to an existing one
+          required: true
+        - label: I have read CONTRIBUTING.md and understand the issue-first rule
+          required: true
+        - label: I understand this needs an `approved-feature` label before any PR is merged
+          required: true
+  - type: input
+    id: feature-name
+    attributes:
+      label: Feature name
+      description: A short, specific name for the capability
+    validations:
+      required: true
+  - type: dropdown
+    id: type-of-addition
+    attributes:
+      label: Type of addition
+      options:
+        - New Build Line stage/gate
+        - New runtime adapter
+        - New CLI verb
+        - New capability (feature)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this solve? Not "it would be nice" — the concrete gap.
+    validations:
+      required: true
+  - type: textarea
+    id: what-added
+    attributes:
+      label: What is being added
+      description: Describe the capability with concrete examples.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Full scope of changes
+      description: Files created/modified, systems touched.
+    validations:
+      required: true
+  - type: textarea
+    id: user-stories
+    attributes:
+      label: User stories
+      description: "Minimum 2. Format: As a <role>, I want <goal> so that <benefit>."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Testable conditions that define "done".
+    validations:
+      required: true
+  - type: dropdown
+    id: runtimes
+    multiple: true
+    attributes:
+      label: Applicable runtimes
+      options: [claude, codex, opencode, cursor, copilot, antigravity, windsurf, cline, wayland-core, all]
+    validations:
+      required: true
+  - type: textarea
+    id: breaking-changes
+    attributes:
+      label: Breaking changes assessment
+      description: Does this break existing behavior? If none, say "None and why".
+    validations:
+      required: true
+  - type: textarea
+    id: maintenance-burden
+    attributes:
+      label: Maintenance burden
+      description: Ongoing cost to keep this working.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else you weighed and why this wins.
+    validations:
+      required: true

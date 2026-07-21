@@ -1,0 +1,71 @@
+name: 🔧 Enhancement
+description: Improve an existing Ferrox Factory capability
+title: "[Enhancement]: "
+labels: ["enhancement", "needs-review"]
+body:
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: This improves an EXISTING capability (not a new feature or a bug)
+          required: true
+        - label: I have read CONTRIBUTING.md and understand the issue-first rule
+          required: true
+        - label: I understand this needs an `approved-enhancement` label before any PR is merged
+          required: true
+  - type: input
+    id: what-existing
+    attributes:
+      label: What existing feature
+      description: Which existing capability is being improved?
+    validations:
+      required: true
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current behavior
+      description: How it works today, with examples.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed behavior
+      description: How it should work, with examples.
+    validations:
+      required: true
+  - type: textarea
+    id: reason-benefit
+    attributes:
+      label: Reason and benefit
+      description: Why this matters — concrete, not vague.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope of changes
+    validations:
+      required: true
+  - type: textarea
+    id: breaking-changes
+    attributes:
+      label: Breaking changes
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options: [halting, coordination, strength-gates, model-tiering, memory, runtime-adapter, cli, docs, other]
+    validations:
+      required: true

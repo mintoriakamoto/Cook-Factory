@@ -1,0 +1,90 @@
+{
+  "id": "wayland-core",
+  "role": "runtime",
+  "version": "1.7.0",
+  "title": "Wayland Core",
+  "description": "Wayland Core — a Rust-native agent engine that owns its own loop with a Claude-Code-shaped skin (markdown skills, AGENTS.md, Claude model aliases, MCP client+server). Tier-2 support: the strength merge-gate attaches via pre_tool_use, but the hook surface is limited to 3 events (pre_tool_use/post_tool_use/stop) vs Claude's ~8, and the node CLI runs as skills/MCP-bridge, not the orchestrator (wcore owns the loop). Install verification against ~/dev/waylandcore is deferred (active repo — never modified); see REACH-WCORE-01 / FF-B25.",
+  "tier": "core",
+  "requires": [],
+  "engines": {
+    "ferrox": ">=1.7.0"
+  },
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".wayland-core",
+      "env": [
+        "WAYLAND_CORE_HOME"
+      ]
+    },
+    "localConfigDir": ".wayland-core",
+    "configFormat": "toml",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "ferrox-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
+        }
+      ],
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "ferrox-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
+        }
+      ]
+    },
+    "commandStyle": "shell-var",
+    "hooksSurface": "codex-hooks-json",
+    "hookEvents": "claude",
+    "sandboxTier": "none",
+    "supportTier": 2,
+    "installSurface": "codex-toml",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": true,
+        "maxDepth": 1,
+        "background": false,
+        "subagentToolkit": "read-only",
+        "backgroundDispatch": false
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "rust",
+      "projectInstructionFile": "AGENTS.md"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "$ferrox-update --reapply",
+      "tomlConfigInstall": true,
+      "cleanupSkillSidecars": true,
+      "agentTomlFiles": false,
+      "frontmatterDialect": "codex",
+      "reviewerCli": false,
+      "projectInstructionFile": "AGENTS.md",
+      "hookEventsSupported": [
+        "pre_tool_use",
+        "post_tool_use",
+        "stop"
+      ],
+      "ownsAgentLoop": true,
+      "nodeCliRole": "skills-and-mcp-bridge"
+    }
+  }
+}

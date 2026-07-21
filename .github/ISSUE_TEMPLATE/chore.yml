@@ -1,0 +1,53 @@
+name: 🧹 Chore
+description: A maintenance task with no user-facing behavior change
+title: "[Chore]: "
+labels: ["type: chore", "needs-triage"]
+body:
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: This has NO user-facing behavior change (else use enhancement/feature)
+          required: true
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+  - type: input
+    id: maintenance-task
+    attributes:
+      label: What is the maintenance task?
+    validations:
+      required: true
+  - type: dropdown
+    id: type-of-maintenance
+    attributes:
+      label: Type of maintenance
+      options: [dependency bump, refactor, test coverage, CI/build, docs, cleanup/dead-code, other]
+    validations:
+      required: true
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current state
+      description: Specifics — files, versions, what's stale.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-work
+    attributes:
+      label: Proposed work
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options: [halting, coordination, strength-gates, model-tiering, memory, runtime-adapter, cli, docs, ci, other]
+    validations:
+      required: true

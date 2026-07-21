@@ -1,0 +1,24 @@
+{
+  "name": "ferrox-core",
+  "displayName": "Ferrox Core",
+  "version": "1.7.0",
+  "description": "Ferrox Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
+  "author": {
+    "name": "ferroxfactory",
+    "url": "https://github.com/ferroxfactory"
+  },
+  "homepage": "https://github.com/ferroxfactory/ferrox-core",
+  "repository": "https://github.com/ferroxfactory/ferrox-core",
+  "license": "MIT",
+  "keywords": [
+    "spec-driven-development",
+    "planning",
+    "workflow",
+    "context-engineering",
+    "claude-code",
+    "ferrox"
+  ],
+  "commands": "./commands/ferrox/",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

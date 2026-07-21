@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="760" viewBox="0 0 920 760" role="img" aria-label="Flow diagram of the gated climb: probe with one low-cost model, run the visible gate, exit on green after a free tooling polish, otherwise loop: pick the first failing check, repair with an untried low-cost model or escalate up the ladder, re-gate, keep only strict improvements, and stop honestly when the budget is spent or the climb plateaus.">
+<rect width="920" height="760" fill="#fcfcfb"/>
+<defs>
+<marker id="ah" markerWidth="9" markerHeight="8" refX="7.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#52514e"/></marker>
+<marker id="ahg" markerWidth="9" markerHeight="8" refX="7.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#2f9e44"/></marker>
+<marker id="ahr" markerWidth="9" markerHeight="8" refX="7.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c8553d"/></marker>
+<marker id="ahb" markerWidth="9" markerHeight="8" refX="7.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#2a78d6"/></marker>
+</defs>
+<text x="40.0" y="32.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="16" fill="#0b0b0b" text-anchor="start" font-weight="600">The gated climb: how one task moves through the executor</text>
+<rect x="40" y="64" width="165" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="122.5" y="86.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">task + gate script</text>
+<path d="M205,82 L241,82" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="245" y="64" width="235" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="362.5" y="86.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">PROBE: 1 low-cost model, 1 attempt</text>
+<path d="M480,82 L516,82" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="520" y="64" width="115" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="577.5" y="86.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#2a78d6" text-anchor="middle" font-weight="600">RUN GATE</text>
+<path d="M635,82 L676,82" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<polygon points="680,82 745,56 810,82 745,108" fill="#f4f3ec" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="745.0" y="86.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="600">green?</text>
+<path d="M810,82 L850,82 Q860,82 860,92 L860,110 Q860,120 850,120 L800,120 Q790,120 790,130 L790,142" fill="none" stroke="#2f9e44" stroke-width="1.6" marker-end="url(#ahg)"/>
+<text x="868.0" y="106.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#2f9e44" text-anchor="start" font-weight="600">yes</text>
+<rect x="600" y="146" width="210" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="705.0" y="168.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">free tooling polish, re-gate</text>
+<path d="M810,164 L826,164" fill="none" stroke="#2f9e44" stroke-width="1.6" marker-end="url(#ahg)"/>
+<rect x="830" y="146" width="80" height="36" rx="8" fill="#e9f5ec" stroke="#2f9e44" stroke-width="1.2"/>
+<text x="870.0" y="168.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#2f9e44" text-anchor="middle" font-weight="700">DONE</text>
+<text x="755.0" y="202.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">most easy tasks end here: $0.0007</text>
+<path d="M745,108 L745,122 Q745,132 735,132 L310,132 Q300,132 300,142 L300,176" fill="none" stroke="#c8553d" stroke-width="1.6" marker-end="url(#ahr)"/>
+<text x="755.0" y="126.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#c8553d" text-anchor="start" font-weight="600">no</text>
+<rect x="140" y="180" width="320" height="48" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="300.0" y="199.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">pick target: first failing check</text>
+<text x="300.0" y="217.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">with an untried model</text>
+<path d="M300,228 L300,246" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<polygon points="175,284 300,250 425,284 300,318" fill="#f4f3ec" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="300.0" y="288.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">untried low-cost model?</text>
+<path d="M300,318 L300,348" fill="none" stroke="#2f9e44" stroke-width="1.6" marker-end="url(#ahg)"/>
+<text x="308.0" y="338.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#2f9e44" text-anchor="start" font-weight="600">yes</text>
+<rect x="120" y="352" width="330" height="48" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="285.0" y="371.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">surgical repair: spec + candidate</text>
+<text x="285.0" y="389.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">+ check NAMES only</text>
+<path d="M425,284 L466,284" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<text x="432.0" y="276.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#52514e" text-anchor="start" font-weight="600">no</text>
+<rect x="470" y="266" width="225" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="582.5" y="288.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">ESCALATE up the model ladder</text>
+<text x="612.0" y="330.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="start">the only place a frontier model gets called</text>
+<path d="M250,400 L250,432" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<path d="M582,302 L582,444 Q582,454 572,454 L481,454" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<rect x="237" y="436" width="240" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="357.0" y="458.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#2a78d6" text-anchor="middle" font-weight="600">RUN GATE on candidate</text>
+<path d="M357,472 L357,500" fill="none" stroke="#52514e" stroke-width="1.6" marker-end="url(#ah)"/>
+<polygon points="252,538 357,504 462,538 357,572" fill="#f4f3ec" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="357.0" y="542.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="600">better?</text>
+<text x="357.0" y="598.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">better = score strictly up, or a tie with strictly fewer failures</text>
+<path d="M462,538 L518,538" fill="none" stroke="#2f9e44" stroke-width="1.6" marker-end="url(#ahg)"/>
+<text x="472.0" y="530.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#2f9e44" text-anchor="start" font-weight="600">yes</text>
+<rect x="522" y="520" width="180" height="36" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="612.0" y="542.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">accept: new best</text>
+<path d="M252,538 L226,538" fill="none" stroke="#c8553d" stroke-width="1.6" marker-end="url(#ahr)"/>
+<text x="237.0" y="530.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#c8553d" text-anchor="start" font-weight="600">no</text>
+<rect x="40" y="514" width="182" height="48" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="131.0" y="533.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">discard, remember model</text>
+<text x="131.0" y="551.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle">failed this check</text>
+<path d="M612,556 L612,624" fill="none" stroke="#2a78d6" stroke-width="1.6"/>
+<path d="M131,562 L131,614 Q131,624 141,624 L640,624" fill="none" stroke="#2a78d6" stroke-width="1.6" marker-end="url(#ahb)"/>
+<polygon points="645,624 760,594 875,624 760,654" fill="#f4f3ec" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="760.0" y="628.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#0b0b0b" text-anchor="middle" font-weight="600">budget spent or plateau?</text>
+<path d="M875,624 L888,624 Q898,624 898,614 L898,232 Q898,222 888,222 L466,222" fill="none" stroke="#2a78d6" stroke-width="1.6" marker-end="url(#ahb)"/>
+<text x="884" y="430" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#2a78d6" text-anchor="middle" font-weight="600" transform="rotate(-90 884 430)">the climb</text>
+<path d="M760,654 L760,668" fill="none" stroke="#2f9e44" stroke-width="1.6" marker-end="url(#ahg)"/>
+<text x="768.0" y="666.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#2f9e44" text-anchor="start" font-weight="600">yes</text>
+<rect x="596" y="672" width="310" height="40" rx="8" fill="#ffffff" stroke="#c3c2b7" stroke-width="1.2"/>
+<text x="751.0" y="696.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#0b0b0b" text-anchor="middle" font-weight="600">STOP: return best so far, report honestly</text>
+<text x="751.0" y="732.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11" fill="#898781" text-anchor="middle">no fake green, no infinite loop</text>
+<text x="890.0" y="750.0" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="10" fill="#898781" text-anchor="end">generated by assets/generate_charts.py (static method diagram, no data plotted)</text>
+</svg>
