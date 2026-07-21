@@ -868,7 +868,7 @@ function handleQualityPipeline(args: string[], raw: boolean): void {
 /**
  * UGE-08 strength.gate-select — the UGE-01 domain-keyed gate registry over the CLI.
  * `--domain <d>` -> selectGate: { tier, archetype, route, preFilter, known } (output is
- * always JSON; a `--json` flag is tolerated as a no-op). `--list` -> the 16 canonical
+ * always JSON; a `--json` flag is tolerated as a no-op). `--list` -> the 20 canonical
  * registry keys. Unknown domains route 'crucible' with known:false — the fail-safe.
  */
 function handleGateSelect(args: string[], raw: boolean, error: (m: string, r?: string) => void): void {

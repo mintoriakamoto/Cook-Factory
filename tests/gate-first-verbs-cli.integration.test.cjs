@@ -94,14 +94,16 @@ test('strength.gate-select resolves aliases (sql -> data-sql) and fails unknown 
   assert.equal(unknown.json.known, false);
 });
 
-test('strength.gate-select --list returns the 16 canonical registry keys', () => {
+test('strength.gate-select --list returns the 20 canonical registry keys', () => {
   const cwd = makeProject();
   const r = runVerb(cwd, 'strength.gate-select', ['--list']);
   assert.equal(r.status, 0, r.stderr);
   assert.ok(Array.isArray(r.json.domains), `expected domains array, got: ${r.stdout}`);
-  assert.equal(r.json.domains.length, 16);
+  assert.equal(r.json.domains.length, 20);
   assert.ok(r.json.domains.includes('code'));
   assert.ok(r.json.domains.includes('writing'));
+  assert.ok(r.json.domains.includes('eval-harness'));
+  assert.ok(r.json.domains.includes('business-docs'));
 });
 
 test('strength.gate-select with no --domain and no --list exits non-zero via InvalidArgs', () => {

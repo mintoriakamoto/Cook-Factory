@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-714%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-812%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -108,10 +108,10 @@ every run).
 Since v1.8 this is the **default execution path**. Every phase routes through:
 
 ```
-gate-select (16-domain registry)  →  eligibility  →  gate-first run (the gated climb)
+gate-select (20-domain registry)  →  eligibility  →  gate-first run (the gated climb)
 ```
 
-- **gate-select** picks the strongest gate tier a domain admits, from a registry of 16 canonical
+- **gate-select** picks the strongest gate tier a domain admits, from a registry of 20 canonical
   domains (executable checks first, then formal, reference, and grounding checks).
 - **Eligibility** confirms a real gate exists and the native executor is available. Both the fast
   and full discipline paths are eligible.
@@ -218,6 +218,29 @@ self-checking generator that reads the raw results and refuses to draw on any mi
 
 ---
 
+## The gate library
+
+The gates the climb runs against are a library, not a pile of scripts: 4 validated packs
+ship in [`gates/`](gates/README.md), each with a Gate Card declaring its checks, tools,
+validation status, and known gamed-modes.
+
+- **eval-harness-integrity**: trusts an eval harness only when it separates a gold stub, a
+  random stub, and its own planted mutants in the declared order at the declared deltas.
+- **test-generation**: scores a test suite by mutation-kill rate against the code under
+  test, never by inspection; "tests pass" alone counts for nothing.
+- **skill-instruction-files**: gates SKILL.md and agent instruction files on dead
+  references, token budget, runnable examples, and contradictions.
+- **spreadsheets**: recalculates workbooks headless and perturbs inputs to catch hardcoded
+  totals that read as formulas.
+
+Every pack is validated to a sealed standard before it may gate anything: a pool of at
+least 5 **fluent-but-wrong** mutant fixtures (convincing garbage a human skim would accept)
+that the gate must catch, sealed in a content-addressed store outside the repo and rotated
+per run so no builder can memorize them. The full standard, check inventories, and
+authoring guide live in [`gates/README.md`](gates/README.md).
+
+---
+
 ## Installation
 
 Ferrox Factory installs into your existing agent runtime, straight from npm:
@@ -304,7 +327,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **714 tests** across the halting, coordination, strength, model-routing, memory,
+The suite is **812 tests** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

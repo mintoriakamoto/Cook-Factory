@@ -1,8 +1,9 @@
 /**
  * UGE-01 — domain-keyed gate selection (the native universal gate-first registry).
  *
- * Port of the anvil DOMAIN-GATING catalog (ANVIL-PORT-SPEC.md §1). Rule: select the HIGHEST tier the
- * domain admits. Ladder: 1 Executable · 2 Formal · 3 Reference · 4 Grounding · 5 Consistency (soft,
+ * Port of the anvil DOMAIN-GATING catalog (ANVIL-PORT-SPEC.md §1), extended in MILESTONE v1.9 with
+ * the 4 gate-pack domains (eval-harness, test-generation, agent-ops, business-docs — all executable
+ * tier, cards at gates/<pack>/card.md). Rule: select the HIGHEST tier the domain admits. Ladder: 1 Executable · 2 Formal · 3 Reference · 4 Grounding · 5 Consistency (soft,
  * PRE-FILTER only — never the gate) · 6 Model-judge (subjective, route to Crucible).
  *
  *   selectGate(domain) -> { tier, archetype, route, preFilter, known }
@@ -13,7 +14,7 @@
  *     preFilter is always true: the tier-5 consistency check is a cheap cross-cutting pre-filter
  *     hint that any route may run BEFORE its gate/judge; it is never selectable AS the gate.
  *
- *   listGateDomains() -> the 16 canonical registry keys (docs/UX).
+ *   listGateDomains() -> the 20 canonical registry keys (docs/UX).
  *
  * Normalization: lowercase, trim, spaces/underscores -> hyphens ('Tool Use' -> 'tool-use').
  * Anti-Goodhart (spec §1): the gate is the ceiling; judge != generator; low iteration count is a
@@ -62,9 +63,20 @@ const ALIASES: Record<string, string> = {
   design: 'writing',
   conversation: 'writing',
   support: 'writing',
+  evals: 'eval-harness',
+  'eval-harness-integrity': 'eval-harness',
+  'test-gen': 'test-generation',
+  skills: 'agent-ops',
+  'instruction-files': 'agent-ops',
+  'skill-instruction-files': 'agent-ops',
+  spreadsheets: 'business-docs',
+  workbooks: 'business-docs',
 };
 
-/** The 16-domain catalog: highest admissible tier + verification archetype (spec §1 table, verbatim). */
+/**
+ * The 20-domain catalog: highest admissible tier + verification archetype. Rows 1-16 are the anvil
+ * spec §1 table verbatim; the 4 v1.9 gate-pack domains follow, archetypes from their Gate Cards.
+ */
 const REGISTRY: Record<string, { tier: number; archetype: string }> = {
   code: { tier: 1, archetype: 'test suite / compiler / type-checker / linter / SAST' },
   'data-sql': { tier: 1, archetype: 'query executes + row/value assertions, dbt tests, schema validation, golden-result diff' },
@@ -73,6 +85,10 @@ const REGISTRY: Record<string, { tier: number; archetype: string }> = {
   security: { tier: 1, archetype: 'exploit reproduces / regression test passes, fuzzing survives, SAST clean' },
   infra: { tier: 1, archetype: 'terraform plan dry-run, policy-as-code (OPA), does-it-boot/healthcheck, schema-valid manifests' },
   'math-numeric': { tier: 1, archetype: 'plug answer back in, symbolic equality (sympy), unit/dimensional analysis' },
+  'eval-harness': { tier: 1, archetype: 'calibration stub triple (gold/random/planted-mutant) separates in order at declared deltas, leakage scan, scorer-bypass scan' },
+  'test-generation': { tier: 1, archetype: 'mutation-kill rate vs the target module, coverage delta vs baseline, assert-quality AST scans (relational gate)' },
+  'agent-ops': { tier: 1, archetype: 'dead-reference scan vs workspace + tool manifest, token budget, fenced-example execution, frontmatter schema' },
+  'business-docs': { tier: 1, archetype: 'headless workbook recalc without error cells, formula-not-literal, perturbation probe, cross-sheet refs resolve' },
   'math-proof': { tier: 2, archetype: 'theorem prover (Lean/Coq)' },
   'structured-gen': { tier: 2, archetype: 'JSON-Schema / grammar / type validation (fails closed, near-free)' },
   logic: { tier: 2, archetype: 'SMT/constraint solver (Z3) checks output satisfies spec' },

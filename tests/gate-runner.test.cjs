@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { parseGateOutput, runGate } = require('../ferrox-core/bin/lib/gate-runner.cjs');
+const { parseGateOutput, runGate, classifyFail, FAIL_CATEGORIES } = require('../ferrox-core/bin/lib/gate-runner.cjs');
 
 // ---------- parseGateOutput (pure) ----------
 
@@ -74,6 +74,55 @@ test('parseGateOutput: empty and garbage input -> fail closed, never throws', ()
     assert.deepEqual(r.score, [0, 1]);
     assert.deepEqual(r.fails, ['<no gate output>']);
   }
+});
+
+// ---------- FAIL surface v2 (ADR-SEALED-GATES decision 3) ----------
+
+test('parseGateOutput: v2 FAIL line keeps the full "<ID> <category>" string as the check key', () => {
+  const r = parseGateOutput('FAIL RM-11 relation\nFAIL RM-15 value\ngate: 14/16\n');
+  assert.deepEqual(r.fails, ['RM-11 relation', 'RM-15 value']);
+});
+
+test('parseGateOutput: v2 FAIL line with irregular inner whitespace normalizes to 1 space', () => {
+  const r = parseGateOutput('FAIL RM-11   relation\nFAIL RM-15\t value\ngate: 14/16\n');
+  assert.deepEqual(r.fails, ['RM-11 relation', 'RM-15 value']);
+});
+
+test('parseGateOutput: legacy named FAIL lines pass through untouched (no v2 normalization)', () => {
+  const name = 'checksums-sha256-shape  with   inner spacing';
+  const r = parseGateOutput(`FAIL ${name}\ngate: 0/1\n`);
+  assert.deepEqual(r.fails, [name]);
+});
+
+test('classifyFail: valid v2 tokens parse to id + category', () => {
+  assert.deepEqual(classifyFail('RM-11 relation'), { v2: true, id: 'RM-11', category: 'relation' });
+  assert.deepEqual(classifyFail('EHI-01 execution'), { v2: true, id: 'EHI-01', category: 'execution' });
+  assert.deepEqual(classifyFail('AB-99 security'), { v2: true, id: 'AB-99', category: 'security' });
+});
+
+test('classifyFail: id pattern is ^[A-Z]{2,4}-[0-9]{2}$ exactly', () => {
+  for (const bad of ['R-11 relation', 'ABCDE-11 relation', 'rm-11 relation', 'RM-1 relation', 'RM-111 relation', 'RM11 relation']) {
+    assert.deepEqual(classifyFail(bad), { v2: false });
+  }
+});
+
+test('classifyFail: category is the closed 6-enum, nothing else', () => {
+  for (const cat of ['structure', 'value', 'relation', 'grounding', 'execution', 'security']) {
+    assert.equal(classifyFail(`XY-01 ${cat}`).v2, true);
+  }
+  for (const bad of ['XY-01 format', 'XY-01 Relation', 'XY-01 relation extra', 'XY-01']) {
+    assert.deepEqual(classifyFail(bad), { v2: false });
+  }
+});
+
+test('classifyFail: legacy names and garbage classify as non-v2, never throw', () => {
+  for (const legacy of ['checksums-sha256-shape', 'test_empty_input', '', undefined, null, 42, {}]) {
+    assert.deepEqual(classifyFail(legacy), { v2: false });
+  }
+});
+
+test('FAIL_CATEGORIES: exactly the 6 closed categories in canonical order', () => {
+  assert.deepEqual(FAIL_CATEGORIES, ['structure', 'value', 'relation', 'grounding', 'execution', 'security']);
 });
 
 // ---------- runGate (impure thin wrapper) ----------

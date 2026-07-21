@@ -209,6 +209,8 @@ export default tseslint.config(
       'ferrox-core/bin/lib/gate-runner.cjs',
       'ferrox-core/bin/lib/gate-climb.cjs',
       'ferrox-core/bin/lib/gate-first-executor.cjs',
+      'ferrox-core/bin/lib/gate-seal.cjs',
+      'ferrox-core/bin/lib/mutant-rotation.cjs',
       'ferrox-core/bin/lib/crucible-route.cjs',
       'ferrox-core/bin/lib/memory-fact.cjs',
       'ferrox-core/bin/lib/memory-recall-capture.cjs',

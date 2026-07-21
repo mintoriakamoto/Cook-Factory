@@ -873,6 +873,24 @@ export const GATE_COMMAND_ALIASES: CommandAlias[] = [
     "aliases": ["gate cap-check"],
     "subcommand": "cap-check",
     "mutation": false
+  },
+  {
+    "canonical": "gate.seal",
+    "aliases": ["gate seal"],
+    "subcommand": "seal",
+    "mutation": true
+  },
+  {
+    "canonical": "gate.verify-seal",
+    "aliases": ["gate verify-seal"],
+    "subcommand": "verify-seal",
+    "mutation": false
+  },
+  {
+    "canonical": "gate.sample-mutants",
+    "aliases": ["gate sample-mutants"],
+    "subcommand": "sample-mutants",
+    "mutation": false
   }
 ];
 

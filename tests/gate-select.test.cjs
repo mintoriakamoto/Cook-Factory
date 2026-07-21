@@ -3,7 +3,8 @@
 /**
  * UGE-01 red-green tests — domain-keyed gate selection (the native universal gate-first registry).
  *
- * Port of the anvil DOMAIN-GATING catalog (ANVIL-PORT-SPEC.md §1): 16 domain keys, each mapped to the
+ * Port of the anvil DOMAIN-GATING catalog (ANVIL-PORT-SPEC.md §1) plus the 4 v1.9 gate-pack domains
+ * (eval-harness, test-generation, agent-ops, business-docs): 20 domain keys, each mapped to the
  * HIGHEST verification tier the domain admits, with aliases and normalization. Tiers 1-4 route
  * 'gate-first'; tier 6 and unknown domains route 'crucible' (fail-safe: unknown is NOT gateable).
  * Tier 5 (consistency) is a cross-cutting cheap PRE-FILTER only — never selectable as the gate.
@@ -17,6 +18,7 @@ const { selectGate, listGateDomains, PRE_FILTER_TIER } = require('../ferrox-core
 
 const ALL_DOMAINS = [
   'code', 'data-sql', 'web-ui', 'agentic', 'security', 'infra', 'math-numeric',
+  'eval-harness', 'test-generation', 'agent-ops', 'business-docs',
   'math-proof', 'structured-gen', 'logic',
   'extraction', 'translation', 'classification',
   'research', 'long-form',
@@ -31,9 +33,10 @@ test('selectGate: code -> tier 1, gate-first, executable archetype', () => {
   assert.match(g.archetype, /test suite/);
 });
 
-test('selectGate: all 16 canonical domains are known with spec tiers', () => {
+test('selectGate: all 20 canonical domains are known with spec tiers', () => {
   const expected = {
     code: 1, 'data-sql': 1, 'web-ui': 1, agentic: 1, security: 1, infra: 1, 'math-numeric': 1,
+    'eval-harness': 1, 'test-generation': 1, 'agent-ops': 1, 'business-docs': 1,
     'math-proof': 2, 'structured-gen': 2, logic: 2,
     extraction: 3, translation: 3, classification: 3,
     research: 4, 'long-form': 4,
@@ -75,6 +78,10 @@ test('selectGate: aliases resolve to canonical domains (spec §1 table)', () => 
     rag: 'research', 'factual-synthesis': 'research',
     reports: 'long-form',
     content: 'writing', design: 'writing', conversation: 'writing', support: 'writing',
+    evals: 'eval-harness', 'eval-harness-integrity': 'eval-harness',
+    'test-gen': 'test-generation',
+    skills: 'agent-ops', 'instruction-files': 'agent-ops', 'skill-instruction-files': 'agent-ops',
+    spreadsheets: 'business-docs', workbooks: 'business-docs',
   };
   for (const [alias, canonical] of Object.entries(aliasMap)) {
     assert.deepEqual(selectGate(alias), selectGate(canonical), `${alias} -> ${canonical}`);
@@ -119,14 +126,23 @@ test('selectGate: preFilter hint is always allowed (cross-cutting tier-5 pre-fil
   assert.equal(PRE_FILTER_TIER, 5);
 });
 
-test('listGateDomains: returns the 16 registry keys', () => {
+test('listGateDomains: returns the 20 registry keys', () => {
   const domains = listGateDomains();
-  assert.equal(domains.length, 16);
+  assert.equal(domains.length, 20);
   assert.deepEqual([...domains].sort(), [...ALL_DOMAINS].sort());
 });
 
 test('listGateDomains: returns a fresh array (no shared mutable state)', () => {
   const a = listGateDomains();
   a.push('tampered');
-  assert.equal(listGateDomains().length, 16);
+  assert.equal(listGateDomains().length, 20);
+});
+
+test('selectGate: v1.9 pack domains are executable-tier and route gate-first', () => {
+  for (const domain of ['eval-harness', 'test-generation', 'agent-ops', 'business-docs']) {
+    const g = selectGate(domain);
+    assert.equal(g.known, true, `${domain} should be known`);
+    assert.equal(g.tier, 1, `${domain} is executable-tier`);
+    assert.equal(g.route, 'gate-first', `${domain} routes gate-first, not crucible`);
+  }
 });

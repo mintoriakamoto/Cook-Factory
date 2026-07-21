@@ -33,6 +33,35 @@ interface GateResult {
 /** Spec §2 invocation timeout: 400s. */
 const DEFAULT_TIMEOUT_MS = 400000;
 
+/**
+ * FAIL surface v2 (ADR-SEALED-GATES decision 3): `FAIL <ID> <category>` where ID matches
+ * ^[A-Z]{2,4}-[0-9]{2}$ and category is the closed 6-enum below. The FULL "<ID> <category>"
+ * string stays the stable check key (gate-climb tried-memory is keyed on it unchanged);
+ * classifyFail is the validator gate validation uses to assert a card-conformant surface.
+ */
+const FAIL_CATEGORIES = ['structure', 'value', 'relation', 'grounding', 'execution', 'security'] as const;
+const FAIL_V2_RE = /^([A-Z]{2,4}-[0-9]{2})[ \t]+(structure|value|relation|grounding|execution|security)$/;
+
+type FailClass = { v2: true; id: string; category: string } | { v2: false };
+
+/** PURE. Classify a parsed fail string: v2 `<ID> <category>` token or legacy name. Never throws. */
+function classifyFail(fail?: unknown): FailClass {
+  if (typeof fail !== 'string') return { v2: false };
+  const m = FAIL_V2_RE.exec(fail);
+  if (m === null) return { v2: false };
+  return { v2: true, id: m[1], category: m[2] };
+}
+
+/**
+ * PURE. Normalize a fail string: v2 lines with irregular inner whitespace collapse to the
+ * canonical `<ID> <category>` single-space form so the tried-memory key is stable across
+ * gate emitters. Legacy names pass through untouched.
+ */
+function normalizeFail(fail: string): string {
+  const m = FAIL_V2_RE.exec(fail);
+  return m === null ? fail : `${m[1]} ${m[2]}`;
+}
+
 /** The fail-closed verdict: no usable gate output means the gate did not pass. */
 function failClosed(reason: string): GateResult {
   return { score: [0, 1], fails: [reason] };
@@ -57,7 +86,7 @@ function parseGateOutput(stdout?: unknown): GateResult {
   for (const line of stdout.split('\n')) {
     if (line.startsWith('FAIL ')) {
       const name = line.slice('FAIL '.length).replace(/[\r\s]+$/, '');
-      if (name !== '') fails.push(name);
+      if (name !== '') fails.push(normalizeFail(name));
     }
   }
   return { score: [parseInt(last[1], 10), parseInt(last[2], 10)], fails };
@@ -102,4 +131,10 @@ function runGate(opts?: { gateCmd?: string | string[]; artifactPath?: string; ti
   return parseGateOutput(stdout);
 }
 
-export = { parseGateOutput, runGate, DEFAULT_TIMEOUT_MS };
+export = {
+  parseGateOutput,
+  runGate,
+  classifyFail,
+  DEFAULT_TIMEOUT_MS,
+  FAIL_CATEGORIES: [...FAIL_CATEGORIES] as string[],
+};
