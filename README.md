@@ -219,22 +219,26 @@ self-checking generator that reads the raw results and refuses to draw on any mi
 
 ## Installation
 
-Ferrox Factory installs into your existing agent runtime. From a clone (or once published, via `npx`):
+Ferrox Factory installs into your existing agent runtime, straight from npm:
 
 ```bash
-# Once, from a fresh clone
-npm install && npm run build:lib
-
 # Claude Code, globally
-node bin/install.js --claude --global
+npx ferrox-factory --claude --global
 
 # Or scoped to one project
-node bin/install.js --claude --local
+npx ferrox-factory --claude --local
 
 # Other runtimes
-node bin/install.js --codex --global
-node bin/install.js --cursor --global
-node bin/install.js --all --global      # every supported runtime
+npx ferrox-factory --codex --global
+npx ferrox-factory --cursor --global
+npx ferrox-factory --all --global       # every supported runtime
+```
+
+Or from a clone:
+
+```bash
+npm install && npm run build:lib        # once
+node bin/install.js --claude --global
 ```
 
 **Supported runtimes:** Claude Code · Codex · Cursor · Windsurf · Kimi CLI · Kilo · Copilot ·
