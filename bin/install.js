@@ -1332,6 +1332,9 @@ const READONLY_AGENT_DISALLOWED_TOOLS = {
   'ferrox-doc-verifier': 'Edit, MultiEdit',
   'ferrox-eval-auditor': 'Edit, MultiEdit',
   'ferrox-ui-auditor': 'Edit, MultiEdit',
+  'ferrox-design-critic': 'Write, Edit, MultiEdit',
+  'ferrox-a11y-design-reviewer': 'Write, Edit, MultiEdit',
+  'ferrox-a11y-auditor': 'Edit, MultiEdit',
 };
 
 /**

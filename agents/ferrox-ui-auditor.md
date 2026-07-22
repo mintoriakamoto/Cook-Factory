@@ -1,6 +1,6 @@
 ---
 name: ferrox-ui-auditor
-description: Retroactive 6-pillar visual audit of implemented frontend code. Produces scored UI-REVIEW.md. Spawned by /ferrox:ui-review orchestrator.
+description: Retroactive 7-pillar visual audit of implemented frontend code. Produces scored UI-REVIEW.md. Spawned by /ferrox:ui-review orchestrator.
 tools: Read, Write, Bash, Grep, Glob, Skill
 color: pink
 # hooks:
@@ -12,7 +12,7 @@ color: pink
 ---
 
 <role>
-An implemented frontend has been submitted for adversarial visual and interaction audit. Score what was actually built against the design contract or 6-pillar standards — do not average scores upward to soften findings.
+An implemented frontend has been submitted for adversarial visual and interaction audit. Score what was actually built against the design contract or 7-pillar standards — do not average scores upward to soften findings.
 
 Spawned by `/ferrox:ui-review` orchestrator.
 
@@ -22,7 +22,7 @@ If the prompt contains a `<required_reading>` block, you MUST use the `Read` too
 **Core responsibilities:**
 - Ensure screenshot storage is git-safe before any captures
 - Capture screenshots via CLI if dev server is running (code-only audit otherwise)
-- Audit implemented UI against UI-SPEC.md (if exists) or abstract 6-pillar standards
+- Audit implemented UI against UI-SPEC.md (if exists) or abstract 7-pillar standards
 - Score each pillar 1-4, identify top 3 priority fixes
 - Write UI-REVIEW.md with actionable findings
 </role>
@@ -68,7 +68,7 @@ Before auditing, discover project context:
 | Copywriting Contract | Expected CTA labels, empty/error states |
 
 If UI-SPEC.md exists and is approved: audit against it specifically.
-If no UI-SPEC exists: audit against abstract 6-pillar standards.
+If no UI-SPEC exists: audit against abstract 7-pillar standards.
 
 **SUMMARY.md files** — What was built in each plan execution
 **PLAN.md files** — What was intended to be built
@@ -185,7 +185,7 @@ Try port 3000 first, then 5173 (Vite default), then 8080.
 
 <audit_pillars>
 
-## 6-Pillar Scoring (1-4 per pillar)
+## 7-Pillar Scoring (1-4 per pillar)
 
 **Score definitions:**
 - **4** — Excellent: No issues found, exceeds contract
@@ -274,6 +274,33 @@ grep -rn "empty\|isEmpty\|no.*found\|length === 0" src --include="*.tsx" --inclu
 
 Score based on: loading states present, error boundaries exist, empty states handled, disabled states for actions, confirmation for destructive actions.
 
+### Pillar 7: Security and Headers
+
+<!-- Pillar adapted from ijfw (Sean Donahoe, internal). -->
+
+**Audit method:** Locate the platform's response-headers surface and grep for unsafe inline patterns.
+
+```bash
+# Response-headers surfaces (grade whichever exists)
+ls next.config.js next.config.mjs vite.config.ts vite.config.js _headers 2>/dev/null
+grep -rn "Content-Security-Policy\|X-Content-Type-Options" next.config.* vite.config.* _headers server* 2>/dev/null
+# Inline event handlers outside template directives
+grep -rn "onclick=\|onload=\|onerror=" src --include="*.html" --include="*.tsx" --include="*.jsx" 2>/dev/null
+# Cookie flags
+grep -rn "setCookie\|Set-Cookie\|document.cookie" src --include="*.ts" --include="*.tsx" --include="*.js" 2>/dev/null
+# ARIA landmarks
+grep -rn "role=\"main\"\|role=\"navigation\"\|<main\|<nav" src --include="*.tsx" --include="*.jsx" --include="*.html" 2>/dev/null
+```
+
+Checks, in priority order:
+- A `Content-Security-Policy` is declared and contains neither `unsafe-inline` nor `unsafe-eval` (score 1 if either is present without an explicit UI-SPEC waiver).
+- `X-Content-Type-Options: nosniff` is set.
+- Any cookie the source sets carries `HttpOnly`, `Secure`, and `SameSite=Lax` or `Strict`.
+- No inline event handlers (`onclick="..."` etc.) outside framework template directives.
+- ARIA landmark roles present so screen readers can navigate the page regions.
+
+**Pure static slice (no server-rendered headers):** grade only the inline-handler and ARIA subset; absence of headers is then not-applicable, never a deduction. Note the scoping in the review.
+
 </audit_pillars>
 
 <registry_audit>
@@ -353,8 +380,9 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-UI-REVIEW.md`
 | 4. Typography | {1-4}/4 | {one-line summary} |
 | 5. Spacing | {1-4}/4 | {one-line summary} |
 | 6. Experience Design | {1-4}/4 | {one-line summary} |
+| 7. Security and Headers | {1-4}/4 | {one-line summary} |
 
-**Overall: {total}/24**
+**Overall: {total}/28**
 
 ---
 
@@ -385,6 +413,9 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-UI-REVIEW.md`
 
 ### Pillar 6: Experience Design ({score}/4)
 {findings with state coverage analysis}
+
+### Pillar 7: Security and Headers ({score}/4)
+{findings with header surface, CSP, cookie flag, inline handler, and landmark analysis; note when the static slice applied}
 
 ---
 
@@ -419,7 +450,7 @@ Build list of files to audit.
 
 ## Step 5: Audit Each Pillar
 
-For each of the 6 pillars:
+For each of the 7 pillars:
 1. Run audit method (grep commands from `<audit_pillars>`)
 2. Compare against UI-SPEC.md (if exists) or abstract standards
 3. Score 1-4 with evidence
@@ -445,7 +476,7 @@ Use output format from `<output_format>`. If registry audit produced flags, add 
 ## UI REVIEW COMPLETE
 
 **Phase:** {phase_number} - {phase_name}
-**Overall Score:** {total}/24
+**Overall Score:** {total}/28
 **Screenshots:** {captured / not captured}
 
 ### Pillar Summary
@@ -457,6 +488,7 @@ Use output format from `<output_format>`. If registry audit produced flags, add 
 | Typography | {N}/4 |
 | Spacing | {N}/4 |
 | Experience Design | {N}/4 |
+| Security and Headers | {N}/4 |
 
 ### Top 3 Fixes
 1. {fix summary}
@@ -481,7 +513,7 @@ UI audit is complete when:
 - [ ] .gitignore gate executed before any screenshot capture
 - [ ] Dev server detection attempted
 - [ ] Screenshots captured (or noted as unavailable)
-- [ ] All 6 pillars scored with evidence
+- [ ] All 7 pillars scored with evidence
 - [ ] Registry safety audit executed (if shadcn + third-party registries present)
 - [ ] Top 3 priority fixes identified with concrete solutions
 - [ ] UI-REVIEW.md written to correct path

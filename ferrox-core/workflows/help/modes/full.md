@@ -610,10 +610,11 @@ The commands above cover the most common day-to-day flows. Every command listed 
 ### Discovery & Specification
 
 - **`/ferrox:explore`** — Socratic ideation and idea routing. Think through ideas before committing to plans.
-- **`/ferrox:brainstorm [topic]`**: Freeform ideation session. Diverge on options with tradeoffs, persist to `.planning/brainstorms/`, then route the result (discuss-phase, new milestone, or backlog).
+- **`/ferrox:brainstorm [topic] [--research]`**: Research brainstorm with a visual helper. Hard-gated design dialogue, recommendation-first questions, 2 to 3 approaches with tradeoffs. `--research` fires 2 to 4 parallel researcher subagents (also available mid-session on genuine unknowns); a local browser companion shows mockups and diagrams for visual questions. Persists `.planning/brainstorms/{slug}-{date}/BRAINSTORM.md` (+ `research/` + `screens/`), then routes the result (discuss-phase, new milestone, or backlog).
 - **`/ferrox:spec-phase <phase> [--auto] [--text]`** — Clarify WHAT a phase delivers with ambiguity scoring; produces a SPEC.md before discuss-phase.
 - **`/ferrox:ai-integration-phase [phase]`** — Generate an AI-SPEC.md design contract for phases that involve building AI systems.
-- **`/ferrox:ui-phase [phase]`** — Generate UI design contract (UI-SPEC.md) for frontend phases.
+- **`/ferrox:ui-phase [phase]`** — Generate UI design contract (UI-SPEC.md) for frontend phases. Ends with the design eyes cross-audit: ferrox-design-critic plus ferrox-a11y-design-reviewer critique the spec and every mockup in parallel, against DESIGN.md when present.
+- **`/ferrox:design-init [--from-existing]`** — Create DESIGN.md, the durable 9-section design contract at the project root. Recommendation-first interview, or `--from-existing` to draft it from the codebase's current UI. Once present, DESIGN.md is binding context for all UI and visual work.
 - **`/ferrox:import --from <filepath> | --from-ferrox2`** — Ingest external plans with conflict detection, or reverse-migrate a Ferrox-2 (`.ferrox/`) project back to Ferrox v1 (`.planning/`) format.
 - **`/ferrox:ingest-docs [path] [--mode new|merge] [--manifest <file>] [--resolve auto|interactive]`** — Bootstrap or merge a `.planning/` setup from existing ADRs, PRDs, SPECs, and docs in a repo.
 
@@ -629,7 +630,7 @@ The commands above cover the most common day-to-day flows. Every command listed 
 - **`/ferrox:code-review <phase> [--depth=quick|standard|deep] [--files file1,file2,...] [--fix [--all] [--auto]]`** — Review source files changed during a phase for bugs, security issues, and code quality problems.
 - **`/ferrox:secure-phase [phase]`** — Retroactively verify threat mitigations for a completed phase.
 - **`/ferrox:validate-phase [phase]`** — Retroactively audit and fill Nyquist validation gaps for a completed phase.
-- **`/ferrox:ui-review [phase]`** — Retroactive 6-pillar visual audit of implemented frontend code.
+- **`/ferrox:ui-review [phase]`** — Retroactive 7-pillar visual audit of implemented frontend code, followed by the design eyes cross-audit (ferrox-design-critic plus ferrox-a11y-auditor in parallel) with a resolve-or-waive gate on BLOCK findings.
 - **`/ferrox:eval-review [phase]`** — Audit an executed AI phase's evaluation coverage and produce an EVAL-REVIEW.md remediation plan.
 - **`/ferrox:audit-fix --source <audit-uat> [--severity medium|high|all] [--max N] [--dry-run]`** — Autonomous audit-to-fix pipeline: find issues, classify, fix, test, commit.
 - **`/ferrox:add-tests <phase> [additional instructions]`** — Generate tests for a completed phase based on UAT criteria and implementation.

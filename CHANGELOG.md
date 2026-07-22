@@ -1,5 +1,69 @@
 # Changelog
 
+## 1.10.0 (2026-07-22): Research Brainstorm, Visual Companion, and the Design Stack
+
+`/ferrox:brainstorm` becomes a research brainstorm with a live visual helper, the repo gains a
+durable design stack (a DESIGN.md contract, a ported design knowledge base, 4 design eyes), and
+the gate library grows its 5th pack. Proven by dogfood: this release's own closing wave ran the
+v2 brainstorm end to end on a real backlog topic and seeded MILESTONE v1.11 from its exit
+route. Suite: 812 to 840 tests, all green.
+
+### Brainstorm v2
+
+- **The Superpowers floor, adopted wholesale** (discipline modeled on the Superpowers
+  brainstorming skill by Obra, MIT, credited in the workflow): hard design gate (no
+  implementation until the design is approved, no topic "too simple"), 1 question per message,
+  2 to 3 genuinely different approaches, sectioned design presentation with per-section
+  approval, spec self-review, and a user review gate on the written doc.
+- **4 Ferrox improvements on that floor**: recommendation-first questioning (house law: every
+  question and option set leads with a verified pick and the why); research on tap
+  (`--research` at entry or mid-session on genuine unknowns fires 2 to 4 parallel researchers
+  whose comparison tables land back in the session and under `research/`); lifecycle routing
+  (exactly 3 exits: promote to discuss-phase, seed a new milestone, park in the backlog);
+  and a structural floor instead of a scoring gate, because ideation quality is gate-hostile
+  by locked doctrine.
+- Artifact layout: `.planning/brainstorms/{slug}-{date}/BRAINSTORM.md` plus `research/` and
+  `screens/`, committed as 1 session record.
+
+### The visual companion
+
+- The zero-dep companion server is adapted from the Superpowers visual companion (MIT, by
+  Obra) under `ferrox-core/bin/visual/`, wire-protocol compatible (watched screen dir,
+  click-selection events, WebSocket reload) and reframed in the Ferrox dark theme.
+- **Hardened beyond the original**: a host allowlist blocks DNS-rebinding access, a WebSocket
+  origin check blocks cross-origin event hijack, and a handler exception guard keeps 1 bad
+  request from taking down the session.
+- Exposed as standalone verbs, `ferrox-tools visual.start` / `visual.status` / `visual.stop`,
+  so any workflow (brainstorm, ui-phase, ui-review, sketch) can design into a live browser and
+  read the user's clicks back.
+
+### The design stack
+
+- **`/ferrox:design-init` writes DESIGN.md**, the durable 9-section design contract at the
+  project root. Once present it is binding context for all UI and visual work: ui-phase,
+  ui-review, sketch, and every companion screen.
+- **Design intelligence ported from ijfw-design** (Sean's own IP, internal port): 9 data files
+  (palettes, patterns, UX guidelines, typography, Google Fonts, styles, charts, reasoning,
+  and a brand atlas), 12 direction templates, and a zero-dep search script, shipped behind the
+  new `ferrox-frontend-design` skill with progressive disclosure (doctrine in the body, data
+  queried on demand, exactly 1 direction template loaded when a direction is chosen).
+- **4 design eyes**: ferrox-design-critic, ferrox-a11y-design-reviewer, and ferrox-a11y-auditor
+  (adapted from ijfw) plus ferrox-ui-auditor extended to a 7th pillar, Security and Headers
+  (CSP, nosniff, cookies, inline handlers, ARIA landmarks). Parallel cross-audits are wired
+  into ui-phase and ui-review with a resolve-or-waive gate on BLOCK findings, and a
+  screenshot-verify loop (1200px and 375px, graceful skip without a browser MCP) rides the
+  companion flow.
+
+### brainstorm-artifact gate pack
+
+- The 5th pack (`gates/brainstorm-artifact/`, domain `agent-ops`, tier 2): 6 checks
+  (required sections in order, a definite recommendation, the editorial floor, a
+  dead-reference scan, non-empty honesty sections, a placeholder ban) validated against a
+  sealed 5-mutant fluent pool, all caught. Library totals: 5 packs, 31 checks, 25 sealed
+  mutants.
+- Doctrine held: the pack is a hygiene floor on the artifact's shape; ideation quality is
+  never scored.
+
 ## 1.9.0 (2026-07-22): The Gate Library
 
 The gate registry grows from 16 to 20 canonical domains, and the repo now ships a validated,

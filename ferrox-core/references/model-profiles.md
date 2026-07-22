@@ -48,7 +48,7 @@ Model profiles control which Claude model each Ferrox agent uses. This allows ba
 | `discuss` | `ferrox-assumptions-analyzer` |
 | `research` | ferrox-phase-researcher, ferrox-project-researcher, ferrox-research-synthesizer, ferrox-codebase-mapper, ferrox-ui-researcher |
 | `execution` | ferrox-executor, ferrox-debugger, ferrox-doc-writer |
-| `verification` | ferrox-verifier, ferrox-plan-checker, ferrox-integration-checker, ferrox-nyquist-auditor, ferrox-ui-checker, ferrox-ui-auditor, ferrox-doc-verifier, ferrox-code-reviewer |
+| `verification` | ferrox-verifier, ferrox-plan-checker, ferrox-integration-checker, ferrox-nyquist-auditor, ferrox-ui-checker, ferrox-ui-auditor, ferrox-design-critic, ferrox-a11y-design-reviewer, ferrox-a11y-auditor, ferrox-doc-verifier, ferrox-code-reviewer |
 | `completion` | (reserved — no subagent today) |
 
 ### Resolution precedence (highest to lowest)
@@ -183,7 +183,7 @@ When `dynamic_routing.enabled = true` in `.planning/config.json`, the resolver p
 
 | Tier | Agents | Use case |
 |---|---|---|
-| `light` | ferrox-codebase-mapper, ferrox-pattern-mapper, ferrox-research-synthesizer, ferrox-plan-checker, ferrox-integration-checker, ferrox-nyquist-auditor, ferrox-ui-checker, ferrox-ui-auditor, ferrox-doc-verifier | Cheap/fast — pure mappers, scanners, low-stakes audits |
+| `light` | ferrox-codebase-mapper, ferrox-pattern-mapper, ferrox-research-synthesizer, ferrox-plan-checker, ferrox-integration-checker, ferrox-nyquist-auditor, ferrox-ui-checker, ferrox-ui-auditor, ferrox-design-critic, ferrox-a11y-design-reviewer, ferrox-a11y-auditor, ferrox-doc-verifier | Cheap/fast — pure mappers, scanners, low-stakes audits |
 | `standard` | ferrox-executor, ferrox-phase-researcher, ferrox-project-researcher, ferrox-verifier, ferrox-doc-writer, ferrox-ui-researcher | Default workhorse — research, writing, primary verification |
 | `heavy` | ferrox-planner, ferrox-roadmapper, ferrox-debugger | Deep reasoning — already at top, can't escalate further |
 

@@ -290,6 +290,10 @@ claude-test-command.md
 .planning/halting-log.jsonl
 .planning/coord/
 .planning/rescope-state.json
+
+# Visual companion runtime state (pid, log, events; per-session, never committed).
+# The committed brainstorm record is BRAINSTORM.md + research/ + screens/ only.
+.planning/brainstorms/*/state/
 .planning/human-sla-park.json
 
 # Mutation testing artifacts (issue #454)

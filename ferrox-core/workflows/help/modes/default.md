@@ -26,7 +26,7 @@ Existing codebase? Run `/ferrox:onboard` to map the repo, ingest existing docs, 
 | `/ferrox:quick` | Small ad-hoc task with Ferrox guarantees (planning dir + atomic commit) |
 | `/ferrox:fast "<task>"` | Trivial inline change — no subagents, ≤3 file edits |
 | `/ferrox:discuss-phase <N>` | Capture vision and decisions before planning |
-| `/ferrox:brainstorm [topic]` | Freeform ideation, saved to `.planning/brainstorms/`, then routed |
+| `/ferrox:brainstorm [topic] [--research]` | Research brainstorm with visual companion, saved to `.planning/brainstorms/{slug}-{date}/`, then routed |
 | `/ferrox:debug "<symptom>"` | Persistent debug session, survives `/clear` |
 | `/ferrox:capture` | Save an idea, todo, note, seed, or backlog item |
 | `/ferrox:verify-work <N>` | Conversational UAT for a completed phase |
@@ -42,7 +42,7 @@ Existing codebase? Run `/ferrox:onboard` to map the repo, ingest existing docs, 
 /ferrox:help --brief <topic> # compact scoped lookup — signature + one-line summary
 ```
 
-Topics: `workflow` · `planning` · `execute` · `quick` · `debug` · `capture` · `ship` · `config` · `milestones` · `spike` · `sketch` · `review` · `audit` · `progress`
+Topics: `workflow` · `planning` · `execute` · `quick` · `debug` · `capture` · `ship` · `config` · `milestones` · `spike` · `sketch` · `design` · `review` · `audit` · `progress`
 
 ## Update Ferrox
 

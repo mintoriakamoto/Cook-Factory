@@ -1,6 +1,6 @@
 # The Ferrox Gate Library
 
-4 validated gate packs, 25 machine checks, 20 sealed fluent-but-wrong mutants, every pack
+5 validated gate packs, 31 machine checks, 25 sealed fluent-but-wrong mutants, every pack
 proven to catch all 5 of its mutants before it is allowed to gate anything. This directory
 is the public face of that library: the packs, their Gate Cards, and their fixture
 generators. The fixtures themselves are sealed and never committed.
@@ -96,6 +96,24 @@ skill must resolve against the workspace and manifest the file instructs over.
 | SK-05 | relation | no contradictory directives (declared mutually exclusive pattern pairs) |
 | SK-06 | value | editorial floor holds (no em dash, digits not spelled-out numbers) |
 
+### brainstorm-artifact (domain: `agent-ops`, tier 2)
+
+Structural hygiene floor for the `BRAINSTORM.md` artifacts the `/ferrox-brainstorm`
+workflow emits. Ideation quality is gate-hostile by locked doctrine (see the final section),
+so this gate deliberately scores NO content quality: it asserts only what rots mechanically.
+The signature check is BA-02: a Recommendation section that reads polished but contains no
+actual pick ("either option could work, both have merits") fails, because a brainstorm
+without a pick is a brainstorm that dodged its job.
+
+| Check | Category | What it asserts |
+|---|---|---|
+| BA-01 | structure | all 6 required sections present as H2 headings in template order (Context, Options Considered, Recommendation, Decisions, Open Questions, Next Step) |
+| BA-02 | structure | Recommendation states a definite pick: prose over the length floor with no hedge-pattern match |
+| BA-03 | value | editorial floor holds (no em or en dash, digits not spelled-out numbers) |
+| BA-04 | grounding | no dead file references: backticked relative paths resolve against the workspace |
+| BA-05 | structure | Open Questions and Next Step are non-empty (an honest brainstorm always has both) |
+| BA-06 | value | no placeholder markers (TBD, TODO, FIXME, XXX, lorem ipsum) |
+
 ### spreadsheets (domain: `business-docs`, tier 1)
 
 Gates .xlsx deliverables. The failure mode it kills is the workbook that looks right because
@@ -143,6 +161,9 @@ python3 gates/test-generation/gate.py bundle.json
 
 # skill-instruction-files: the instruction file, grounded against workspace + manifest
 node gates/skill-instruction-files/gate.cjs --workspace ./proj --manifest manifest.json SKILL.md
+
+# brainstorm-artifact: the brainstorm doc, grounded against the workspace it references
+node gates/brainstorm-artifact/gate.cjs --workspace . .planning/brainstorms/topic-2026-07-22/BRAINSTORM.md
 
 # spreadsheets: the workbook, with the card-declared ranges in config
 python3 gates/spreadsheets/gate.py --config config.json model.xlsx

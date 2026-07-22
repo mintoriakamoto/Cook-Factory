@@ -19,6 +19,9 @@ This doc describes what IS, not what should be. Casing inconsistencies are docum
 | ferrox-debugger | Debug investigation | `## DEBUG COMPLETE`, `## ROOT CAUSE FOUND`, `## CHECKPOINT REACHED` |
 | ferrox-roadmapper | Roadmap creation/revision | `## ROADMAP CREATED`, `## ROADMAP REVISED`, `## ROADMAP BLOCKED` |
 | ferrox-ui-auditor | UI review | `## UI REVIEW COMPLETE` |
+| ferrox-design-critic | Design critique (design eye) | `## DESIGN CRITIQUE COMPLETE` |
+| ferrox-a11y-design-reviewer | Design-phase a11y review (design eye) | `## A11Y DESIGN REVIEW COMPLETE` |
+| ferrox-a11y-auditor | Post-change a11y audit (design eye) | `## A11Y AUDIT COMPLETE` |
 | ferrox-ui-checker | UI validation | `## ISSUES FOUND` |
 | ferrox-ui-researcher | UI spec creation | `## UI-SPEC COMPLETE`, `## UI-SPEC BLOCKED` |
 | ferrox-verifier | Post-execution verification | `## Verification Complete` (title case) |

@@ -1,14 +1,18 @@
 <purpose>
-Retroactive 6-pillar visual audit of implemented frontend code. Standalone command that works on any project — Ferrox-managed or not. Produces scored UI-REVIEW.md with actionable findings.
+Retroactive 7-pillar visual audit of implemented frontend code. Standalone command that works on any project — Ferrox-managed or not. Produces scored UI-REVIEW.md with actionable findings, then runs the design eyes (design critique + post-change a11y audit) as parallel independent reviewers.
 </purpose>
 
 <required_reading>
 @~/.claude/ferrox-core/references/ui-brand.md
+
+If DESIGN.md exists at project root, it is binding context; read it before any UI/visual work.
 </required_reading>
 
 <available_agent_types>
 Valid Ferrox subagent types (use exact names — do not fall back to 'general-purpose'):
-- ferrox-ui-auditor — Audits UI against design requirements
+- ferrox-ui-auditor — Audits UI against design requirements (7 pillars)
+- ferrox-design-critic — Design eye: hierarchy, contrast, alignment, consistency, intent
+- ferrox-a11y-auditor — Design eye: post-change WCAG 2.1 AA audit of implemented surfaces
 </available_agent_types>
 
 <process>
@@ -26,6 +30,8 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, 
 
 ```bash
 UI_AUDITOR_MODEL=$(ferrox_run query resolve-model ferrox-ui-auditor --raw)
+DESIGN_CRITIC_MODEL=$(ferrox_run query resolve-model ferrox-design-critic --raw)
+A11Y_AUDITOR_MODEL=$(ferrox_run query resolve-model ferrox-a11y-auditor --raw)
 ```
 
 Display banner:
@@ -77,9 +83,9 @@ Build prompt:
 Read ~/.claude/agents/ferrox-ui-auditor.md for instructions.
 
 <objective>
-Conduct 6-pillar visual audit of Phase {phase_number}: {phase_name}
+Conduct 7-pillar visual audit of Phase {phase_number}: {phase_name}
 {If UI-SPEC exists: "Audit against UI-SPEC.md design contract."}
-{If no UI-SPEC: "Audit against abstract 6-pillar standards."}
+{If no UI-SPEC: "Audit against abstract 7-pillar standards."}
 </objective>
 
 <files_to_read>
@@ -121,7 +127,7 @@ Display score summary:
  Ferrox ► UI AUDIT COMPLETE ✓
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Phase {N}: {Name}** — Overall: {score}/24
+**Phase {N}: {Name}** — Overall: {score}/28
 
 | Pillar | Score |
 |--------|-------|
@@ -131,6 +137,7 @@ Display score summary:
 | Typography | {N}/4 |
 | Spacing | {N}/4 |
 | Experience Design | {N}/4 |
+| Security and Headers | {N}/4 |
 
 Top fixes:
 1. {fix}
@@ -149,6 +156,75 @@ Full review: {path to UI-REVIEW.md}
 
 ───────────────────────────────────────────────────────────────
 ```
+
+## 4.5. Design Eyes Cross-Audit (2 parallel independent eyes)
+
+Runs after the ui-auditor returns, on the same implemented surfaces. Mirrors the
+execute-phase 3-eye cross-audit dispatch idiom: the eyes are independent, so fire BOTH
+`Agent()` calls in a single message and wait; wall clock is the slower eye, not the sum. Do no
+other work while they run. The critic grades design intent (against DESIGN.md when present
+plus the anti-template list); the a11y auditor runs the post-change WCAG 2.1 AA pass on the
+shipped code (its design-phase sister, ferrox-a11y-design-reviewer, fires earlier in
+/ferrox:ui-phase).
+
+**Screenshot verify (graceful, no hard dependency).** If chrome-devtools MCP tools
+(`mcp__chrome-devtools__*` or a plugin-prefixed variant) or playwright MCP tools
+(`mcp__playwright__*` or a plugin-prefixed variant) are available AND a dev server or visual
+companion screen is being served (check with `ferrox-tools visual.status --project-dir .`;
+start one when useful with `ferrox-tools visual.start --project-dir .`, stop it after with
+`ferrox-tools visual.stop --project-dir .`), capture the surface at 1200px and 375px widths, save under
+`.planning/ui-reviews/` (gitignore gate applies), and list the screenshot paths in both
+prompts. Otherwise skip with a 1-line note: "screenshot verify skipped: no browser MCP
+available". Never install anything to make this pass.
+
+```
+Agent(
+  prompt="Read ~/.claude/agents/ferrox-design-critic.md for instructions.
+
+  <objective>Critique the implemented Phase {N} surfaces against the design contract and the anti-template list.</objective>
+  <required_reading>
+  - DESIGN.md (project root, if present — binding contract)
+  - {ui_spec_path} (token plan, if exists)
+  - {context_path} (intent, if exists)
+  </required_reading>
+  <surfaces>{source scope from SUMMARY.md key-files}{screenshot paths, if captured}</surfaces>",
+  subagent_type="ferrox-design-critic",
+  model="{DESIGN_CRITIC_MODEL}",
+  description="Design critique Phase {N}"
+)
+Agent(
+  prompt="Read ~/.claude/agents/ferrox-a11y-auditor.md for instructions.
+
+  <objective>Post-change WCAG 2.1 AA audit of the implemented Phase {N} surfaces.</objective>
+  <required_reading>
+  - {summary_paths} (key-files = audit scope)
+  </required_reading>
+  <config>
+  phase_dir: {phase_dir}
+  padded_phase: {padded_phase}
+  dev_server_url: {url if a dev server was detected, else omit}
+  </config>",
+  subagent_type="ferrox-a11y-auditor",
+  model="{A11Y_AUDITOR_MODEL}",
+  description="A11y audit Phase {N}"
+)
+```
+
+**Merge the returns** into 1 structured findings list (severity, pillar, kind, surface,
+evidence, fix) and display it under the pillar score table. Route by max severity:
+
+- **PASS / NOTE only:** proceed to commit.
+- **WARN:** display as non-blocking recommendations; record as follow-ups in UI-REVIEW.md.
+- **BLOCK:** the review does NOT close green until every BLOCK finding is resolved or
+  explicitly waived. Use AskUserQuestion per BLOCK finding (recommendation first: state the
+  fix and why):
+  - "Fix now (Recommended)" — apply the fix (or route to /ferrox:audit-fix), then re-run the
+    affected eye on the touched surfaces.
+  - "Waive" — record the waiver verbatim in a `## Design Eyes Waivers` section of
+    UI-REVIEW.md (finding, reason, who waived, date).
+
+  Unresolved, unwaived BLOCKs are surfaced in the final status as ship blockers ahead of
+  `/ferrox:verify-work`.
 
 ## Automated UI Verification (when Playwright-MCP is available)
 
@@ -174,6 +250,9 @@ tools is detected at runtime.
 
 ```bash
 ferrox_run query commit "docs(${padded_phase}): UI audit review" --files "${PHASE_DIR}/${PADDED_PHASE}-UI-REVIEW.md"
+# Include the a11y report when the design eyes ran:
+A11Y_FILE="${PHASE_DIR}/${PADDED_PHASE}-A11Y.md"
+[ -f "$A11Y_FILE" ] && ferrox_run query commit "docs(${padded_phase}): a11y audit" --files "$A11Y_FILE"
 ```
 
 </process>
@@ -184,6 +263,9 @@ ferrox_run query commit "docs(${padded_phase}): UI audit review" --files "${PHAS
 - [ ] Existing review handled (re-audit/view)
 - [ ] ferrox-ui-auditor spawned with correct context
 - [ ] UI-REVIEW.md created in phase directory
+- [ ] Design eyes cross-audit run: ferrox-design-critic + ferrox-a11y-auditor dispatched in parallel on the implemented surfaces
+- [ ] Screenshot verify attempted when a browser MCP is available (1200px + 375px), skipped with a note otherwise
+- [ ] Every BLOCK finding from the eyes resolved or explicitly waived (waivers recorded in UI-REVIEW.md)
 - [ ] Score summary displayed to user
 - [ ] Next steps presented
 </success_criteria>

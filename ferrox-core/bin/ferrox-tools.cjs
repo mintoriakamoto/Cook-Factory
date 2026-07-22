@@ -279,6 +279,8 @@ const { routeEvalCommand } = require('./lib/eval-command-router.cjs');
 const evalMod = require('./lib/eval.cjs');
 // Phase 3 halting-layer cap verbs (Plan 06): five locked-name dispatchable verbs.
 const { routeGateCommand } = require('./lib/gate-command-router.cjs');
+// MILESTONE v1.10 wave 1: visual companion lifecycle verbs (start/stop/status).
+const { routeVisualCommand } = require('./lib/visual-command-router.cjs');
 const { routeRescopeCommand } = require('./lib/rescope-command-router.cjs');
 const { routeHumanSlaCommand } = require('./lib/human-sla-command-router.cjs');
 const { routeShipClockCommand } = require('./lib/ship-clock-command-router.cjs');
@@ -718,7 +720,7 @@ async function main() {
     'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
     'profile-sample, progress, project-instruction-file, prompt-budget, quick-tasks-append, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, smart-entry, state, ' +
     'task, template, user-story, validate, verify, verify-path-exists, verify-summary, eval, ' +
-    'gate, rescope, human-sla, ship-clock, coverage, workstream, worktree\n\n' +
+    'gate, rescope, human-sla, ship-clock, coverage, visual, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
     '  --pick <field>     Extract a single field from JSON output (dot/bracket notation)\n' +
@@ -1164,6 +1166,15 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     // ship-clock.check, coverage.delta.
     case 'gate': {
       routeGateCommand({ args, cwd, raw, error });
+      break;
+    }
+
+    // ─── MILESTONE v1.10 wave 1 visual companion verbs ─────────────────────
+    // One `visual` family, three locked-name subcommands over the adapted
+    // visual companion server (ferrox-core/bin/visual/, Superpowers lineage):
+    // visual.start, visual.stop, visual.status.
+    case 'visual': {
+      routeVisualCommand({ args, cwd, raw, error });
       break;
     }
 

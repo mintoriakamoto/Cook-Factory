@@ -83,6 +83,11 @@ function main() {
       routerPath: path.join(ROOT, 'ferrox-core', 'bin', 'lib', 'gate-command-router.cjs'),
     },
     {
+      commandAliases: 'VISUAL_COMMAND_ALIASES',
+      subcommands: 'VISUAL_SUBCOMMANDS',
+      routerPath: path.join(ROOT, 'ferrox-core', 'bin', 'lib', 'visual-command-router.cjs'),
+    },
+    {
       commandAliases: 'RESCOPE_COMMAND_ALIASES',
       subcommands: 'RESCOPE_SUBCOMMANDS',
       routerPath: path.join(ROOT, 'ferrox-core', 'bin', 'lib', 'rescope-command-router.cjs'),

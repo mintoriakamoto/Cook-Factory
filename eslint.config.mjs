@@ -183,6 +183,7 @@ export default tseslint.config(
       'ferrox-core/bin/lib/ship-clock-check.cjs',
       'ferrox-core/bin/lib/coverage-delta.cjs',
       'ferrox-core/bin/lib/gate-command-router.cjs',
+      'ferrox-core/bin/lib/visual-command-router.cjs',
       'ferrox-core/bin/lib/rescope-command-router.cjs',
       'ferrox-core/bin/lib/human-sla-command-router.cjs',
       'ferrox-core/bin/lib/ship-clock-command-router.cjs',

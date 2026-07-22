@@ -896,6 +896,34 @@ export const GATE_COMMAND_ALIASES: CommandAlias[] = [
 
 export const GATE_SUBCOMMANDS: string[] = GATE_COMMAND_ALIASES.map((entry) => entry.subcommand);
 
+// ─── MILESTONE v1.10 wave 1 visual companion family ─────────────────────────
+// visual.start / visual.stop / visual.status: lifecycle verbs for the adapted
+// visual companion server (ferrox-core/bin/visual/, adapted from Superpowers
+// by Obra, MIT). Mirrors the GATE block shape.
+
+export const VISUAL_COMMAND_ALIASES: CommandAlias[] = [
+  {
+    "canonical": "visual.start",
+    "aliases": ["visual start"],
+    "subcommand": "start",
+    "mutation": true
+  },
+  {
+    "canonical": "visual.stop",
+    "aliases": ["visual stop"],
+    "subcommand": "stop",
+    "mutation": true
+  },
+  {
+    "canonical": "visual.status",
+    "aliases": ["visual status"],
+    "subcommand": "status",
+    "mutation": false
+  }
+];
+
+export const VISUAL_SUBCOMMANDS: string[] = VISUAL_COMMAND_ALIASES.map((entry) => entry.subcommand);
+
 export const RESCOPE_COMMAND_ALIASES: CommandAlias[] = [
   {
     "canonical": "rescope.check",

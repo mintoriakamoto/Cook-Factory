@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-812%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-840%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -264,6 +264,56 @@ authoring guide live in [`gates/README.md`](gates/README.md).
 
 ---
 
+## Brainstorm mode: think it through before the line runs
+
+`/ferrox-brainstorm` is the ideation on-ramp, and it holds a hard gate of its own: **no
+implementation, no code, no scaffolding until a design is approved**, no matter how simple
+the idea looks. The discipline is modeled on Superpowers' brainstorming (MIT, credited) and
+then pushed further in 4 ways:
+
+- **Recommendation-first, always.** Every question and every option set leads with a
+  verified pick and the why. A bare option list is treated as a defect.
+- **Research on tap.** Hit a genuine unknown mid-session and the workflow fires 2 to 4
+  parallel researcher agents that return a comparison table INTO the conversation, saved
+  alongside the artifact. Start with `--research` to front-load the sweep.
+- **A visual companion that designs live.** The agent starts a local, zero-dependency web
+  server (`ferrox-tools visual.start`), writes real mockups into it, and you CLICK to
+  decide; selections flow back into the session as recorded events. Hardened for local
+  use: host allowlist, cross-origin WebSocket rejection. Available to any workflow, not
+  just brainstorming.
+- **3 honest exits.** A finished brainstorm promotes to a phase discussion, seeds a new
+  milestone, or parks to the backlog. The artifact itself must clear a structural gate
+  before you ever review it, including the anti-hedge check: a Recommendation section that
+  says "either option could work" fails.
+
+![A live visual companion screen comparing 2 design directions for a tide-planning app: Harbor Ledger, a warm editorial tide table marked Recommended, beside Tidal Glass, a deep-water immersive curve view, each with a choose button](assets/visual-companion-showcase.png)
+
+*A real companion screen: the agent presents 2 directions with its recommendation stated
+first, you click, the session continues with your choice on record.*
+
+## The design stack: contract, knowledge, eyes
+
+UI work runs through 3 layers that keep every agent on the same aesthetic:
+
+1. **`DESIGN.md`, the contract.** `/ferrox-design-init` interviews you (or scans an
+   existing codebase) and writes a 9-section design contract at project root: concrete
+   palette values, type scale, spacing, components, motion, voice, accessibility floor,
+   and a never-do list. Every entry is checkable without asking the author, and every
+   UI-producing workflow treats it as binding. No more one-aesthetic-per-agent drift.
+2. **The design intelligence, the knowledge.** The `ferrox-frontend-design` skill carries
+   queryable datasets (palettes, typography pairings, Google Fonts metadata, UX
+   guidelines, patterns, chart styles, a brand atlas) plus 12 direction templates and a
+   search tool. The agent consults the knowledge, crystallizes decisions into DESIGN.md,
+   and the contract binds from then on.
+3. **The design eyes, the enforcement.** Independent critic agents review every UI
+   artifact against the contract: a design critic (hierarchy, contrast, alignment,
+   template-look detection), a WCAG design reviewer, a post-build accessibility auditor,
+   and a 7-pillar UI audit including security headers. BLOCK findings stop the line until
+   resolved or explicitly waived. Same doctrine as code: the builder never grades its own
+   work.
+
+---
+
 ## Installation
 
 Ferrox Factory installs into your existing agent runtime, straight from npm:
@@ -304,6 +354,8 @@ run the matching skill):
 
 | Command | Use it for |
 |---|---|
+| `/ferrox-brainstorm` | research brainstorm with the live visual companion, hard design gate |
+| `/ferrox-design-init` | write DESIGN.md, the binding design contract for all UI work |
 | `/ferrox-new-project` | initialize a project (PROJECT.md, ROADMAP.md, config) |
 | `/ferrox-plan-phase N` | plan a phase into executable PLAN.md files |
 | `/ferrox-execute-phase N` | build a phase with wave-based parallel sub-agents |
@@ -350,7 +402,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **812 tests** across the halting, coordination, strength, model-routing, memory,
+The suite is **840 tests** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

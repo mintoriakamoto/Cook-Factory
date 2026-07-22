@@ -6,12 +6,16 @@ UI-SPEC.md locks spacing, typography, color, copywriting, and design system deci
 
 <required_reading>
 @~/.claude/ferrox-core/references/ui-brand.md
+
+If DESIGN.md exists at project root, it is binding context; read it before any UI/visual work.
 </required_reading>
 
 <available_agent_types>
 Valid Ferrox subagent types (use exact names — do not fall back to 'general-purpose'):
 - ferrox-ui-researcher — Researches UI/UX approaches
 - ferrox-ui-checker — Reviews UI implementation quality
+- ferrox-design-critic — Design eye: hierarchy, contrast, alignment, consistency, intent
+- ferrox-a11y-design-reviewer — Design eye: design-phase WCAG 2.1 AA review
 </available_agent_types>
 
 <process>
@@ -40,6 +44,8 @@ Resolve UI agent models:
 ```bash
 UI_RESEARCHER_MODEL=$(ferrox_run query resolve-model ferrox-ui-researcher --raw)
 UI_CHECKER_MODEL=$(ferrox_run query resolve-model ferrox-ui-checker --raw)
+DESIGN_CRITIC_MODEL=$(ferrox_run query resolve-model ferrox-design-critic --raw)
+A11Y_REVIEWER_MODEL=$(ferrox_run query resolve-model ferrox-a11y-design-reviewer --raw)
 ```
 
 Check config:
@@ -89,6 +95,18 @@ Continue (non-blocking).
    Validated design decisions from /ferrox:sketch will be loaded into the UI researcher.
    Pre-validated decisions (layout, palette, typography, spacing) should be treated as locked — not re-asked.
 ```
+
+**DESIGN.md contract check:**
+```bash
+test -f DESIGN.md && echo "design_contract=present" || echo "design_contract=absent"
+```
+- **Present:** DESIGN.md is the binding design contract. Pass it verbatim to the UI
+  researcher; UI-SPEC tokens (palette, type scale, spacing, components, voice) MUST derive
+  from it, and its locked values are never re-asked. Precedence: DESIGN.md tokens first,
+  then sketch findings, then researcher questions.
+- **Absent:** recommend running `/ferrox:design-init` first so the UI-SPEC has durable
+  tokens to enforce, then continue (non-blocking): a UI-SPEC written without a contract
+  should offer to crystallize its final tokens into DESIGN.md at the end.
 
 ## 4. Check Existing UI-SPEC
 
@@ -409,6 +427,82 @@ error-state COPY stays in `## Copywriting Contract` — the considerations secti
 STATE coverage and REFERENCES those rows rather than restating the copy (de-dup). IDEMPOTENT: if a
 `## UI Considerations` section already exists, REPLACE it — never append a duplicate.
 
+## 9.7. Design Eyes Cross-Audit (2 parallel independent eyes)
+
+Runs after the UI-consideration probe, on the FINAL UI-SPEC plus every UI artifact this phase
+produced (mockups, sketches, and visual companion screens under
+`.planning/brainstorms/*/screens/` or the phase dir). Mirrors the execute-phase 3-eye
+cross-audit dispatch idiom: the eyes are independent, so fire BOTH `Agent()` calls in a single
+message and wait; wall clock is the slower eye, not the sum. Do no other work while they run.
+
+Collect the artifact list first:
+
+```bash
+UI_ARTIFACTS=$(ls "${PHASE_DIR}"/*-UI-SPEC.md .planning/brainstorms/*/screens/*.html "${PHASE_DIR}"/mockups/**/*.html 2>/dev/null | tr '\n' ',')
+```
+
+**Screenshot verify (graceful, no hard dependency).** If chrome-devtools MCP tools
+(`mcp__chrome-devtools__*` or a plugin-prefixed variant) or playwright MCP tools
+(`mcp__playwright__*` or a plugin-prefixed variant) are available in this session AND a screen
+is being served (visual companion running, or a dev server; check with
+`ferrox-tools visual.status --project-dir .`, start one when useful with
+`ferrox-tools visual.start --project-dir .`), capture the served screen at
+1200px and 375px widths before dispatching the eyes, save under
+`.planning/ui-reviews/` (the gitignore gate from ferrox-ui-auditor applies), and list the
+screenshot paths in both prompts so render-level findings (overflow, clipped focus rings,
+rendered contrast) ride with the critique. If neither tool family is available or nothing is
+being served, skip with a 1-line note in the findings summary: "screenshot verify skipped: no
+browser MCP available". Never install anything to make this pass.
+
+Dispatch both eyes in parallel (single message, 2 calls):
+
+```
+Agent(
+  prompt="Read ~/.claude/agents/ferrox-design-critic.md for instructions.
+
+  <objective>Critique the Phase {N} UI artifacts against the design contract and the anti-template list.</objective>
+  <required_reading>
+  - DESIGN.md (project root, if present — binding contract)
+  - {phase_dir}/{padded_phase}-UI-SPEC.md (token plan)
+  - {context_path} (intent, if present)
+  </required_reading>
+  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>",
+  subagent_type="ferrox-design-critic",
+  model="{DESIGN_CRITIC_MODEL}",
+  description="Design critique Phase {N}"
+)
+Agent(
+  prompt="Read ~/.claude/agents/ferrox-a11y-design-reviewer.md for instructions.
+
+  <objective>Design-phase WCAG 2.1 AA review of the Phase {N} UI artifacts.</objective>
+  <required_reading>
+  - DESIGN.md (project root, if present — accessibility floor may be declared here)
+  - {phase_dir}/{padded_phase}-UI-SPEC.md
+  </required_reading>
+  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>",
+  subagent_type="ferrox-a11y-design-reviewer",
+  model="{A11Y_REVIEWER_MODEL}",
+  description="A11y design review Phase {N}"
+)
+```
+
+**Merge the returns** into 1 structured findings list (severity, pillar, kind, surface,
+evidence, fix) and display it. Then route by max severity:
+
+- **PASS / NOTE only:** record NOTEs as follow-ups in the UI-SPEC, proceed to step 10.
+- **WARN:** display as non-blocking recommendations, record in the UI-SPEC, proceed.
+- **BLOCK:** the phase does NOT proceed until every BLOCK finding is resolved or explicitly
+  waived. Use AskUserQuestion per BLOCK finding (recommendation first: state the fix you would
+  apply and why):
+  - "Fix now (Recommended)" — re-spawn ferrox-ui-researcher with the finding as revision
+    context (reuse the step 9 revision mechanism, same max-2-iteration cap), then re-run BOTH
+    eyes on the revised artifacts.
+  - "Waive" — record the waiver verbatim in a `## Design Eyes Waivers` section of the UI-SPEC
+    (finding, reason, who waived, date). A waiver is loud, never silent.
+
+  If BLOCK findings remain after the revision cap and the user declines to waive, exit the
+  workflow with the findings list; do not present the UI-SPEC as ready.
+
 ## 10. Present Final Status
 
 Display:
@@ -467,6 +561,9 @@ ferrox_run query state.record-session \
 - [ ] ferrox-ui-checker spawned with UI-SPEC.md
 - [ ] All 6 dimensions evaluated
 - [ ] Revision loop if BLOCKED (max 2 iterations)
+- [ ] Design eyes cross-audit run: ferrox-design-critic + ferrox-a11y-design-reviewer dispatched in parallel on the final artifacts
+- [ ] Screenshot verify attempted when a browser MCP is available (1200px + 375px), skipped with a note otherwise
+- [ ] Every BLOCK finding from the eyes resolved or explicitly waived (waivers recorded in UI-SPEC) before final status
 - [ ] Final status displayed with next steps
 - [ ] UI-SPEC.md committed (if commit_docs enabled)
 - [ ] State updated

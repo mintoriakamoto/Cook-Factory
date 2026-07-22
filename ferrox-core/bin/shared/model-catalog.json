@@ -142,6 +142,9 @@
     "ferrox-ui-researcher":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
     "ferrox-ui-checker":             { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
     "ferrox-ui-auditor":             { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "ferrox-design-critic":          { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "ferrox-a11y-design-reviewer":   { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "ferrox-a11y-auditor":           { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
     "ferrox-doc-writer":             { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "execution",    "routingTier": "standard" },
     "ferrox-doc-verifier":           { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
 

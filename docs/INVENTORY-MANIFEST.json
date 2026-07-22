@@ -1,6 +1,8 @@
 {
   "families": {
     "agents": [
+      "ferrox-a11y-auditor",
+      "ferrox-a11y-design-reviewer",
       "ferrox-advisor-researcher",
       "ferrox-ai-researcher",
       "ferrox-assumptions-analyzer",
@@ -9,6 +11,7 @@
       "ferrox-codebase-mapper",
       "ferrox-debug-session-manager",
       "ferrox-debugger",
+      "ferrox-design-critic",
       "ferrox-doc-classifier",
       "ferrox-doc-synthesizer",
       "ferrox-doc-verifier",
@@ -50,6 +53,7 @@
       "/ferrox-complete-milestone",
       "/ferrox-config",
       "/ferrox-debug",
+      "/ferrox-design-init",
       "/ferrox-discuss-phase",
       "/ferrox-docs-update",
       "/ferrox-eval-review",
@@ -128,6 +132,7 @@
       "code-review.md",
       "complete-milestone.md",
       "debug.md",
+      "design-init.md",
       "diagnose-issues.md",
       "discovery-phase.md",
       "discuss-phase-assumptions.md",
@@ -219,6 +224,7 @@
       "coordination.md",
       "debugger-philosophy.md",
       "decimal-phase-calculation.md",
+      "design-contract-example.md",
       "discipline-stages.md",
       "doc-conflict-engine.md",
       "domain-probes.md",
@@ -512,6 +518,7 @@
       "verification.cjs",
       "verify-command-router.cjs",
       "verify.cjs",
+      "visual-command-router.cjs",
       "workstream-inventory-builder.cjs",
       "workstream-inventory.cjs",
       "workstream-name-policy.cjs",

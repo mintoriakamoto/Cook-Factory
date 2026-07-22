@@ -30,6 +30,14 @@ and receiving-code-review — are vendored into this repository (staged under
 `skills-vendored/` as `ferrox-*` and shipped in `skills/`), each SKILL.md
 carrying an "Adapted from Superpowers by Obra (MIT)" credit line.
 
+The Superpowers brainstorming visual companion server (server.cjs,
+start-server.sh, stop-server.sh, frame-template.html, helper.js) is adapted
+into this repository under `ferrox-core/bin/visual/` (MILESTONE v1.10), each
+file carrying an "Adapted from Superpowers by Obra (MIT), visual companion
+server." credit line. The zero-dependency serve/watch/select protocol is
+preserved; Ferrox changes are frame styling, persistence layout
+(`.planning/brainstorms/`), and environment variable names.
+
     Superpowers — Copyright (c) Obra
     MIT License
 

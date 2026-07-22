@@ -23,6 +23,7 @@ Emit a section from the full reference for the topic in `$ARGUMENTS`. Read `work
 | `debug`, `debugging` | `### Debugging` |
 | `spike` | The `/ferrox:spike` and `/ferrox:spike --wrap-up` blocks under `### Spiking & Sketching` |
 | `sketch` | The `/ferrox:sketch` and `/ferrox:sketch --wrap-up` blocks under `### Spiking & Sketching` |
+| `design`, `design-init`, `design-contract` | The `/ferrox:design-init` block under `### Discovery & Specification` |
 | `spike-sketch`, `experiments` | `### Spiking & Sketching` |
 | `capture`, `notes`, `todos` | `### Capturing Ideas, Notes, and Todos` |
 | `verify`, `verify-work`, `uat` | `### User Acceptance Testing` plus the `/ferrox:audit-uat` block |

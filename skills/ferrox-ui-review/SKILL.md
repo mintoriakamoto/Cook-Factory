@@ -1,6 +1,6 @@
 ---
 name: ferrox-ui-review
-description: "Retroactive 6-pillar visual audit of implemented frontend code"
+description: "Retroactive 7-pillar visual audit of implemented frontend code"
 argument-hint: "[phase]"
 allowed-tools:
   - Read
@@ -13,7 +13,7 @@ allowed-tools:
 ---
 
 <objective>
-Conduct a retroactive 6-pillar visual audit. Produces UI-REVIEW.md with
+Conduct a retroactive 7-pillar visual audit. Produces UI-REVIEW.md with
 graded assessment (1-4 per pillar). Works on any project.
 Output: {phase_num}-UI-REVIEW.md
 </objective>

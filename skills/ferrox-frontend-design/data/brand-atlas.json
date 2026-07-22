@@ -1,0 +1,450 @@
+[
+  {
+    "key": "dev_tool_ide",
+    "name": "Dev Tool / IDE",
+    "keywords": ["cli", "terminal", "editor", "lsp", "plugin", "extension", "developer", "devtool", "sdk", "toolchain", "repl", "debugger", "vscode", "api"],
+    "brands": [
+      {
+        "name": "Vercel",
+        "aesthetic": "Black and white precision with Geist font  -  the definitive developer-tool aesthetic.",
+        "palette_hint": "Pure black background, pure white text, zero color",
+        "typography_hint": "Geist or Inter, weight 400-600, tight tracking",
+        "best_for": "Developer tools, CLIs, deployment platforms, anything that needs to feel serious and fast"
+      },
+      {
+        "name": "Raycast",
+        "aesthetic": "Dark chrome with vibrant gradient accents  -  command-palette UI elevated to luxury.",
+        "palette_hint": "Deep charcoal base, electric purple-to-pink gradients, subtle frosted glass",
+        "typography_hint": "SF Pro or Inter, weight 400-500, generous line-height",
+        "best_for": "Launcher apps, command palettes, productivity tools that live in the OS layer"
+      },
+      {
+        "name": "Warp",
+        "aesthetic": "Modern terminal reimagined with block-based UX and warm dark palette.",
+        "palette_hint": "Rich near-black background (#1A1A2E range), warm amber and teal highlights",
+        "typography_hint": "JetBrains Mono or Fira Code, weight 400, relaxed tracking",
+        "best_for": "Terminal emulators, REPLs, shell-adjacent tooling that wants to feel next-gen"
+      },
+      {
+        "name": "Cursor",
+        "aesthetic": "VS Code skeleton with a cooler, darker palette and AI-first chrome.",
+        "palette_hint": "Very dark grey backgrounds, muted blue-grey accents, high-contrast selection states",
+        "typography_hint": "Inter or system-ui, weight 400, compact density",
+        "best_for": "Code editors, IDE plugins, any tool that embeds inside a coding workflow"
+      },
+      {
+        "name": "Supabase",
+        "aesthetic": "Dark emerald confidence  -  open-source infrastructure that looks enterprise-ready.",
+        "palette_hint": "Dark grey base, vivid emerald green brand accent, white text",
+        "typography_hint": "Inter, weight 400-600, standard tracking",
+        "best_for": "Backend tooling, databases, developer infrastructure with a strong brand identity"
+      }
+    ]
+  },
+  {
+    "key": "saas_dashboard",
+    "name": "SaaS Dashboard",
+    "keywords": ["dashboard", "analytics", "metrics", "admin", "crm", "saas", "workspace", "app", "platform", "productivity", "reporting", "data"],
+    "brands": [
+      {
+        "name": "Linear",
+        "aesthetic": "Ultra-minimal dark interface with purple accents  -  the gold standard for focused SaaS.",
+        "palette_hint": "Near-black backgrounds, soft purple primary, muted grey secondary text",
+        "typography_hint": "Inter, weight 400-500, tight line-height, compact density",
+        "best_for": "Project management, issue trackers, any SaaS where speed and clarity are the product"
+      },
+      {
+        "name": "Stripe",
+        "aesthetic": "Clean white with deep purple gradient  -  financial precision meets editorial elegance.",
+        "palette_hint": "White background, indigo-to-purple gradient brand, slate grey text",
+        "typography_hint": "Sohne or Inter, weight 300-400, generous white space",
+        "best_for": "Payments, billing dashboards, financial SaaS where trust and legibility are critical"
+      },
+      {
+        "name": "Notion",
+        "aesthetic": "Warm off-white minimalism with a hint of serif  -  calm productivity for knowledge workers.",
+        "palette_hint": "Off-white background, near-black text, warm grey accents, no strong brand color",
+        "typography_hint": "ui-sans-serif stack, with option for Georgia/Charter serif in content areas",
+        "best_for": "CMS, wikis, note-taking apps, workspaces where long-form content is front and center"
+      },
+      {
+        "name": "Superhuman",
+        "aesthetic": "Dark premium email UI  -  obsessively keyboard-first with cinematic dark mode.",
+        "palette_hint": "Deep dark backgrounds, bright white primary text, orange-red call-to-action accents",
+        "typography_hint": "Inter, weight 400, highly optimised for reading-at-a-glance density",
+        "best_for": "High-frequency workflow tools, email clients, inboxes where every millisecond is designed"
+      },
+      {
+        "name": "PostHog",
+        "aesthetic": "Bold analytics with dark hedgehog energy  -  data-rich and unapologetically product-led.",
+        "palette_hint": "Dark backgrounds with lime/yellow-green accents, vivid chart colours",
+        "typography_hint": "Matter or Inter, weight 400-600, slightly loose tracking",
+        "best_for": "Analytics dashboards, product telemetry UIs, developer-facing data tools"
+      }
+    ]
+  },
+  {
+    "key": "ai_llm_product",
+    "name": "AI / LLM Product",
+    "keywords": ["ai", "llm", "gpt", "claude", "anthropic", "openai", "model", "inference", "embedding", "agent", "prompt", "chatbot", "generative"],
+    "brands": [
+      {
+        "name": "Claude",
+        "aesthetic": "Warm terracotta and editorial warmth  -  intelligence that feels approachable and human.",
+        "palette_hint": "Warm off-white backgrounds, terracotta and sand accent tones, rich dark text",
+        "typography_hint": "Styrene or similar humanist sans, weight 400, generous line-height",
+        "best_for": "Conversational AI products, assistant UIs, anything that needs to feel warm and trustworthy"
+      },
+      {
+        "name": "Cohere",
+        "aesthetic": "Enterprise gradient meets data richness  -  serious NLP infrastructure with visual depth.",
+        "palette_hint": "Deep purple-navy backgrounds, coral-to-orange gradient accents, white text",
+        "typography_hint": "Inter or Neue Haas Grotesk, weight 400-500, standard tracking",
+        "best_for": "Enterprise AI platforms, NLP APIs, B2B AI infrastructure with Fortune 500 buyers"
+      },
+      {
+        "name": "ElevenLabs",
+        "aesthetic": "Cinematic dark with audio waveform energy  -  AI that makes you feel the sound.",
+        "palette_hint": "True black backgrounds, vivid yellow-to-orange waveform accents, pure white text",
+        "typography_hint": "Inter, weight 400-700 mixed, tight heading tracking",
+        "best_for": "Audio AI, voice synthesis, media generation tools where drama and quality must be felt"
+      },
+      {
+        "name": "Mistral",
+        "aesthetic": "French minimalism with purple restraint  -  open-source AI that earns European sophistication.",
+        "palette_hint": "Clean white or light grey base, deep purple brand accent, minimal decoration",
+        "typography_hint": "Marianne or Inter, weight 300-500, elegant spacing",
+        "best_for": "Open-source AI products, research-facing tools, AI that wants to feel principled and precise"
+      }
+    ]
+  },
+  {
+    "key": "backend_infra",
+    "name": "Backend / Infrastructure",
+    "keywords": ["database", "postgres", "redis", "kafka", "docker", "kubernetes", "devops", "infrastructure", "server", "backend", "api", "microservice", "cloud", "observability"],
+    "brands": [
+      {
+        "name": "HashiCorp",
+        "aesthetic": "Black and white enterprise authority  -  infrastructure tooling that demands respect.",
+        "palette_hint": "White backgrounds, black text, near-zero color except per-product brand slashes",
+        "typography_hint": "Gilroy or Inter, weight 600-700 for headlines, 400 for body",
+        "best_for": "Infrastructure tools, DevOps platforms, enterprise-grade CLIs that serve ops teams"
+      },
+      {
+        "name": "Sentry",
+        "aesthetic": "Dark dashboard with pink-purple spark  -  error monitoring that feels urgent but controlled.",
+        "palette_hint": "Very dark grey base, vivid fuchsia-purple primary, yellow warning accents",
+        "typography_hint": "Rubik or Inter, weight 400-500, tight list-view density",
+        "best_for": "Observability tools, error trackers, alerting dashboards where triage speed matters"
+      },
+      {
+        "name": "ClickHouse",
+        "aesthetic": "Yellow-accented technical precision  -  analytical database with bold brand confidence.",
+        "palette_hint": "White or dark backgrounds, vivid yellow brand accent, strong monochrome structure",
+        "typography_hint": "Inter, weight 500-700, high contrast heading hierarchy",
+        "best_for": "Database dashboards, OLAP tooling, data infrastructure with a bold technical identity"
+      },
+      {
+        "name": "Supabase",
+        "aesthetic": "Dark emerald open-source infrastructure  -  backend-as-a-service with developer-first warmth.",
+        "palette_hint": "Dark grey base, vivid emerald green accent, bright white text",
+        "typography_hint": "Inter, weight 400-600, standard tracking",
+        "best_for": "BaaS products, database consoles, any backend tool that open-source developers will love"
+      },
+      {
+        "name": "MongoDB",
+        "aesthetic": "Green leaf documentation aesthetic  -  approachable database docs with clear hierarchy.",
+        "palette_hint": "White background, forest green brand, neutral grey secondary",
+        "typography_hint": "Euclid or Inter, weight 400-500, readable body size",
+        "best_for": "Database docs, schema explorers, developer portals where readability beats drama"
+      }
+    ]
+  },
+  {
+    "key": "fintech",
+    "name": "Fintech",
+    "keywords": ["payment", "billing", "invoice", "finance", "bank", "money", "transaction", "wallet", "crypto", "revenue", "mrr", "arr", "ledger", "payout"],
+    "brands": [
+      {
+        "name": "Stripe",
+        "aesthetic": "Purple gradient + weight-300 elegance  -  the brand that taught fintech how to look credible.",
+        "palette_hint": "White base, indigo-to-violet gradient, slate text, teal code highlights",
+        "typography_hint": "Sohne or Inter, weight 300-400, wide margins, refined spacing",
+        "best_for": "Payment platforms, billing dashboards, any fintech product that needs to feel instantly trustworthy"
+      },
+      {
+        "name": "Revolut",
+        "aesthetic": "Sleek dark with gradient card art  -  consumer fintech that feels aspirational and premium.",
+        "palette_hint": "Dark navy-to-black, vivid card gradients (neon blue, pink, orange), white text",
+        "typography_hint": "Inter or custom sans, weight 400-700, dynamic size contrast",
+        "best_for": "Neobanks, crypto wallets, consumer finance apps competing on visual premium"
+      },
+      {
+        "name": "Wise",
+        "aesthetic": "Bright green clarity  -  money transfer stripped of bank intimidation.",
+        "palette_hint": "Clean white, vivid green brand, black text, zero clutter",
+        "typography_hint": "Inter or system-ui, weight 400-600, clear hierarchy",
+        "best_for": "Transfer tools, FX platforms, fintech that wins by being the anti-bank"
+      },
+      {
+        "name": "Coinbase",
+        "aesthetic": "Clean blue trust  -  crypto made safe enough for your parents.",
+        "palette_hint": "White background, Coinbase blue primary, grey secondary, minimal ornamentation",
+        "typography_hint": "Coinbase Sans or Inter, weight 400-500, institutional spacing",
+        "best_for": "Crypto exchanges, DeFi front-ends, blockchain tools that need mainstream credibility"
+      }
+    ]
+  },
+  {
+    "key": "content_editorial",
+    "name": "Content / Editorial",
+    "keywords": ["blog", "cms", "content", "writing", "newsletter", "publication", "editorial", "article", "post", "media", "markdown", "prose"],
+    "brands": [
+      {
+        "name": "Notion",
+        "aesthetic": "Warm minimalism with optional serif  -  the design language of calm, focused writing.",
+        "palette_hint": "Off-white page backgrounds, near-black text, warm grey UI chrome",
+        "typography_hint": "ui-sans-serif for UI, Georgia or Charter for long-form reading",
+        "best_for": "CMS tools, writing apps, wikis, knowledge bases where content is always the hero"
+      },
+      {
+        "name": "Substack",
+        "aesthetic": "Clean neutral reading environment  -  no friction between writer and reader.",
+        "palette_hint": "Pure white background, black text, orange brand accent for CTAs only",
+        "typography_hint": "Georgia for body, Inter for UI, weight 400, generous line-height 1.7",
+        "best_for": "Newsletter platforms, reader UIs, content tools where the reading experience is the product"
+      },
+      {
+        "name": "Sanity",
+        "aesthetic": "Red accent content-first studio  -  editor tooling that is itself beautifully designed.",
+        "palette_hint": "Dark editor chrome, vivid red primary accent, structured field grid",
+        "typography_hint": "Inter, weight 400-600, tight content editor density",
+        "best_for": "Headless CMS UIs, structured content editors, publishing tools used by developers and editors alike"
+      },
+      {
+        "name": "The Verge",
+        "aesthetic": "Acid-mint editorial display type  -  tech media that treats design as editorial voice.",
+        "palette_hint": "White base, electric mint/teal accent, high-contrast black typography",
+        "typography_hint": "Large display type with strong weight contrast, editorial serif headline option",
+        "best_for": "Tech media sites, review platforms, editorial products that want personality over polish"
+      }
+    ]
+  },
+  {
+    "key": "media_creator",
+    "name": "Media / Creator",
+    "keywords": ["video", "audio", "music", "creative", "studio", "canvas", "animation", "motion", "render", "stream", "podcast", "generate"],
+    "brands": [
+      {
+        "name": "RunwayML",
+        "aesthetic": "Cinematic dark with media-rich canvas  -  AI video tooling with a film-school aesthetic.",
+        "palette_hint": "True black backgrounds, deep saturated colour panels, white text",
+        "typography_hint": "Inter or Neue Montreal, weight 400-700, cinematic heading scale",
+        "best_for": "AI video tools, creative generation platforms, studios where the output is always visual"
+      },
+      {
+        "name": "Framer",
+        "aesthetic": "Bold motion-first design system  -  web creation where animation is the default.",
+        "palette_hint": "Dark backgrounds, vivid blue primary, high saturation component previews",
+        "typography_hint": "Inter, weight 400-800 wide range, kinetic size scaling",
+        "best_for": "Website builders, no-code tools, any creative platform where motion and interactivity are first-class"
+      },
+      {
+        "name": "Spotify",
+        "aesthetic": "Vibrant green on dark with album art grids  -  music that pulses from the interface.",
+        "palette_hint": "Black background, Spotify green primary, album art as ambient colour source",
+        "typography_hint": "Circular or Inter, weight 400-700, compact track listing density",
+        "best_for": "Music apps, audio platforms, media browsers where content imagery drives the visual energy"
+      },
+      {
+        "name": "Figma",
+        "aesthetic": "Multi-colour collaborative precision  -  design tooling that feels alive with co-presence.",
+        "palette_hint": "Light grey canvas, rainbow avatar accents, dark-mode optional, violet brand",
+        "typography_hint": "Inter, weight 400-500, tight component panel density",
+        "best_for": "Collaborative creative tools, design platforms, canvas apps with multiple participants"
+      }
+    ]
+  },
+  {
+    "key": "luxury_ecom",
+    "name": "Luxury / E-commerce",
+    "keywords": ["shop", "store", "ecommerce", "product", "luxury", "fashion", "brand", "retail", "checkout", "cart", "collection", "boutique"],
+    "brands": [
+      {
+        "name": "Apple",
+        "aesthetic": "Premium white space with SF Pro  -  product design philosophy applied to every pixel.",
+        "palette_hint": "Pure white backgrounds, silver product photography, black text, zero clutter",
+        "typography_hint": "SF Pro or system-ui, weight 300-700 full range, tight headline tracking",
+        "best_for": "Premium product pages, hardware showcases, any e-commerce that competes on perceived quality"
+      },
+      {
+        "name": "Aesop",
+        "aesthetic": "Minimal warm neutrals with apothecary soul  -  luxury through restraint and texture.",
+        "palette_hint": "Warm cream and sand backgrounds, deep brown text, no harsh whites or primary colours",
+        "typography_hint": "Serif body (Freight or similar), geometric sans UI, weight 300-400",
+        "best_for": "Beauty, wellness, and lifestyle brands where the aesthetic IS the positioning"
+      },
+      {
+        "name": "Balenciaga",
+        "aesthetic": "Stark monochrome with oversized type  -  fashion brutalism that intimidates before it invites.",
+        "palette_hint": "Black or white only, no midtones, maximum contrast",
+        "typography_hint": "Oversized grotesque caps, weight 900, heavy tracking, grid-breaking scale",
+        "best_for": "High fashion e-commerce, streetwear brands, luxury drops where exclusivity is the message"
+      },
+      {
+        "name": "Hermes",
+        "aesthetic": "Crafted warmth with gold accent  -  old-world luxury translated to screen.",
+        "palette_hint": "Hermes orange as accent, warm beige and ivory backgrounds, gold detail",
+        "typography_hint": "Didot or editorial serif, weight 300-400, refined spacing",
+        "best_for": "Heritage luxury brands, artisan product lines, e-commerce where craft narrative drives price"
+      }
+    ]
+  },
+  {
+    "key": "productivity",
+    "name": "Productivity",
+    "keywords": ["task", "todo", "calendar", "schedule", "project", "focus", "habit", "timer", "notes", "productivity", "planner", "inbox", "workflow"],
+    "brands": [
+      {
+        "name": "Linear",
+        "aesthetic": "Ultra-minimal dark with purple  -  the fastest-feeling interface ever shipped for a to-do.",
+        "palette_hint": "Near-black background, muted purple brand, grey secondary elements",
+        "typography_hint": "Inter, weight 400-500, compact row density, minimal chrome",
+        "best_for": "Issue trackers, task managers, any productivity tool where cognitive overhead is the enemy"
+      },
+      {
+        "name": "Raycast",
+        "aesthetic": "Dark chrome with gradient spark  -  launcher-speed UX wrapped in premium shell.",
+        "palette_hint": "Deep charcoal, electric purple-pink gradient accents, frosted panel overlays",
+        "typography_hint": "SF Pro or Inter, weight 400-500, large target sizes for keyboard-first flow",
+        "best_for": "Quick-capture tools, launchers, command palettes where sub-100ms perception is the goal"
+      },
+      {
+        "name": "Superhuman",
+        "aesthetic": "Dark premium keyboard-first email  -  productivity software that feels like a sports car.",
+        "palette_hint": "Deep dark backgrounds, bright white reading text, orange-red action accents",
+        "typography_hint": "Inter, highly tuned body size and line-height for triage reading speed",
+        "best_for": "Email clients, inboxes, any tool where power users demand speed and will pay for it"
+      },
+      {
+        "name": "Cal.com",
+        "aesthetic": "Open-source clean neutral  -  scheduling without the enterprise bloat.",
+        "palette_hint": "White or light grey background, black primary, subtle grey borders, blue CTA",
+        "typography_hint": "Inter, weight 400-500, clean grid layout, low visual noise",
+        "best_for": "Scheduling tools, calendar apps, open-source productivity software that earns trust through clarity"
+      }
+    ]
+  },
+  {
+    "key": "consumer_social_playful",
+    "name": "Consumer / Social / Playful",
+    "keywords": ["social", "community", "chat", "share", "collaborate", "creative", "canvas", "whiteboard", "visual", "fun", "game", "multiplayer"],
+    "brands": [
+      {
+        "name": "Figma",
+        "aesthetic": "Vibrant playful professionalism  -  collaboration made visible through colour and presence.",
+        "palette_hint": "Light grey canvas, violet brand, multicolour avatar system, energetic component palette",
+        "typography_hint": "Inter, weight 400-600, compact but approachable density",
+        "best_for": "Multiplayer tools, collaborative canvases, creative platforms where seeing others work is the feature"
+      },
+      {
+        "name": "Miro",
+        "aesthetic": "Bright yellow infinite canvas  -  brainstorming without walls.",
+        "palette_hint": "White infinite canvas, vivid yellow brand, colourful sticky notes and shapes",
+        "typography_hint": "Inter or system-ui, weight 400-600, variable sizes for canvas hierarchy",
+        "best_for": "Whiteboards, brainstorming tools, workshop platforms where spatial thinking is the UX"
+      },
+      {
+        "name": "Airtable",
+        "aesthetic": "Colorful structured data  -  spreadsheet energy with product-quality polish.",
+        "palette_hint": "White base with colourful field and row highlights, teal brand primary",
+        "typography_hint": "Inter, weight 400-500, table-optimised line-height and cell padding",
+        "best_for": "Database tools, no-code builders, any app that bridges spreadsheet users and proper software"
+      },
+      {
+        "name": "Clay",
+        "aesthetic": "Organic shapes with soft gradients  -  social tooling that feels warm and human.",
+        "palette_hint": "Cream and warm off-white backgrounds, pastel organic shape overlays, soft shadows",
+        "typography_hint": "Rounded sans (Nunito, DM Sans), weight 400-500, generous padding",
+        "best_for": "Social apps, networking tools, consumer products that win by feeling personal rather than corporate"
+      }
+    ]
+  },
+  {
+    "key": "marketing_landing",
+    "name": "Marketing / Landing Page",
+    "keywords": ["landing", "marketing", "homepage", "growth", "conversion", "waitlist", "launch", "startup", "hero", "cta", "funnel", "acquisition"],
+    "brands": [
+      {
+        "name": "Vercel",
+        "aesthetic": "Precision black and white  -  developer marketing done with zero visual noise.",
+        "palette_hint": "Black backgrounds, white text, zero decorative colour",
+        "typography_hint": "Geist or Inter, weight 400-700, hero type at extreme scale",
+        "best_for": "Dev tool landing pages, product launches, any B2D marketing where credibility must be instant"
+      },
+      {
+        "name": "Framer",
+        "aesthetic": "Bold motion-first marketing  -  landing pages where the animation IS the pitch.",
+        "palette_hint": "Dark backgrounds, saturated blue-violet accents, animated gradient hero",
+        "typography_hint": "Inter, weight 700-900 for headlines, kinetic scale transitions",
+        "best_for": "Creative tool marketing, animated hero sections, startups that want to show off their product in motion"
+      },
+      {
+        "name": "Webflow",
+        "aesthetic": "Polished blue no-code aspiration  -  visual builder marketing that converts designers.",
+        "palette_hint": "Dark navy to blue gradient, white text, bright blue CTA",
+        "typography_hint": "Inter or custom sans, weight 400-700, generous hero type",
+        "best_for": "No-code tool marketing, agency sites, SaaS landing pages targeting design-oriented buyers"
+      },
+      {
+        "name": "Linear",
+        "aesthetic": "Minimal trusted launch page  -  product-led growth with zero visual debt.",
+        "palette_hint": "Near-black dark background, muted purple accents, clean white text",
+        "typography_hint": "Inter, weight 400-600, tight hero copy, space-efficient feature grid",
+        "best_for": "Product launches, waitlist pages, SaaS homepages where the product quality must show through the UI"
+      }
+    ]
+  },
+  {
+    "key": "automotive",
+    "name": "Automotive / Premium Hardware",
+    "keywords": ["automotive", "car", "vehicle", "hardware", "device", "physical", "premium", "engineering", "performance", "ev", "electric", "mechanical"],
+    "brands": [
+      {
+        "name": "BMW",
+        "aesthetic": "Dark premium German precision  -  automotive marketing that communicates engineering without explanation.",
+        "palette_hint": "Dark grey to black backgrounds, BMW blue accent, chrome detail highlights",
+        "typography_hint": "BMW Type Next or Inter, weight 400-700, wide headline spacing",
+        "best_for": "Premium hardware products, EV dashboards, automotive UIs where engineering credibility is the brand"
+      },
+      {
+        "name": "Ferrari",
+        "aesthetic": "Chiaroscuro black and white with Ferrari Red  -  performance through contrast.",
+        "palette_hint": "Black backgrounds, pure white type, Ferrari red as single hero accent",
+        "typography_hint": "Sharp grotesque or condensed sans, weight 700-900, all-caps headers",
+        "best_for": "Supercar-tier product pages, extreme premium hardware, limited edition launches where exclusivity must be felt"
+      },
+      {
+        "name": "Tesla",
+        "aesthetic": "Radical subtraction with cinematic scale  -  automotive marketing that removes everything unnecessary.",
+        "palette_hint": "White or dark grey backgrounds, full-bleed product photography, red CTA only",
+        "typography_hint": "Inter or Gotham-style, weight 300-500, minimal body copy",
+        "best_for": "EV product sites, hardware launches, any premium physical product that wins by showing rather than telling"
+      },
+      {
+        "name": "Porsche",
+        "aesthetic": "Heritage meets precision  -  German sports car confidence through typography and restraint.",
+        "palette_hint": "White backgrounds, Porsche red and gold accents, clean grid layout",
+        "typography_hint": "Porsche Next or condensed grotesque, weight 400-700, structured hierarchy",
+        "best_for": "Heritage hardware brands, precision instruments, products that balance modern performance with lasting identity"
+      },
+      {
+        "name": "SpaceX",
+        "aesthetic": "Stark monochrome with full-bleed cinematic photography  -  technology as religion.",
+        "palette_hint": "True black backgrounds, full-bleed rocket and space photography, white text only",
+        "typography_hint": "D-DIN or condensed sans, weight 400-700, wide tracking on caps",
+        "best_for": "Deep-tech products, aerospace tools, mission-driven hardware companies that want to feel inevitable"
+      }
+    ]
+  }
+]
