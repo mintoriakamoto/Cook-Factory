@@ -24,9 +24,9 @@ in accordance with the MIT License.
 --------------------------------------------------------------------------------
 
 Ferrox Factory builds on Superpowers by Obra, licensed under the MIT License.
-Five Superpowers per-task discipline skills — test-driven-development,
+Six Superpowers per-task discipline skills — test-driven-development,
 systematic-debugging, verification-before-completion, requesting-code-review,
-and receiving-code-review — are vendored into this repository (staged under
+receiving-code-review, and using-skills — are vendored into this repository (staged under
 `skills-vendored/` as `ferrox-*` and shipped in `skills/`), each SKILL.md
 carrying an "Adapted from Superpowers by Obra (MIT)" credit line.
 
