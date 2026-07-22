@@ -2,7 +2,6 @@
   "name": "ferrox-factory",
   "version": "1.9.0",
   "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
-  "main": ".opencode/plugins/ferrox-core.js",
   "bin": {
     "ferrox-factory": "bin/install.js",
     "ferrox-core": "bin/install.js",
@@ -22,8 +21,7 @@
     "GEMINI.md",
     "hooks",
     "scripts",
-    "pi",
-    "vscode"
+    "pi"
   ],
   "keywords": [
     "claude",
@@ -96,7 +94,7 @@
     "prepack": "npm run build:lib",
     "prepare": "npm run build:lib",
     "version": "node scripts/sync-manifest-versions.cjs --stage && node scripts/gen-capability-registry.cjs --write && git add ferrox-core/bin/lib/capability-registry.cjs",
-    "prepublishOnly": "npm run build:lib && npm run build:hooks",
+    "prepublishOnly": "npm run build && npm run lint:generated-sync",
     "pretest": "npm run build:lib && npm run lint:skill-deps",
     "pretest:coverage": "npm run build:lib && npm run lint:skill-deps",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/",

@@ -123,8 +123,20 @@ collect_files() {
   case "$mode" in
     --diff)
       local base="${1:-origin/main}"
-      # Get changed files in the diff, filter to scannable extensions
-      git diff --name-only --diff-filter=ACMR "$base"...HEAD 2>/dev/null \
+      # An unresolvable base (unfetched ref, shallow clone) must be a loud
+      # error, not an empty diff: swallowing it downgrades the gate to
+      # "no files to scan → clean" and an injection ships undetected.
+      if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+        echo "Error: diff base '$base' does not resolve — fetch it or pass an explicit base" >&2
+        exit 2
+      fi
+      local diff_out
+      diff_out=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD) || {
+        echo "Error: git diff against '$base' failed" >&2
+        exit 2
+      }
+      # Filter to scannable extensions
+      printf '%s\n' "$diff_out" \
         | grep -E '\.(md|cjs|js|json|yml|yaml|sh)$' || true
       ;;
     --file)

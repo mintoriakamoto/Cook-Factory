@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint & drift gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint:ci
+
+  test:
+    name: Tests & coverage floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+
+  scan:
+    name: Secret & prompt-injection scan (changed files)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scanners diff against the PR base; fetch enough history for
+          # merge-base resolution. The scripts fail loudly (exit 2) if the
+          # base ref is unresolvable rather than passing on an empty diff.
+          fetch-depth: 0
+      - name: Fetch base ref
+        run: git fetch origin "$BASE_REF"
+      - name: Secret scan
+        run: scripts/secret-scan.sh --diff "origin/$BASE_REF"
+      - name: Prompt-injection scan
+        run: scripts/prompt-injection-scan.sh --diff "origin/$BASE_REF"
