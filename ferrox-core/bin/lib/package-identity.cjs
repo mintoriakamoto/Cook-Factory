@@ -3,13 +3,13 @@
 //   node scripts/generate-package-identity.cjs
 'use strict';
 
-const packageName = "ferrox-core";
-const binName = "ferrox-core";
+const packageName = "ferrox-factory";
+const binName = "ferrox-factory";
 const repoSlug = "ferroxfactory/ferrox-core";
 const repoUrl = "https://github.com/ferroxfactory/ferrox-core";
 const changelogRawUrl = "https://raw.githubusercontent.com/ferroxfactory/ferrox-core/main/CHANGELOG.md";
-const cacheSlug = "ferrox-core";
-const updateCacheFileName = "ferrox-update-check-ferrox-core.json";
+const cacheSlug = "ferrox-factory";
+const updateCacheFileName = "ferrox-update-check-ferrox-factory.json";
 
 function formatManualInstall({ packageName, binName, scope, runtime } = {}) {
   const runtimeFlag = runtime ? ` --${runtime}` : '';

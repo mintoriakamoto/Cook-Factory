@@ -1,7 +1,7 @@
 {
   "name": "ferrox-core",
   "displayName": "Ferrox Core",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "description": "Ferrox Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "author": {
     "name": "ferroxfactory",
