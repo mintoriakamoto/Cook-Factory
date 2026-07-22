@@ -138,7 +138,7 @@ function extractFrontmatter(content: string): Frontmatter {
  * Backslash must be escaped first so the backslashes added for embedded quotes
  * (and control chars) are not themselves doubled. Without this, a value
  * carrying an indicator (`:`/`#`) that also contains a literal `"` serializes
- * to invalid YAML, e.g. `upstream: "https://x (Tom; "Git. Ship. Done")"`. A
+ * to invalid YAML, e.g. `upstream: "https://x (Tom; "Spec in. Proven out")"`. A
  * literal newline/tab/control char inside the quotes likewise breaks (or
  * silently alters) the scalar, so those are escaped to their YAML forms too.
  */

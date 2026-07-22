@@ -1,6 +1,6 @@
 {
   "name": "ferrox-core",
-  "description": "Marketplace for Ferrox Core — meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
+  "description": "Marketplace for Ferrox Factory: meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "owner": {
     "name": "ferroxfactory",
     "url": "https://github.com/ferroxfactory"
@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "ferrox-core",
-      "description": "Ferrox Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
-      "version": "1.7.0",
+      "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
+      "version": "1.9.1",
       "source": "./",
       "author": {
         "name": "ferroxfactory",

@@ -181,7 +181,7 @@ shared-write logic as a hard-coded rule in prose.
 
 ## COORD-01 — one-writer-per-worktree (honest scope)
 
-COORD-01 is the fork's shipped GSD primitive for **one writer per worktree**: parallel
+COORD-01 is the shipped coordination primitive for **one writer per worktree**: parallel
 executors run in isolated git worktrees (`isolation="worktree"`), and the shipped guards make
 each executor stay in its own tree and its own branch:
 

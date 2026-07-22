@@ -1,8 +1,8 @@
 {
   "name": "ferrox-core",
-  "displayName": "Ferrox Core",
-  "version": "1.7.0",
-  "description": "Ferrox Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
+  "displayName": "Ferrox Factory",
+  "version": "1.9.1",
+  "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "author": {
     "name": "ferroxfactory",
     "url": "https://github.com/ferroxfactory"

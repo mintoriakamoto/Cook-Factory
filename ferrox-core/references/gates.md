@@ -160,4 +160,4 @@ Beyond these gate types, the vendored per-task disciplines are bound to the Buil
 Line stage where each applies. That binding is inspectable in
 [discipline-stages.md](discipline-stages.md) — grep a `ferrox-{discipline}` skill
 name there to resolve its named stage (`execute`, `verify`, `wave-audit`, or the
-GSD-owned `discuss`).
+lifecycle-owned `discuss`).

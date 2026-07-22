@@ -1,6 +1,6 @@
 ---
 name: ferrox-using-skills
-description: Use when starting any conversation: invoke the relevant Ferrox discipline or GSD workflow skill before acting, including before clarifying questions.
+description: Use when starting any conversation: invoke the relevant Ferrox discipline or lifecycle workflow skill before acting, including before clarifying questions.
 ---
 
 > Adapted from Superpowers using-superpowers by Obra (MIT) — see NOTICE.
@@ -23,9 +23,9 @@ This is not negotiable. You cannot rationalize your way out of checking.
 
 ## The Ferrox Surfacing Model
 
-Ferrox Factory is GSD's context-engineered lifecycle spine with Superpowers' per-task discipline as the floor. Two layers, both surfaced through this one mandate:
+Ferrox Factory pairs a context-engineered lifecycle spine with Superpowers' per-task discipline as the floor. Two layers, both surfaced through this one mandate:
 
-- **Macro flow — GSD lifecycle skills own the shape of the work:** discuss → plan → execute → verify (plus the phase/milestone/audit machinery). Route project-level intent through these; do not invent a competing process vocabulary.
+- **Macro flow: the Ferrox lifecycle skills own the shape of the work:** discuss → plan → execute → verify (plus the phase/milestone/audit machinery). Route project-level intent through these; do not invent a competing process vocabulary.
 - **Micro-discipline floor — the vendored Ferrox disciplines are the quality floor inside a task:**
   - `ferrox-test-driven-development` — before writing implementation code for any feature or bugfix.
   - `ferrox-systematic-debugging` — before proposing a fix for any bug, test failure, or unexpected behavior.
@@ -39,7 +39,7 @@ The disciplines are normal discoverable skills. This mandate is the only thing t
 
 When multiple skills apply, process/lifecycle skills come first — they set the approach; discipline and implementation skills then carry it out.
 
-- "Let's build X" → GSD discuss/plan flow sets the shape; `ferrox-test-driven-development` governs the code.
+- "Let's build X" → the Ferrox discuss/plan flow sets the shape; `ferrox-test-driven-development` governs the code.
 - "Fix this bug" → `ferrox-systematic-debugging` first, then the domain work.
 - "Is this done?" → `ferrox-verification-before-completion` before any success claim.
 

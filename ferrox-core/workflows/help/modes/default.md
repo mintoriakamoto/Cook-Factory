@@ -1,11 +1,11 @@
 <purpose>
-One-page newcomer-oriented tour of Ferrox Core. Output ONLY the `<reference>` content below. No additions.
+One-page newcomer-oriented tour of Ferrox Factory. Output ONLY the `<reference>` content below. No additions.
 </purpose>
 
 <reference>
-# Ferrox Core — Git. Ship. Done.
+# Ferrox Factory. Spec in. Proven software out.
 
-Plan-driven development for solo agentic work with Claude Code. Ferrox Core turns a vague idea into a hierarchical plan, then executes it phase by phase with state tracking and atomic commits.
+Plan-driven development for solo agentic work with Claude Code. Ferrox Factory turns a vague idea into a hierarchical plan, then executes it phase by phase with state tracking and atomic commits.
 
 ## Start here (3 commands)
 
@@ -26,6 +26,7 @@ Existing codebase? Run `/ferrox:onboard` to map the repo, ingest existing docs, 
 | `/ferrox:quick` | Small ad-hoc task with Ferrox guarantees (planning dir + atomic commit) |
 | `/ferrox:fast "<task>"` | Trivial inline change — no subagents, ≤3 file edits |
 | `/ferrox:discuss-phase <N>` | Capture vision and decisions before planning |
+| `/ferrox:brainstorm [topic]` | Freeform ideation, saved to `.planning/brainstorms/`, then routed |
 | `/ferrox:debug "<symptom>"` | Persistent debug session, survives `/clear` |
 | `/ferrox:capture` | Save an idea, todo, note, seed, or backlog item |
 | `/ferrox:verify-work <N>` | Conversational UAT for a completed phase |
@@ -46,6 +47,6 @@ Topics: `workflow` · `planning` · `execute` · `quick` · `debug` · `capture`
 ## Update Ferrox
 
 ```bash
-npx ferrox-core@latest
+npx ferrox-factory@latest
 ```
 </reference>

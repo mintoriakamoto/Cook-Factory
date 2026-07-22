@@ -298,9 +298,9 @@ process.stdin.on('end', () => {
     const cwd = data.cwd || process.cwd();
 
     // Scope guard: only ENFORCE in a project that opted into Ferrox strength-gating.
-    // A globally-installed hook (e.g. Codex --global, coexisting with GSD) must NOT
-    // police merges in unrelated projects — failing-closed a merge the project never
-    // asked Ferrox to gate would break ordinary work (a GSD repo, any non-Ferrox
+    // A globally-installed hook (e.g. Codex --global, coexisting with other tooling)
+    // must NOT police merges in unrelated projects: failing-closed a merge the project
+    // never asked Ferrox to gate would break ordinary work (any non-Ferrox
     // project). The opt-in marker is the `.planning/strength/` directory — the home
     // of receipts/coverage-baseline and the merge-gate evidence manifest. Absent →
     // this project is not Ferrox-strength-gated → pass through (exit 0). A real

@@ -24,7 +24,7 @@ See also: [ADR-1244](../adr/1244-capability-ecosystem.md) —
 | **engines.ferrox** | Semver RANGE expressing host-version compatibility. A hard gate at install and at load. `—` means the capability declares no range. |
 | **extension points** | The loop points this capability registers hooks into (from the registry's `byLoopPoint` index). `—` means it registers none (typical for runtime capabilities, whose job is surface emission). |
 | **hook kinds** | Which of `step`, `contribution`, `gate` the capability's hooks use. `—` means none. |
-| **source** | `first-party` — ships with Ferrox Core; `third-party` — installed from an external source via `ferrox capability install`. |
+| **source** | `first-party`: ships with Ferrox Factory; `third-party`: installed from an external source via `ferrox capability install`. |
 
 > **On versions.** This matrix intentionally omits a per-capability `version`
 > column. First-party capabilities are versioned **in lockstep** with the Ferrox
@@ -106,7 +106,7 @@ emission), so their extension-point and hook-kind cells are `—`.
 ## Third-party capabilities
 
 This matrix is the **first-party catalogue**: it is generated from the committed
-registry and therefore lists only the capabilities that ship with Ferrox Core.
+registry and therefore lists only the capabilities that ship with Ferrox Factory.
 Installed third-party capabilities are NOT written into this committed file. Once a
 user installs one via `ferrox capability install <spec>` it enters the **runtime
 registry overlay** (ADR-1244 D2); the overlay-aware view of what is installed on a

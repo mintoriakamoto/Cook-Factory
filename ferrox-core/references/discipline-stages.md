@@ -20,13 +20,15 @@ Stage tokens are drawn from a closed set: `execute`, `verify`, `wave-audit`,
 | `ferrox-requesting-code-review` | `wave-audit` | An author requests review at the independent WAVE-AUDIT judge stage. |
 | `ferrox-receiving-code-review` | `wave-audit` | Acting on severity-graded findings is part of the WAVE-AUDIT loop (fix-now vs backlog). |
 
-## Brainstorm stays GSD-owned
+## Brainstorm stays lifecycle-owned
 
 There is **no vendored brainstorm skill**. The brainstorm stage maps to the
-`discuss` stage token and is owned by GSD's `discuss-phase` (upstream), not a
+`discuss` stage token and is owned by Ferrox Factory's own `discuss-phase`
+workflow (with `/ferrox:brainstorm` as its freeform ideation on-ramp), not a
 Superpowers discipline. This row exists so a reader who greps for the `discuss`
-stage sees it is intentionally GSD-owned, not a missing/forgotten discipline.
+stage sees it is intentionally lifecycle-owned, not a missing/forgotten
+discipline.
 
 | Stage owner | Stage token | Note |
 |-------------|-------------|------|
-| GSD `discuss-phase` (no vendored skill) | `discuss` | Brainstorm/convergence is GSD-owned; no `ferrox-brainstorm` discipline is vendored. |
+| Lifecycle `discuss-phase` (no vendored skill) | `discuss` | Brainstorm/convergence is lifecycle-owned; no `ferrox-brainstorm` discipline is vendored. |

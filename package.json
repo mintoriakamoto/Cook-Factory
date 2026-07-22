@@ -1,6 +1,6 @@
 {
   "name": "ferrox-factory",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "main": ".opencode/plugins/ferrox-core.js",
   "bin": {
@@ -39,11 +39,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ferroxfactory/ferrox-core.git"
+    "url": "git+https://github.com/FerroxLabs/ferrox-factory.git"
   },
-  "homepage": "https://github.com/ferroxfactory/ferrox-core",
+  "homepage": "https://github.com/FerroxLabs/ferrox-factory",
   "bugs": {
-    "url": "https://github.com/ferroxfactory/ferrox-core/issues"
+    "url": "https://github.com/FerroxLabs/ferrox-factory/issues"
   },
   "publishConfig": {
     "access": "public"

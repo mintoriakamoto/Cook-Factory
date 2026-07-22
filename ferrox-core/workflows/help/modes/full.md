@@ -1,11 +1,11 @@
 <purpose>
-Display the complete Ferrox Core command reference. Output ONLY the reference content. Do NOT add project-specific analysis, git status, next-step suggestions, or any commentary beyond the reference.
+Display the complete Ferrox Factory command reference. Output ONLY the reference content. Do NOT add project-specific analysis, git status, next-step suggestions, or any commentary beyond the reference.
 </purpose>
 
 <reference>
-# Ferrox Core Command Reference
+# Ferrox Factory Command Reference
 
-**Ferrox Core** (Git. Ship. Done.) creates hierarchical project plans optimized for solo agentic development with Claude Code.
+**Ferrox Factory** (Spec in. Proven software out.) creates hierarchical project plans optimized for solo agentic development with Claude Code.
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ Usage: `/ferrox:next`
 Ferrox evolves fast. Update periodically:
 
 ```bash
-npx ferrox-core@latest
+npx ferrox-factory@latest
 ```
 
 ## Core Workflow
@@ -599,7 +599,7 @@ Update Ferrox to latest version with changelog preview.
 - Displays changelog entries for versions you've missed
 - Highlights breaking changes
 - Confirms before running install
-- Better than raw `npx ferrox-core`
+- Better than raw `npx ferrox-factory`
 
 Usage: `/ferrox:update`
 
@@ -610,6 +610,7 @@ The commands above cover the most common day-to-day flows. Every command listed 
 ### Discovery & Specification
 
 - **`/ferrox:explore`** — Socratic ideation and idea routing. Think through ideas before committing to plans.
+- **`/ferrox:brainstorm [topic]`**: Freeform ideation session. Diverge on options with tradeoffs, persist to `.planning/brainstorms/`, then route the result (discuss-phase, new milestone, or backlog).
 - **`/ferrox:spec-phase <phase> [--auto] [--text]`** — Clarify WHAT a phase delivers with ambiguity scoring; produces a SPEC.md before discuss-phase.
 - **`/ferrox:ai-integration-phase [phase]`** — Generate an AI-SPEC.md design contract for phases that involve building AI systems.
 - **`/ferrox:ui-phase [phase]`** — Generate UI design contract (UI-SPEC.md) for frontend phases.

@@ -166,6 +166,7 @@ function isCodexHooksFeatureKey(key) {
 // instead of scattered literal 'claude' defaults/rosters (#2086).
 const DEFAULT_RUNTIME = 'claude';
 const FERROX_CLAUDE_ALLOW_PERMISSIONS = Object.freeze([
+  'Bash(npx ferrox-factory *)',
   'Bash(npx ferrox-core *)',
   'Read(.planning/*)',
   'Write(.planning/*)',
@@ -9260,7 +9261,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // behind by a previous version), there is no actual "user choice" to
   // make — the file is a known Ferrox-managed artifact and the installer is
   // about to write the fresh bundled version. Gating the resolver on
-  // `!isTTY` made `npx ferrox-core@latest --codex` hard-abort with
+  // `!isTTY` made `npx ferrox-factory@latest --codex` hard-abort with
   // 12 blocked bundled hooks. The env-override branch (operator-supplied
   // FERROX_INSTALLER_MIGRATION_RESOLVE) still applies only in non-TTY mode.
   const _migrationIsTty = process.stdin && process.stdin.isTTY === true;
