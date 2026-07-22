@@ -1,6 +1,6 @@
 {
   "name": "ferrox-factory",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "main": ".opencode/plugins/ferrox-core.js",
   "bin": {
@@ -49,7 +49,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=20.0.0",
     "npm": ">=10.0.0"
   },
   "dependencies": {

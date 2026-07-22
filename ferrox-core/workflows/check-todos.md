@@ -23,14 +23,14 @@ If `todo_count` is 0:
 ```
 No pending todos.
 
-Todos are captured during work sessions with /ferrox-add-todo.
+Todos are captured during work sessions with /ferrox-capture.
 
 ---
 
 Would you like to:
 
 1. Continue with current phase (/ferrox:progress)
-2. Add a todo now (/ferrox-add-todo)
+2. Add a todo now (/ferrox-capture)
 ```
 
 Exit.
@@ -121,7 +121,7 @@ Use AskUserQuestion:
 - question: "What would you like to do with this todo?"
 - options:
   - "Work on it now" — move to done, start working
-  - "Create a phase" — /ferrox-add-phase with this scope
+  - "Create a phase" — /ferrox-phase with this scope
   - "Brainstorm approach" — think through before deciding
   - "Put it back" — return to list
 </step>
@@ -137,7 +137,7 @@ Update STATE.md todo count. Present problem/solution context. Begin work or ask 
 Note todo reference in phase planning notes. Keep in pending. Return to list or exit.
 
 **Create a phase:**
-Display: `/ferrox-add-phase [description from todo]`
+Display: `/ferrox-phase [description from todo]`
 Keep in pending. User runs command in fresh context.
 
 **Brainstorm approach:**

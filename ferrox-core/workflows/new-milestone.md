@@ -157,7 +157,7 @@ Ensure the `## Evolution` section exists in PROJECT.md. If missing (projects cre
 
 This document evolves at phase transitions and milestone boundaries.
 
-**After each phase transition** (via `/ferrox-transition`):
+**After each phase transition** (the internal transition workflow, run automatically after phase verification):
 1. Requirements invalidated? → Move to Out of Scope with reason
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active

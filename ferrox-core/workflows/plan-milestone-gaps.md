@@ -1,5 +1,5 @@
 <purpose>
-Create all phases necessary to close gaps identified by `/ferrox:audit-milestone`. Reads MILESTONE-AUDIT.md, groups gaps into logical phases, creates phase entries in ROADMAP.md, and offers to plan each phase. One command creates all fix phases — no manual `/ferrox-add-phase` per gap.
+Create all phases necessary to close gaps identified by `/ferrox:audit-milestone`. Reads MILESTONE-AUDIT.md, groups gaps into logical phases, creates phase entries in ROADMAP.md, and offers to plan each phase. One command creates all fix phases — no manual `/ferrox-phase` per gap.
 </purpose>
 
 <required_reading>

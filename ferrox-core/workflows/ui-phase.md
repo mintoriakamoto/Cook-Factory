@@ -441,6 +441,29 @@ Collect the artifact list first:
 UI_ARTIFACTS=$(ls "${PHASE_DIR}"/*-UI-SPEC.md .planning/brainstorms/*/screens/*.html "${PHASE_DIR}"/mockups/**/*.html 2>/dev/null | tr '\n' ',')
 ```
 
+**Web-ui gate first (mechanical floor + INDET handoff).** Before dispatching the eyes, run
+the web-ui gate pack on every self-contained HTML artifact in the list (companion screens
+and generated mockups satisfy the card's input contract by construction):
+
+```bash
+WEBUI_GATE_OUT=$(node gates/web-ui/gate.cjs "${artifact}" 2>&1)
+```
+
+Capture RAW STDOUT per artifact. Do NOT route the handoff through gateRunner.runGate:
+parseGateOutput consumes only the FAIL lines plus the summary and drops INDET lines by
+design; the raw stdout is the only surface that carries them. Then split the output 3 ways:
+
+- `FAIL` lines: mechanical floor violations at the executable tier; carry them into the
+  findings merge with the WU id as the kind.
+- `INDET <ID> <reason-code>` lines: extract them verbatim and pass them to BOTH eyes as
+  named judgment items in a `<gate_indet_items>` block; the pack refused to guess and these
+  lines are exactly the judgment slice the eyes own.
+- `UNSUPPORTED-INPUT`: the artifact does not satisfy the card's input contract
+  (`gates/web-ui/card.md`); list it in a `<gate_unsupported>` block so the eyes cover the
+  mechanical floor themselves on that surface (graceful degradation, documented in each
+  a11y eye), and note it in the findings summary: "web-ui gate skipped {artifact}:
+  UNSUPPORTED-INPUT".
+
 **Screenshot verify (graceful, no hard dependency).** If chrome-devtools MCP tools
 (`mcp__chrome-devtools__*` or a plugin-prefixed variant) or playwright MCP tools
 (`mcp__playwright__*` or a plugin-prefixed variant) are available in this session AND a screen
@@ -466,7 +489,9 @@ Agent(
   - {phase_dir}/{padded_phase}-UI-SPEC.md (token plan)
   - {context_path} (intent, if present)
   </required_reading>
-  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>",
+  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>
+  <gate_indet_items>{raw INDET lines from the web-ui gate, if any; omit the block when none}</gate_indet_items>
+  <gate_unsupported>{artifacts the gate refused as UNSUPPORTED-INPUT, if any; omit when none}</gate_unsupported>",
   subagent_type="ferrox-design-critic",
   model="{DESIGN_CRITIC_MODEL}",
   description="Design critique Phase {N}"
@@ -479,7 +504,9 @@ Agent(
   - DESIGN.md (project root, if present — accessibility floor may be declared here)
   - {phase_dir}/{padded_phase}-UI-SPEC.md
   </required_reading>
-  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>",
+  <surfaces>{UI_ARTIFACTS}{screenshot paths, if captured}</surfaces>
+  <gate_indet_items>{raw INDET lines from the web-ui gate, if any; omit the block when none}</gate_indet_items>
+  <gate_unsupported>{artifacts the gate refused as UNSUPPORTED-INPUT, if any; omit when none}</gate_unsupported>",
   subagent_type="ferrox-a11y-design-reviewer",
   model="{A11Y_REVIEWER_MODEL}",
   description="A11y design review Phase {N}"
@@ -561,6 +588,7 @@ ferrox_run query state.record-session \
 - [ ] ferrox-ui-checker spawned with UI-SPEC.md
 - [ ] All 6 dimensions evaluated
 - [ ] Revision loop if BLOCKED (max 2 iterations)
+- [ ] Web-ui gate run on the self-contained HTML artifacts; raw stdout captured; INDET lines handed to both eyes; UNSUPPORTED-INPUT artifacts noted for the eyes' fallback floor pass
 - [ ] Design eyes cross-audit run: ferrox-design-critic + ferrox-a11y-design-reviewer dispatched in parallel on the final artifacts
 - [ ] Screenshot verify attempted when a browser MCP is available (1200px + 375px), skipped with a note otherwise
 - [ ] Every BLOCK finding from the eyes resolved or explicitly waived (waivers recorded in UI-SPEC) before final status

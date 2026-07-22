@@ -1,7 +1,7 @@
 # The Ferrox Gate Library
 
-5 validated gate packs, 31 machine checks, 25 sealed fluent-but-wrong mutants, every pack
-proven to catch all 5 of its mutants before it is allowed to gate anything. This directory
+6 validated gate packs, 39 machine checks, 31 sealed fluent-but-wrong mutants, every pack
+proven to catch all of its mutants before it is allowed to gate anything. This directory
 is the public face of that library: the packs, their Gate Cards, and their fixture
 generators. The fixtures themselves are sealed and never committed.
 
@@ -113,6 +113,29 @@ without a pick is a brainstorm that dodged its job.
 | BA-04 | grounding | no dead file references: backticked relative paths resolve against the workspace |
 | BA-05 | structure | Open Questions and Next Step are non-empty (an honest brainstorm always has both) |
 | BA-06 | value | no placeholder markers (TBD, TODO, FIXME, XXX, lorem ipsum) |
+
+### web-ui (domain: `web-ui`, tier 1)
+
+Static mechanical floor for self-contained frontend surfaces, and the first static a11y
+gate we know of that computes contrast and tap targets without a browser. Every check
+returns PASS, FAIL, or INDETERMINATE with a machine-readable reason code: what a formula
+can prove is scored, what needs rendering or judgment is routed to the design eyes instead
+of guessed. The input contract is enforced by WU-01 (self-contained HTML, inline styles or
+a single style block, subset selectors, `:root`-only custom properties, pinned viewport);
+anything outside it gets a distinct UNSUPPORTED-INPUT verdict, never a wrong answer.
+Validated against the GDS 142-barrier corpus (22 of the 23 statically claimable barriers
+hard-FAILed, 0 missed) and the W3C ACT rules test cases.
+
+| Check | Category | What it asserts |
+|---|---|---|
+| WU-01 | structure | input contract conformance: self-contained HTML, single style block, no external stylesheets, subset selectors, `:root`-only custom properties |
+| WU-02 | value | WCAG contrast floors on resolved color pairs: 4.5:1 normal text, 3:1 large text and UI components |
+| WU-03 | value | interactive targets at least 24x24 px by declared box math, with the SC 2.5.8 inline exemption; content-sized targets abstain |
+| WU-04 | value | every interactive element is focus-reachable and visibly focus-styled; bare outline removal with no real replacement fails |
+| WU-05 | structure | exactly 1 main landmark and all rendered text inside landmarks |
+| WU-06 | structure | heading order starts at h1 and is skip-free |
+| WU-07 | structure | every img carries an alt decision and every control resolves an accessible name |
+| WU-08 | value | every animated or transitioned element is covered by a prefers-reduced-motion fallback |
 
 ### spreadsheets (domain: `business-docs`, tier 1)
 

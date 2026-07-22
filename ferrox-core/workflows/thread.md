@@ -208,7 +208,7 @@ updated: {today ISO date}
 - Lighter weight than /ferrox:pause-work — no phase state, no plan context
 - The value is in Context and Next Steps — a cold-start session can pick up immediately
 - Threads can be promoted to phases or backlog items when they mature:
-  /ferrox-add-phase or /ferrox-add-backlog with context from the thread
+  /ferrox-phase or /ferrox-capture --backlog with context from the thread
 - Thread files live in .planning/threads/ — no collision with phases or other Ferrox structures
 - Thread status values: `open`, `in_progress`, `resolved`
 </notes>

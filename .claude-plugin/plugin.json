@@ -1,14 +1,14 @@
 {
   "name": "ferrox-core",
   "displayName": "Ferrox Factory",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "author": {
     "name": "ferroxfactory",
     "url": "https://github.com/ferroxfactory"
   },
-  "homepage": "https://github.com/ferroxfactory/ferrox-core",
-  "repository": "https://github.com/ferroxfactory/ferrox-core",
+  "homepage": "https://github.com/FerroxLabs/ferrox-factory",
+  "repository": "https://github.com/FerroxLabs/ferrox-factory",
   "license": "MIT",
   "keywords": [
     "spec-driven-development",

@@ -668,12 +668,12 @@ The commands above cover the most common day-to-day flows. Every command listed 
 
 These six skills exist primarily for the model to perform two-stage hierarchical routing across 60+ skills. You can invoke them directly when you want to browse a category interactively.
 
-- **`/ferrox-context`** — Codebase intelligence routing (map, graphify, docs, learnings, mempalace).
-- **`/ferrox-ideate`** — Exploration / capture routing (explore, sketch, spike, spec, capture).
-- **`/ferrox-manage`** — Configuration and workspace routing (workstreams, thread, update, ship, inbox).
-- **`/ferrox-project`** — Project-lifecycle routing (milestones, audits, summary).
-- **`/ferrox-quality`** — Quality-gate routing (code review, debug, audit, security, eval, ui).
-- **`/ferrox-workflow`** — Phase-pipeline routing (discuss, plan, execute, verify, phase, progress).
+- **`/ferrox-ns-context`** — Codebase intelligence routing (map, graphify, docs, learnings, mempalace).
+- **`/ferrox-ns-ideate`** — Exploration / capture routing (explore, sketch, spike, spec, capture).
+- **`/ferrox-ns-manage`** — Configuration and workspace routing (workstreams, thread, update, ship, inbox).
+- **`/ferrox-ns-project`** — Project-lifecycle routing (milestones, audits, summary).
+- **`/ferrox-ns-review`** — Quality-gate routing (code review, debug, audit, security, eval, ui).
+- **`/ferrox-ns-workflow`** — Phase-pipeline routing (discuss, plan, execute, verify, phase, progress).
 
 ## Files & Structure
 

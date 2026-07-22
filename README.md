@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-840%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-912%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -42,7 +42,7 @@ model backbone**. Fleets of parallel sub-agents build real work without the infi
 *audit → fix → re-plan* loop that stalls naive agent systems.
 
 It runs as **markdown skills + a Node CLI** (`ferrox-tools.cjs`) inside your existing agent:
-Claude Code, Codex, Cursor, Kimi CLI, and 15+ other runtimes. No new runtime, no lock-in.
+Claude Code, Codex, Cursor, Kimi CLI, and 13 other runtimes. No new runtime, no lock-in.
 
 The proof is the shipping record. This factory built **Wayland Desktop**, **Wayland Core**, and
 the **Anvil engine**, whose gated climb now runs natively as the line's default execution path.
@@ -234,6 +234,15 @@ the solo lanes since the climb makes multiple calls. The claim these lanes suppo
 the gate turns almost-green into green, catches the frontier one-shot's misses, and does it
 for pennies. N=1 per cell, disclosed.
 
+**The web-ui gate carries an external receipt of its own.** Run against the GDS 142-barrier
+corpus, it hard-FAILed 22 of the 23 barriers inside its 7 claimed check families (95.7%, 0
+missed) and routed the 23rd to the design eyes by contract. On all 142 barriers that is
+15.5%, inside the 13% to 40% range GDS measured for 13 browser-driven tools, from a gate
+that runs with no browser and refuses what it cannot claim; Deque's widely cited 57% is
+percent of issue volume on real audits, a different base, quoted so the framing is
+checkable. The same wave exposed 19 gate defects that were fixed test-first with 35
+regression provocations.
+
 The native v1.8 executor reproduced the discipline across 3 different domains through 1 verb:
 release-manifest 16/16, grounded-brief 14/14, code parity 18/18 visible + 10/10 hidden, every
 first probe green, $0.1246 for the whole proof wave. Charts are emitted by a committed,
@@ -243,9 +252,9 @@ self-checking generator that reads the raw results and refuses to draw on any mi
 
 ## The gate library
 
-The gates the climb runs against are a library, not a pile of scripts: 4 validated packs
-ship in [`gates/`](gates/README.md), each with a Gate Card declaring its checks, tools,
-validation status, and known gamed-modes.
+The gates the climb runs against are a library, not a pile of scripts: 6 validated packs
+(39 checks, 31 sealed mutants) ship in [`gates/`](gates/README.md), each with a Gate Card
+declaring its checks, tools, validation status, and known gamed-modes.
 
 - **eval-harness-integrity**: trusts an eval harness only when it separates a gold stub, a
   random stub, and its own planted mutants in the declared order at the declared deltas.
@@ -255,6 +264,17 @@ validation status, and known gamed-modes.
   references, token budget, runnable examples, and contradictions.
 - **spreadsheets**: recalculates workbooks headless and perturbs inputs to catch hardcoded
   totals that read as formulas.
+- **brainstorm-artifact**: a hygiene floor on the brainstorm document's shape: required
+  sections in order, a definite recommendation, no placeholders, no dead references.
+- **web-ui**: the mechanical accessibility floor for frontend surfaces, computed statically
+  from a self-contained HTML file: WCAG contrast ratios, 24x24 px tap targets, focus
+  visibility, landmarks, heading order, alt and label decisions, reduced-motion fallbacks.
+  Every check returns PASS, FAIL, or INDETERMINATE with a machine-readable reason code;
+  INDETERMINATE never guesses and never silently passes, it routes to the design eyes as
+  the judgment tier, and input outside the declared contract (self-contained HTML, subset
+  selectors, `:root`-only custom properties) gets a distinct UNSUPPORTED-INPUT refusal. As
+  far as we know, it is the first static a11y gate that computes contrast and tap targets
+  without a browser.
 
 Every pack is validated to a sealed standard before it may gate anything: a pool of at
 least 5 **fluent-but-wrong** mutant fixtures (convincing garbage a human skim would accept)
@@ -402,7 +422,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **840 tests** across the halting, coordination, strength, model-routing, memory,
+The suite is **912 tests** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

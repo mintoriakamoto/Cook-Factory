@@ -724,11 +724,11 @@ const banner = '\n' +
   '  Ferrox Factory ' + dim + 'v' + pkg.version + reset + '\n' +
   '  Go Build Something Awesome\n' +
   '\n' +
-  '  A disciplined agentic build line — research, plan, and ship correct software\n' +
+  '  A disciplined agentic build line: research, plan, and ship correct software\n' +
   '  with fleets of coordinated AI agents that never spin in the audit-fix-replan\n' +
   '  loop. Fast, coordinated, strong: bounded gates, parallel sub-agents, and\n' +
   '  cross-model verification, so every session lands a real increment on main.\n' +
-  '  Runs on Wayland, Claude Code, OpenCode, Kimi CLI, Kilo, Codex, Copilot,\n' +
+  '  Runs on Claude Code, OpenCode, Kimi CLI, Kilo, Codex, Copilot,\n' +
   '  Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline,\n' +
   '  CodeBuddy, ZCode, and pi.\n';
 

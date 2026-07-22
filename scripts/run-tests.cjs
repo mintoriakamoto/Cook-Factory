@@ -600,7 +600,7 @@ function main() {
   // makes a chunk's `node --test` child hang ~150s on Windows AFTER its last test
   // prints; two such stalls push the windows full lane past its 20m cap and the
   // job is CANCELLED with no failed step — a false-negative gate (#1051, recurrence
-  // of #869). --test-force-exit (Node >=22; engines requires >=22.0.0) exits the
+  // of #869). --test-force-exit (Node >=22; skipped on older majors) exits the
   // runner once all tests finish regardless of lingering handles. The leaking
   // tests are also fixed at the source; this is the defensive backstop.
   // RUN_TESTS_NO_FORCE_EXIT=1 disables it (used by the harness regression test to

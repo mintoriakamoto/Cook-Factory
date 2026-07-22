@@ -3,7 +3,9 @@
  *
  * Port of the anvil DOMAIN-GATING catalog (ANVIL-PORT-SPEC.md §1), extended in MILESTONE v1.9 with
  * the 4 gate-pack domains (eval-harness, test-generation, agent-ops, business-docs — all executable
- * tier, cards at gates/<pack>/card.md). Rule: select the HIGHEST tier the domain admits. Ladder: 1 Executable · 2 Formal · 3 Reference · 4 Grounding · 5 Consistency (soft,
+ * tier, cards at gates/<pack>/card.md). Pack-backed domains as of MILESTONE v1.11: those 4 plus
+ * web-ui, whose pre-existing tier-1 registry row is now backed by the gates/web-ui pack (card at
+ * gates/web-ui/card.md; aliases web/frontend/ui ride along). Rule: select the HIGHEST tier the domain admits. Ladder: 1 Executable · 2 Formal · 3 Reference · 4 Grounding · 5 Consistency (soft,
  * PRE-FILTER only — never the gate) · 6 Model-judge (subjective, route to Crucible).
  *
  *   selectGate(domain) -> { tier, archetype, route, preFilter, known }
@@ -76,6 +78,7 @@ const ALIASES: Record<string, string> = {
 /**
  * The 20-domain catalog: highest admissible tier + verification archetype. Rows 1-16 are the anvil
  * spec §1 table verbatim; the 4 v1.9 gate-pack domains follow, archetypes from their Gate Cards.
+ * web-ui is pack-backed since v1.11 (gates/web-ui/card.md); its archetype row stays spec-verbatim.
  */
 const REGISTRY: Record<string, { tier: number; archetype: string }> = {
   code: { tier: 1, archetype: 'test suite / compiler / type-checker / linter / SAST' },

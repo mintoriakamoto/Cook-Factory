@@ -62,7 +62,7 @@
       } else {
         // Safe DOM construction (labels come from page content; never innerHTML)
         const label = selected.length === 1
-          ? (selected[0].querySelector('h3, .content h3, .card-body h3')?.textContent?.trim() || selected[0].dataset.choice)
+          ? (selected[0].querySelector('h2, h3, .content h3, .card-body h3')?.textContent?.trim() || selected[0].dataset.choice)
           : String(selected.length);
         const strong = document.createElement('span');
         strong.className = 'selected-text';

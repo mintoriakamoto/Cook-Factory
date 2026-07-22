@@ -25,7 +25,7 @@ Then proceed to Step 1.
 
 Check whether the MemPalace capability is enabled by reading `.planning/config.json` directly with the Read tool.
 
-**DO NOT use `ferrox-tools config get-value`** -- it hard-exits on missing keys.
+**DO NOT use `ferrox-tools config-get`** -- it hard-exits on missing keys unless --default is passed.
 
 1. Read `.planning/config.json` with the Read tool.
 2. If the file does not exist: write the "unavailable" stub (Step 4) and **STOP**.

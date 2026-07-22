@@ -36,7 +36,7 @@ This eye fires EARLY on design artifacts and again at review time. It is not the
 - Accepting a pretty magic number: an off-scale size or off-palette hex is drift even when it looks right
 - Letting 2 peer-level primary actions slide because both are "important"
 - Passing a template look because it is competently executed
-- Duplicating the a11y eye: the critic flags only unambiguous contrast fails (under 3.0:1) and defers the 3.0 to 4.5:1 band with a SEE_A11Y note
+- Duplicating the machine: recomputing WU-02 ratio math the gate pack already scored instead of judging whether the hierarchy actually reads; the critic flags what unambiguously fails the eye and records the borderline band as a `SEE_A11Y` note for the a11y eye
 </adversarial_stance>
 
 <audit_pillars>
@@ -49,10 +49,12 @@ Grade 5 pillars. Every finding carries: severity, pillar, kind, surface (path or
 - Heading scale is monotonic (h1 larger than h2 larger than h3). Out-of-order sizes: `SCALE_INVERSION`.
 - Interaction density: more than 9 peer-level CTAs on 1 surface: `INTERACTION_OVERLOAD`.
 
-### Pillar 2: Contrast (obvious fails only)
+### Pillar 2: Contrast (judgment slice only)
 
-- Compute the WCAG ratio for inline color + background pairs: (L1 + 0.05) / (L2 + 0.05) over relative luminance. Under 3.0:1 on text: `OBVIOUS_CONTRAST_FAIL`.
-- The 3.0 to 4.5:1 band belongs to the a11y eye. Record it as a `SEE_A11Y` note, never grade it here.
+- Mechanical WCAG ratio math is owned by `gates/web-ui` (WU-02). Do not recompute a ratio on a surface the gate scored; the pack's FAIL lines stand at the executable tier.
+- The critic's contrast questions are judgment questions: does the hierarchy still read at a glance, is the palette coherent, does the emphasis land where the primary action lives. Text that visibly disappears into its background: `OBVIOUS_CONTRAST_FAIL`, citing what disappears and against what.
+- Judge any WU-02 `INDET <ID> <reason-code>` lines the dispatch hands in (gradient-background, image-background, unresolvable-var): confirmed illegibility is `OBVIOUS_CONTRAST_FAIL`.
+- When the dispatch reports UNSUPPORTED-INPUT for a surface (it does not satisfy the card's input contract), cover the mechanical floor on that surface yourself, applying the thresholds as written in `gates/web-ui/card.md`, never from memory. Borderline results near the card's floors belong to the a11y eye: record them as a `SEE_A11Y` note, never grade them here.
 
 ### Pillar 3: Alignment and rhythm
 
@@ -84,11 +86,11 @@ BLOCK findings must be resolved or explicitly waived by the user before the call
 <execution_flow>
 
 <step name="load_context">
-Read `<required_reading>` files. Locate and read, in order: DESIGN.md at project root (contract), the UI-SPEC for the phase (token plan), the brief or CONTEXT.md (intent), then the surfaces named in the prompt (`surfaces` list, a screens directory, or a source scope). For image mockups referenced by path, read the filename and any sibling spec markdown; do not open binaries.
+Read `<required_reading>` files. Locate and read, in order: DESIGN.md at project root (contract), the UI-SPEC for the phase (token plan), the brief or CONTEXT.md (intent), then the surfaces named in the prompt (`surfaces` list, a screens directory, or a source scope). For image mockups referenced by path, read the filename and any sibling spec markdown; do not open binaries. If the prompt carries a `<gate_indet_items>` block (raw `INDET <ID> <reason-code>` lines from the web-ui gate) or a `<gate_unsupported>` list, capture both: the INDET lines are named judgment items and every UNSUPPORTED-INPUT surface gets the fallback floor pass.
 </step>
 
 <step name="grade">
-Walk the 5 pillars over every surface. Compute contrast ratios with a shell-level node one-liner, never by eye. Cite the offending value and the contract row for every finding. A pillar with zero findings is stated as clean with 1 line of evidence for why.
+Walk the 5 pillars over every surface. Contrast ratio math belongs to `gates/web-ui` (WU-02): judge the pack's INDET lines, and on UNSUPPORTED-INPUT surfaces apply the thresholds as written in `gates/web-ui/card.md`, never from memory. Cite the offending value and the contract row for every finding. A pillar with zero findings is stated as clean with 1 line of evidence for why.
 </step>
 
 <step name="return">
@@ -123,7 +125,7 @@ Emit the structured return below. No file writes.
 - [ ] Contract located and read before any grading (or its absence recorded)
 - [ ] All 5 pillars graded on every surface, anti-template list applied
 - [ ] Every finding traces to a stated rule with surface-level evidence
-- [ ] Contrast computed, never eyeballed; 3.0 to 4.5:1 band deferred to the a11y eye
+- [ ] Ratio math left to `gates/web-ui` (WU-02); every handed-in INDET line judged; borderline band deferred to the a11y eye as `SEE_A11Y`
 - [ ] No design surface or source file modified
 - [ ] Structured findings list returned with severity, pillar, kind, surface, evidence, fix
 </success_criteria>

@@ -26,7 +26,7 @@ Then proceed to Step 1.
 
 Check if graphify is enabled by reading `.planning/config.json` directly using the Read tool.
 
-**DO NOT use the ferrox-tools config get-value command** -- it hard-exits on missing keys.
+**DO NOT use the ferrox-tools config-get command** -- it hard-exits on missing keys unless --default is passed.
 
 1. Read `.planning/config.json` using the Read tool
 2. If the file does not exist: display the disabled message below and **STOP**
@@ -201,4 +201,4 @@ When the phase mode is null/absent, render with the standard color and label —
 2. DO NOT pass `run_in_background: true` for the build chain -- the operation is fast and must complete in the foreground.
 3. DO NOT modify graph files directly -- always go through `graphify update .` and the snapshot CLI.
 4. DO NOT skip the config gate check.
-5. DO NOT use `ferrox-tools config get-value` for the config gate -- it exits on missing keys.
+5. DO NOT use `ferrox-tools config-get` for the config gate -- it exits on missing keys unless --default is passed.

@@ -14,17 +14,17 @@ Parse the command arguments:
 - Optional flag: --force (allow editing in_progress/completed phases)
 
 Examples:
-  `/ferrox-edit-phase 5`       → phase = 5, force = false
-  `/ferrox-edit-phase 5 --force` → phase = 5, force = true
-  `/ferrox-edit-phase 12.1`    → phase = 12.1, force = false
+  `/ferrox-phase --edit 5`       → phase = 5, force = false
+  `/ferrox-phase --edit 5 --force` → phase = 5, force = true
+  `/ferrox-phase --edit 12.1`    → phase = 12.1, force = false
 
 If no argument provided:
 
 ```
 ERROR: Phase number required
-Usage: /ferrox-edit-phase <phase-number> [--force]
-Example: /ferrox-edit-phase 5
-Example: /ferrox-edit-phase 5 --force
+Usage: /ferrox-phase --edit <phase-number> [--force]
+Example: /ferrox-phase --edit 5
+Example: /ferrox-phase --edit 5 --force
 ```
 
 Exit.
@@ -97,7 +97,7 @@ ERROR: Cannot edit Phase {target} — status is {status}
 Editing an in-progress or completed phase may invalidate executed plans.
 
 To edit anyway, run:
-  /ferrox-edit-phase {target} --force
+  /ferrox-phase --edit {target} --force
 ```
 
 Exit.

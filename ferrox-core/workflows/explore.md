@@ -113,7 +113,7 @@ For each selected output, write the file:
 - **Seeds:** Create `.planning/seeds/{slug}.md` with frontmatter (title, trigger_condition, planted_date)
 - **Research questions:** Append to `.planning/research/questions.md`
 - **Requirements:** Append to `.planning/REQUIREMENTS.md` with next available REQ ID
-- **Phases:** Use existing `/ferrox-add-phase` command via SlashCommand
+- **Phases:** Use existing `/ferrox-phase` command via SlashCommand
 
 Commit if `commit_docs` is enabled:
 ```bash

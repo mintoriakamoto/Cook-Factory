@@ -526,7 +526,7 @@ If `USER_SETUP_CREATED=true`: display `⚠️ USER SETUP REQUIRED` with path + e
 |-----------|-------|--------|
 | summaries < plans | **A: More plans** | Find next PLAN without SUMMARY — skip any plan whose `plan_id` matches a non-terminal async-job manifest (`external_job_waiting`; see `identify_plan`). Yolo: auto-continue. Interactive: show next plan, suggest `/ferrox:execute-phase {phase}` + `/ferrox:verify-work`. STOP here. |
 | summaries = plans, current < highest phase | **B: Phase done** | Show completion, suggest `/ferrox:plan-phase {Z+1}` + `/ferrox:verify-work {Z}` + `/ferrox:discuss-phase {Z+1}` |
-| summaries = plans, current = highest phase | **C: Milestone done** | Show banner, suggest `/ferrox:complete-milestone` + `/ferrox:verify-work` + `/ferrox-add-phase` |
+| summaries = plans, current = highest phase | **C: Milestone done** | Show banner, suggest `/ferrox:complete-milestone` + `/ferrox:verify-work` + `/ferrox-phase` |
 
 All routes: `/clear` first for fresh context.
 </step>

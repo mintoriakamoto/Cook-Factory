@@ -174,12 +174,34 @@ test('full lifecycle: start, framed fragment, selection round trip, status, stop
     assert.ok(!asIs.body.includes('indicator-bar'), 'full document not wrapped in frame');
     assert.ok(asIs.body.includes('toggleSelect'), 'helper still injected into full document');
 
-    // selection round trip: send the click the way helper.js does
+    // Before the click goes out, both new-screen debounces (100 ms each) must
+    // have been processed: the server wipes the events file when it registers
+    // a NEW screen, so a click racing a pending debounce is legitimately
+    // discarded as stale, and under full-suite load the debounce can fire
+    // well after the writes above. The server logs a screen-added JSON line
+    // (captured in state/server.log) when each one lands; wait for both.
+    const serverLog = path.join(stateDir, 'server.log');
+    const screenAdded = (name) => JSON.stringify({ type: 'screen-added', file: path.join(screenDir, name) });
+    await waitFor(() => {
+      let log;
+      try { log = fs.readFileSync(serverLog, 'utf8'); } catch { return false; }
+      return log.includes(screenAdded('layout.html')) && log.includes(screenAdded('custom.html'));
+    }, 5000, 'server processed both screen-added events before the click');
+
+    // selection round trip: send the click the way helper.js does. The server
+    // records it with appendFileSync, which opens the events file a beat
+    // before the bytes land, so existence alone does not mean a complete JSON
+    // line; read AND parse inside the wait.
     const eventsFile = path.join(stateDir, 'events');
     await wsSendEvent(port, { type: 'click', choice: 'b', text: 'Option B', id: null, timestamp: 1752969600000 });
-    await waitFor(() => fs.existsSync(eventsFile), 5000, 'events file appears after selection');
-    const lines = fs.readFileSync(eventsFile, 'utf8').trim().split(/\r?\n/);
-    const recorded = JSON.parse(lines[lines.length - 1]);
+    let recorded;
+    await waitFor(() => {
+      let raw;
+      try { raw = fs.readFileSync(eventsFile, 'utf8'); } catch { return false; }
+      const lines = raw.trim().split(/\r?\n/);
+      try { recorded = JSON.parse(lines[lines.length - 1]); } catch { return false; }
+      return true;
+    }, 5000, 'events file holds a complete JSON event line');
     assert.equal(recorded.type, 'click');
     assert.equal(recorded.choice, 'b');
     assert.equal(recorded.text, 'Option B');
@@ -286,8 +308,13 @@ test('stale-session cleanup: idle timeout self-stops and leaves a server-stopped
   const stoppedFile = path.join(sessionDir, 'state', 'server-stopped');
   const infoFile = path.join(sessionDir, 'state', 'server-info');
   try {
-    await waitFor(() => fs.existsSync(stoppedFile), 10000, 'server-stopped marker written');
-    const marker = JSON.parse(fs.readFileSync(stoppedFile, 'utf8').trim());
+    // writeFileSync opens the marker before the bytes land; parse inside the
+    // wait so a mid-write read never fails the test.
+    let marker;
+    await waitFor(() => {
+      try { marker = JSON.parse(fs.readFileSync(stoppedFile, 'utf8').trim()); } catch { return false; }
+      return true;
+    }, 10000, 'server-stopped marker written and complete');
     assert.equal(marker.reason, 'idle timeout');
     assert.ok(!fs.existsSync(infoFile), 'server-info removed on self-stop');
     await waitFor(() => exited, 10000, 'idle server process exits');

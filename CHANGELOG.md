@@ -1,5 +1,78 @@
 # Changelog
 
+## 1.11.0 (2026-07-22): The Web UI Gate Pack
+
+The gate library grows its 6th pack, `gates/web-ui/`: a static, deterministic, sealed,
+mutant-validated mechanical floor for frontend surfaces, and the first static a11y gate we
+know of that computes contrast and tap targets without a browser. Validated against 2 public
+accessibility corpora, then dogfooded on this repo's own surfaces, where it caught 3 real
+defects we fixed. Library totals: 6 packs, 39 checks, 31 sealed mutants. Suite: 840 to 912
+tests, all green.
+
+### The web-ui pack
+
+- **8 checks, Node stdlib only, no browser** (domain `web-ui`, tier 1): WU-01 guards the
+  input contract; the 7 scored checks carry their thresholds verbatim from the a11y eyes'
+  shared rule set: WCAG contrast floors (4.5:1 normal, 3:1 large), 24x24 px tap targets,
+  focus reachability with visible styling, landmark structure, skip-free heading order,
+  alt and label decisions, reduced-motion fallbacks.
+- **3-valued verdicts.** Every check returns PASS, FAIL, or INDETERMINATE with a
+  machine-readable reason code. An INDETERMINATE (a gradient behind text, a content-sized
+  target, an unresolvable var, a text-shadow) never moves the score and never silently
+  passes: the emitted `INDET <ID> <reason-code>` lines route to the design eyes as the
+  judgment tier. A binary static contrast check gets attacked with cascade counterexamples
+  on day 1; abstention with a reason code is the honest verdict, the same split axe ships
+  as pass/violation/incomplete.
+- **Contract-scoped input, AMP-style** (the page must be self-contained, the way AMP pages
+  are): inline styles and/or a single style block, a declared selector subset, `:root`-only
+  custom properties, media queries evaluated at the pinned viewport profile. Anything
+  outside the contract gets the distinct UNSUPPORTED-INPUT verdict plus a 0/8 score: the
+  runner sees a failing gate, never a guess and never a crash.
+- **The resolver**: a subset CSS engine in stdlib (tokenizer, declaration parser, Selectors
+  L4 specificity via the vendored MIT-0 `@csstools/selector-specificity` math, source order
+  and `!important`, single-pass `:root` var substitution, media evaluation at the pinned
+  viewport, ancestor walk to the nearest opaque background for contrast pairs).
+- **6-mutant sealed pool, all fluent, all caught**: a polished 4.4:1 gray page, a
+  box-shadow impersonating a focus ring, 22 px icon buttons, a pixel-perfect div button no
+  keyboard can reach, landmark-free div soup, and polish motion with the reduced-motion
+  fallback quietly dropped.
+
+### The eyes slim down
+
+- The mechanical floor moved from agent prompts to the executable tier: both a11y eyes
+  dropped every rule WU-02 through WU-08 now own and keep only judgment (label
+  meaningfulness, honest alt text, ARIA pattern fit beyond landmark presence, generic link
+  text, severity). Each eye adjudicates the gate's INDET lines and covers the floor itself
+  only on UNSUPPORTED-INPUT surfaces. No rule is owned by 2 tiers, proven by threshold grep
+  over the edited agents.
+
+### External validation receipts
+
+- **GDS 142-barrier corpus**: 22 of the 23 statically claimable barriers hard-FAILed
+  (95.7%), 0 missed; the 23rd routes to the design eyes as a contract INDET. On all 142
+  barriers that is 15.5%, inside the 13% to 40% range GDS measured for 13 browser-driven
+  tools. Deque's widely cited 57% is percent of issue volume on real audits, a different
+  base; both numbers are quoted so nobody takes the framing on faith. The honest sentence:
+  this gate is a deterministic subset of the automatable subset.
+- **W3C ACT canonical cases** (140 across the 7 overlapping rules): 39 of 45
+  expected-failed cases hard-FAILed plus 4 honest abstentions with contract INDET reason
+  codes; of the non-failed cases, 85 of 95 run clean and every family FAIL on a passed case
+  is a named, documented divergence (placeholder is not a label; tabindex -1 on an
+  interactive control stays banned), not noise. 1 script-injected miss is documented, not
+  excused.
+- **The corpora made the pack better**: 19 distinct gate defects found and fixed
+  test-first, pinned with 35 regression provocations. Evidence generation, not score
+  chasing.
+
+### Dogfooded on our own surfaces
+
+- The gate caught real rot in the visual companion: the frame served every screen with no
+  main landmark and no reduced-motion fallback, and a v1.10 companion screen skipped h1 to
+  h3. All fixed; the framed companion surface now scores 8/8 with 1 honest INDET routed to
+  the eyes. The gate-engineering article page is a documented UNSUPPORTED-INPUT refusal
+  (theme-toggle custom properties defined outside bare `:root`): the contract refusing to
+  guess, exactly as designed.
+
 ## 1.10.0 (2026-07-22): Research Brainstorm, Visual Companion, and the Design Stack
 
 `/ferrox:brainstorm` becomes a research brainstorm with a live visual helper, the repo gains a

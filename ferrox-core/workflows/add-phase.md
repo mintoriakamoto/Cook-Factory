@@ -11,15 +11,15 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - All arguments become the phase description
-- Example: `/ferrox-add-phase Add authentication` → description = "Add authentication"
-- Example: `/ferrox-add-phase Fix critical performance issues` → description = "Fix critical performance issues"
+- Example: `/ferrox-phase Add authentication` → description = "Add authentication"
+- Example: `/ferrox-phase Fix critical performance issues` → description = "Fix critical performance issues"
 
 If no arguments provided:
 
 ```
 ERROR: Phase description required
-Usage: /ferrox-add-phase <description>
-Example: /ferrox-add-phase Add authentication system
+Usage: /ferrox-phase <description>
+Example: /ferrox-phase Add authentication system
 ```
 
 Exit.
@@ -95,7 +95,7 @@ Roadmap updated: .planning/ROADMAP.md
 ---
 
 **Also available:**
-- `/ferrox-add-phase <description>` — add another phase
+- `/ferrox-phase <description>` — add another phase
 - Review roadmap
 
 ---

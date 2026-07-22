@@ -13,6 +13,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { selectGate, listGateDomains, PRE_FILTER_TIER } = require('../ferrox-core/bin/lib/gate-select.cjs');
 
@@ -144,5 +146,19 @@ test('selectGate: v1.9 pack domains are executable-tier and route gate-first', (
     assert.equal(g.known, true, `${domain} should be known`);
     assert.equal(g.tier, 1, `${domain} is executable-tier`);
     assert.equal(g.route, 'gate-first', `${domain} routes gate-first, not crucible`);
+  }
+});
+
+test('selectGate: web-ui is pack-backed since v1.11 and routes gate-first to gates/web-ui', () => {
+  const g = selectGate('web-ui');
+  assert.equal(g.known, true, 'web-ui should be known');
+  assert.equal(g.tier, 1, 'web-ui is executable-tier');
+  assert.equal(g.route, 'gate-first', 'web-ui routes gate-first, not crucible');
+  // Pack-backed invariant: the route lands on a real pack — its Gate Card and gate exist.
+  const packDir = path.join(__dirname, '..', 'gates', 'web-ui');
+  assert.ok(fs.existsSync(path.join(packDir, 'card.md')), 'gates/web-ui/card.md exists');
+  assert.ok(fs.existsSync(path.join(packDir, 'gate.cjs')), 'gates/web-ui/gate.cjs exists');
+  for (const alias of ['web', 'frontend', 'ui']) {
+    assert.deepEqual(selectGate(alias), g, `${alias} routes to the pack-backed web-ui domain`);
   }
 });

@@ -648,8 +648,8 @@ AskUserQuestion([
     multiSelect: false,
     options: [
       { label: "high", description: "All tiers use the highest-quality model for the chosen provider. Highest cost." },
-      { label: "medium", description: "High tier → top model; medium → mid model; low → cheapest model. Best cost/quality ratio." },
-      { label: "low", description: "All tiers use the cheapest model for the chosen provider. Lowest cost." }
+      { label: "medium", description: "High tier → top model; medium → mid model; low → lowest-cost model. Best cost/quality ratio." },
+      { label: "low", description: "All tiers use the lowest-cost model for the chosen provider. Lowest cost." }
     ]
   }
 ])
@@ -706,7 +706,7 @@ AskUserQuestion([
     ]
   },
   {
-    question: "Model ID for the LOW-cost tier? (cheapest model — used for lightweight/fast tasks)",
+    question: "Model ID for the LOW-cost tier? (lowest-cost model — used for lightweight/fast tasks)",
     header: "Low-tier model",
     multiSelect: false,
     options: [

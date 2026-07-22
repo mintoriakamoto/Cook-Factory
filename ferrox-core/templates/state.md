@@ -164,7 +164,7 @@ Updated after each plan completion.
 
 **Decisions:** Reference to PROJECT.md Key Decisions table, plus recent decisions summary for quick access. Full decision log lives in PROJECT.md.
 
-**Pending Todos:** Ideas captured via /ferrox-add-todo
+**Pending Todos:** Ideas captured via /ferrox-capture
 - Count of pending todos
 - Reference to .planning/todos/pending/
 - Brief list if few, count if many (e.g., "5 pending todos — see /ferrox:capture --list")

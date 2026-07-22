@@ -11,15 +11,15 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - Argument is the phase number to remove (integer or decimal)
-- Example: `/ferrox-remove-phase 17` → phase = 17
-- Example: `/ferrox-remove-phase 16.1` → phase = 16.1
+- Example: `/ferrox-phase --remove 17` → phase = 17
+- Example: `/ferrox-phase --remove 16.1` → phase = 16.1
 
 If no argument provided:
 
 ```
 ERROR: Phase number required
-Usage: /ferrox-remove-phase <phase-number>
-Example: /ferrox-remove-phase 17
+Usage: /ferrox-phase --remove <phase-number>
+Example: /ferrox-phase --remove 17
 ```
 
 Exit.

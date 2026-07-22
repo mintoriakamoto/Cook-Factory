@@ -17,7 +17,7 @@ These files live directly at `.planning/` — not inside phase subdirectories.
 | `STATE.md` | `state.md` | `/ferrox:new-project`, `/ferrox:health --repair` | Current session state, active phase, last activity |
 | `REQUIREMENTS.md` | `requirements.md` | `/ferrox:new-milestone` | Functional requirements with traceability |
 | `MILESTONES.md` | `milestone.md` | `/ferrox:complete-milestone` | Log of completed milestones with accomplishments |
-| `BACKLOG.md` | *(inline)* | `/ferrox-add-backlog` | Pending ideas and deferred work |
+| `BACKLOG.md` | *(inline)* | `/ferrox-capture --backlog` | Pending ideas and deferred work |
 | `LEARNINGS.md` | *(inline)* | `/ferrox:extract-learnings`, `/ferrox:execute-phase` | Phase retrospective learnings for future plans |
 | `THREADS.md` | *(inline)* | `/ferrox:thread` | Persistent discussion threads |
 | `config.json` | `config.json` | `/ferrox:new-project`, `/ferrox:health --repair` | Project-specific Ferrox configuration |

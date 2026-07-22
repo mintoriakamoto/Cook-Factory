@@ -214,7 +214,7 @@ grep -rn "went wrong\|try again\|error occurred" src --include="*.tsx" --include
 **Audit method:** Check component structure, visual hierarchy indicators.
 
 - Is there a clear focal point on the main screen?
-- Are icon-only buttons paired with aria-labels or tooltips?
+- Icon-only buttons: aria-label presence is owned mechanically by the web-ui gate pack (`gates/web-ui`, WU-07); judge here whether the label or tooltip actually says what the button does.
 - Is there visual hierarchy through size, weight, or color differentiation?
 
 ### Pillar 3: Color
@@ -288,8 +288,6 @@ grep -rn "Content-Security-Policy\|X-Content-Type-Options" next.config.* vite.co
 grep -rn "onclick=\|onload=\|onerror=" src --include="*.html" --include="*.tsx" --include="*.jsx" 2>/dev/null
 # Cookie flags
 grep -rn "setCookie\|Set-Cookie\|document.cookie" src --include="*.ts" --include="*.tsx" --include="*.js" 2>/dev/null
-# ARIA landmarks
-grep -rn "role=\"main\"\|role=\"navigation\"\|<main\|<nav" src --include="*.tsx" --include="*.jsx" --include="*.html" 2>/dev/null
 ```
 
 Checks, in priority order:
@@ -297,9 +295,9 @@ Checks, in priority order:
 - `X-Content-Type-Options: nosniff` is set.
 - Any cookie the source sets carries `HttpOnly`, `Secure`, and `SameSite=Lax` or `Strict`.
 - No inline event handlers (`onclick="..."` etc.) outside framework template directives.
-- ARIA landmark roles present so screen readers can navigate the page regions.
+- ARIA landmark presence defers to the web-ui gate pack (`gates/web-ui`, WU-05 owns it mechanically); do not re-grep for it here.
 
-**Pure static slice (no server-rendered headers):** grade only the inline-handler and ARIA subset; absence of headers is then not-applicable, never a deduction. Note the scoping in the review.
+**Pure static slice (no server-rendered headers):** grade only the inline-handler subset; absence of headers is then not-applicable, never a deduction. Note the scoping in the review.
 
 </audit_pillars>
 
@@ -415,7 +413,7 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-UI-REVIEW.md`
 {findings with state coverage analysis}
 
 ### Pillar 7: Security and Headers ({score}/4)
-{findings with header surface, CSP, cookie flag, inline handler, and landmark analysis; note when the static slice applied}
+{findings with header surface, CSP, cookie flag, and inline handler analysis; note when the static slice applied}
 
 ---
 

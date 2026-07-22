@@ -167,6 +167,30 @@ plus the anti-template list); the a11y auditor runs the post-change WCAG 2.1 AA 
 shipped code (its design-phase sister, ferrox-a11y-design-reviewer, fires earlier in
 /ferrox:ui-phase).
 
+**Web-ui gate first (mechanical floor + INDET handoff).** Before dispatching the eyes, run
+the web-ui gate pack on every self-contained HTML surface in the audit scope (served
+snapshots and standalone pages qualify; component sources and stylesheets do not):
+
+```bash
+WEBUI_GATE_OUT=$(node gates/web-ui/gate.cjs "${surface}" 2>&1)
+```
+
+Capture RAW STDOUT per surface. Do NOT route the handoff through gateRunner.runGate:
+parseGateOutput consumes only the FAIL lines plus the summary and drops INDET lines by
+design; the raw stdout is the only surface that carries them. Then split the output 3 ways:
+
+- `FAIL` lines: mechanical floor violations at the executable tier; carry them into the
+  findings merge with the WU id as the kind.
+- `INDET <ID> <reason-code>` lines: extract them verbatim and pass them to BOTH eyes as
+  named judgment items in a `<gate_indet_items>` block; the pack refused to guess and these
+  lines are exactly the judgment slice the eyes own.
+- `UNSUPPORTED-INPUT`: the surface does not satisfy the card's input contract
+  (`gates/web-ui/card.md`); list it in a `<gate_unsupported>` block so the eyes cover the
+  mechanical floor themselves on that surface (graceful degradation, documented in each
+  a11y eye), and note it in the findings summary: "web-ui gate skipped {surface}:
+  UNSUPPORTED-INPUT". Most implemented tsx/jsx scopes land here; that is expected, not an
+  error.
+
 **Screenshot verify (graceful, no hard dependency).** If chrome-devtools MCP tools
 (`mcp__chrome-devtools__*` or a plugin-prefixed variant) or playwright MCP tools
 (`mcp__playwright__*` or a plugin-prefixed variant) are available AND a dev server or visual
@@ -187,7 +211,9 @@ Agent(
   - {ui_spec_path} (token plan, if exists)
   - {context_path} (intent, if exists)
   </required_reading>
-  <surfaces>{source scope from SUMMARY.md key-files}{screenshot paths, if captured}</surfaces>",
+  <surfaces>{source scope from SUMMARY.md key-files}{screenshot paths, if captured}</surfaces>
+  <gate_indet_items>{raw INDET lines from the web-ui gate, if any; omit the block when none}</gate_indet_items>
+  <gate_unsupported>{surfaces the gate refused as UNSUPPORTED-INPUT, if any; omit when none}</gate_unsupported>",
   subagent_type="ferrox-design-critic",
   model="{DESIGN_CRITIC_MODEL}",
   description="Design critique Phase {N}"
@@ -203,7 +229,9 @@ Agent(
   phase_dir: {phase_dir}
   padded_phase: {padded_phase}
   dev_server_url: {url if a dev server was detected, else omit}
-  </config>",
+  </config>
+  <gate_indet_items>{raw INDET lines from the web-ui gate, if any; omit the block when none}</gate_indet_items>
+  <gate_unsupported>{surfaces the gate refused as UNSUPPORTED-INPUT, if any; omit when none}</gate_unsupported>",
   subagent_type="ferrox-a11y-auditor",
   model="{A11Y_AUDITOR_MODEL}",
   description="A11y audit Phase {N}"
@@ -263,6 +291,7 @@ A11Y_FILE="${PHASE_DIR}/${PADDED_PHASE}-A11Y.md"
 - [ ] Existing review handled (re-audit/view)
 - [ ] ferrox-ui-auditor spawned with correct context
 - [ ] UI-REVIEW.md created in phase directory
+- [ ] Web-ui gate run on the self-contained HTML surfaces in scope; raw stdout captured; INDET lines handed to both eyes; UNSUPPORTED-INPUT surfaces noted for the eyes' fallback floor pass
 - [ ] Design eyes cross-audit run: ferrox-design-critic + ferrox-a11y-auditor dispatched in parallel on the implemented surfaces
 - [ ] Screenshot verify attempted when a browser MCP is available (1200px + 375px), skipped with a note otherwise
 - [ ] Every BLOCK finding from the eyes resolved or explicitly waived (waivers recorded in UI-REVIEW.md)
