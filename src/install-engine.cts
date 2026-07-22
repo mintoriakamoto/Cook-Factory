@@ -907,7 +907,8 @@ function installOpencodeFamilyCommands(
  * empty and which never sets combinedFamilyInstall) can still get its
  * nativePlugin file staged via the generic installRuntimeArtifacts branch.
  * Behavior for opencode/kilo is unchanged — same source resolution, same
- * mkdir + copyFileSync call, same silent no-op when the source is missing.
+ * mkdir + copyFileSync call. A declared-but-missing source warns on stderr
+ * (a packaging defect must not degrade to a silent no-op).
  *
  * @param runtime  - canonical runtime id (only used for the assertDestWithinConfigHome guard)
  * @param configDir - resolved runtime config directory
@@ -927,6 +928,16 @@ function _installNativePluginIfDeclared(
       const destDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, np.dir);
       fs.mkdirSync(destDir, { recursive: true });
       fs.copyFileSync(pluginSrc, path.join(destDir, np.file));
+    } else {
+      // A DECLARED nativePlugin whose source is missing from the package is a
+      // packaging defect, and for hookBus:'host' runtimes the plugin file is
+      // their ONLY hook integration — degrading silently means every Ferrox
+      // guard/hook never fires with no signal to the user. Warn loudly (stderr,
+      // so structured stdout consumers are unaffected) instead of no-oping.
+      console.warn(
+        `  ⚠ ${runtime}: declared native plugin source "${np.source}" is missing from the package — ` +
+        `the ${np.dir}/${np.file} hook bridge was NOT installed.`,
+      );
     }
   }
 }

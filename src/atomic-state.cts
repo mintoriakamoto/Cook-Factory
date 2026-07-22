@@ -78,12 +78,49 @@ function acquireLock(lockPath: string, opts: LockOptions = {}): number {
       return fd;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      // Reap a stale lock left by a crashed holder.
+      // Reap a stale lock left by a crashed holder. Reap via rename-then-verify
+      // rather than a bare rmSync: between our stat and an unlink, another
+      // contender may have reaped the stale lock AND re-created a FRESH one at
+      // the same path — a bare unlink would delete the successor's live lock
+      // and let two holders in (the same delete-a-successor race
+      // capability-lock.cts re-confirms (dev, ino) identity to prevent).
+      // renameSync atomically claims exactly one inode, so we can verify the
+      // staleness of what we actually captured before destroying it.
       try {
         const st = fs.statSync(lockPath);
         if (Date.now() - st.mtimeMs > staleMs) {
-          fs.rmSync(lockPath, { force: true });
-          continue; // retry immediately after reaping (does not consume the budget)
+          const reapPath = `${lockPath}.reap.${process.pid}.${Math.random().toString(36).slice(2)}`;
+          try {
+            // W-1: bounded retry on the transient Windows rename errnos (see
+            // RENAME_RETRY_ERRNOS above); any other failure (e.g. ENOENT —
+            // another contender reaped first) falls through to the outer catch.
+            for (let renameAttempt = 1; ; renameAttempt++) {
+              try {
+                fs.renameSync(lockPath, reapPath);
+                break;
+              } catch (renameErr) {
+                const code = (renameErr as NodeJS.ErrnoException).code ?? '';
+                if (renameAttempt < RENAME_MAX_ATTEMPTS && RENAME_RETRY_ERRNOS.has(code)) {
+                  _sleepSync(RENAME_RETRY_BACKOFF_MS);
+                  continue;
+                }
+                throw renameErr;
+              }
+            }
+            const rst = fs.statSync(reapPath);
+            if (Date.now() - rst.mtimeMs > staleMs) {
+              // Confirmed stale — reaped. Next iteration retries the create.
+              fs.rmSync(reapPath, { force: true });
+            } else {
+              // We raced a successor and captured a FRESH lock: put it back
+              // (same inode, so the holder's release still removes it).
+              // linkSync fails EEXIST if yet another lock appeared meanwhile —
+              // then the path is owned again either way; just drop our ref.
+              try { fs.linkSync(reapPath, lockPath); } catch { /* superseded */ }
+              fs.rmSync(reapPath, { force: true });
+            }
+          } catch { /* another contender reaped it first — retry the create */ }
+          continue; // reap consumes one attempt of the retry budget
         }
       } catch {
         // Lock vanished between EEXIST and stat — loop and retry the create.

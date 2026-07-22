@@ -111,7 +111,12 @@ function expandComparator(c: string): Primitive[] | null {
     let upper: SemverTuple;
     if (maj > 0) upper = [maj + 1, 0, 0];
     else if (min > 0) upper = [0, min + 1, 0];
-    else upper = [0, 0, pat + 1];
+    // 0.0.z with all three parts given pins the patch (npm: ^0.0.3 → <0.0.4),
+    // but PARTIAL zero versions widen to the next unspecified part:
+    // ^0.0 → >=0.0.0 <0.1.0 and ^0 → >=0.0.0 <1.0.0 (npm desugaring).
+    else if (specified >= 3) upper = [0, 0, pat + 1];
+    else if (specified === 2) upper = [0, 1, 0];
+    else upper = [1, 0, 0];
     return [{ op: '>=', t: tuple }, { op: '<', t: upper }];
   }
   if (op === '~') {

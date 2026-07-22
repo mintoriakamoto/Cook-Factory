@@ -136,7 +136,13 @@ function output(result: unknown, raw: boolean, rawValue?: unknown): void {
     if (json.length > 50000) {
       reapStaleTempFiles();
       ensureFerroxTempDir();
-      const tmpPath = path.join(FERROX_TEMP_DIR, `ferrox-${Date.now()}.json`);
+      // pid + random suffix: two concurrent CLI invocations spilling in the
+      // same millisecond must never pick the same path (one would overwrite
+      // the other and both would emit the same @file: pointer).
+      const tmpPath = path.join(
+        FERROX_TEMP_DIR,
+        `ferrox-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.json`,
+      );
       platformWriteSync(tmpPath, json);
       data = '@file:' + tmpPath;
     } else {

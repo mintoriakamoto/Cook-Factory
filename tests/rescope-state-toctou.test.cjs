@@ -73,6 +73,51 @@ test('withFileLock throws when the lock is already held (bounded retry), then cl
   assert.equal(fs.existsSync(lockPath), false, 'lock released after the section');
 });
 
+// --- stale-lock reap: rename-then-verify -------------------------------------
+
+test('a stale lock is reaped (rename-then-verify) and leaves no reap residue', () => {
+  const dir = tmpDir();
+  const target = path.join(dir, 'state.json');
+  const lockPath = target + '.lock';
+
+  // Simulate a crashed holder: lockfile whose mtime is far in the past.
+  fs.writeFileSync(lockPath, 'crashed-holder');
+  const past = new Date(Date.now() - 3_600_000);
+  fs.utimesSync(lockPath, past, past);
+
+  const out = atomic.withFileLock(target, () => 'ran', { retries: 5, retryDelayMs: 1, staleMs: 30_000 });
+  assert.equal(out, 'ran', 'a crashed holder must never deadlock the line');
+  assert.deepEqual(
+    fs.readdirSync(dir),
+    [],
+    'no lockfile and no .reap.* intermediate left behind after the reap',
+  );
+});
+
+test('a FRESH lock is never reaped: acquisition fails and the holder lockfile survives intact', () => {
+  const dir = tmpDir();
+  const target = path.join(dir, 'state.json');
+  const lockPath = target + '.lock';
+
+  // A live holder: recent mtime, well within staleMs.
+  fs.writeFileSync(lockPath, 'live-holder');
+  const before = fs.statSync(lockPath);
+
+  assert.throws(
+    () => atomic.withFileLock(target, () => 'never', { retries: 3, retryDelayMs: 1, staleMs: 60_000 }),
+    /lock/i,
+    'a live lock must block, not be stolen',
+  );
+  const after = fs.statSync(lockPath);
+  assert.equal(fs.readFileSync(lockPath, 'utf8'), 'live-holder', 'the live holder lockfile is untouched');
+  assert.equal(after.ino, before.ino, 'same inode — the live lock was never deleted/recreated');
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f !== path.basename(lockPath)),
+    [],
+    'no .reap.* residue from the failed contender',
+  );
+});
+
 // --- the no-lost-update concurrency proof ------------------------------------
 
 function runWorkers(counterPath, workers, iterations, lockOpts) {
