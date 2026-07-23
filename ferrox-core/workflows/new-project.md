@@ -383,6 +383,29 @@ Build the intake split and thread it into Step 3:
 - **Exit-confirmed Decisions are the OFF-LIMITS list.** These decisions are OFF LIMITS: never re-ask a decided item unprompted. OFF LIMITS is not immutable: the user reopening a decision by name always works, and when they do, treat it as open again.
 - **Notes and Open Questions sections are fair game and GOOD question seeds.** Nothing there was blessed at exit, so probe them freely; each Open Question even names what would answer it.
 
+## 2d. Team Manifest Detection
+
+After the brainstorm scan, check for a blessed team roster. Detection is direct presence: `.planning/TEAM.md` is the ONLY representation of the team (A5: no parseBrainstormArtifact extension, no second source).
+
+```bash
+ls .planning/TEAM.md 2>/dev/null
+```
+
+**If absent:** skip silently, zero behavior change (A9). No team mention anywhere downstream.
+
+**If present:** parse it with the deterministic contract `ferrox-core/bin/lib/team-manifest.cjs` (`parseTeamManifest`), then acknowledge in 1 line with the roster summary:
+
+```
+Team manifest found: {N} roles ({M} bound to existing agents): {role id list}.
+```
+
+**Scope match (A4):** read the manifest's `derived_from` block (`brainstorm` slug + `milestone`). If it names a different milestone or brainstorm than the project being created here, the manifest is FOREIGN: say so plainly and offer re-derivation via AskUserQuestion, recommendation-first:
+
+- **"Re-derive the team at the next brainstorm exit (Recommended)"**: the roster was sized to {derived_from.milestone}'s work shape, not this one; re-derive the team for the new work shape. The existing TEAM.md stays untouched until derivation runs.
+- **"Keep the existing roster"**: consume it as is, knowing it was shaped for different work.
+
+The existing TEAM.md is never silently consumed out of scope, and never silently rewritten (A8: roster changes route through the mutation ops).
+
 ## 3. Deep Questioning
 
 **If auto mode:** Skip (already handled in Step 2a). Extract project context from provided document instead and proceed to Step 4.
@@ -973,6 +996,8 @@ Display spawning indicator:
   → Architecture research
   → Pitfalls research
 ```
+
+**Domain phrasing (v1.13 Wave 2, A9):** when the project domain is non-code (`writing`, `long-form`, or `research` after gate-select normalization), phrase each research prompt for the domain instead of the software wording: Stack becomes the craft toolchain and format conventions, Features becomes genre conventions and reader expectations (book) or the evidence and source landscape (research), Architecture becomes narrative structure and spine shape (book) or report structure and argument order (research), Pitfalls stays Pitfalls with domain-specific failure modes. Software projects keep the wording below byte-identical.
 
 Spawn 4 parallel ferrox-project-researcher agents with path references:
 
@@ -1572,6 +1597,14 @@ Check if Phase 1 has UI indicators (look for `**UI hint**: yes` in Phase 1 detai
 PHASE1_SECTION=$(ferrox_run query roadmap.get-phase 1 2>/dev/null)
 PHASE1_HAS_UI=$(echo "$PHASE1_SECTION" | grep -qi "UI hint.*yes" && echo "true" || echo "false")
 ```
+
+**Book-domain close (v1.13 Wave 2, A9):** when the project domain is `writing` or `long-form` with a book template, append this row to the "Also available:" list in whichever branch below renders:
+
+```
+- /ferrox:canon-init: initialize LORE.md, the declared canon store the drafting line binds to (recommended before Phase 1)
+```
+
+For research/nonfiction projects, the same row offers the sources ledger instead: `/ferrox:canon-init: initialize SOURCES.md, the sources ledger the citation gate binds to`. Software projects render the lists below unchanged.
 
 **If Phase 1 has UI (`PHASE1_HAS_UI` is `true`):**
 

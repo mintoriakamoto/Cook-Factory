@@ -85,6 +85,24 @@ Output: [What artifacts will be created]
   <done>[Acceptance criteria]</done>
 </task>
 
+<!-- Non-code domain worked example (v1.13): a book-domain chapter task. Verify is the
+     machine floor (slug path, contract echo, word-count band), never a compiler or test
+     runner. Prose quality stays with the eyes and the Crucible. -->
+
+<task type="auto">
+  <name>Task N: Draft chapter ch-vault-heist against the chapter contract</name>
+  <files>book/chapters/ch-vault-heist.md</files>
+  <read_first>book/SPINE.md, LORE.md, book/chapters/ch-prior-slug.md</read_first>
+  <action>Draft the chapter per the trusted chapter_contract in this plan's frontmatter (pov, scene_date, location, threads, flashback, required_on_stage, word_count_target, beats). Echo the contract in draft frontmatter; self-declare only additional_on_stage and optional ages. Deliver every contract beat; trace character attributes and dates to the LORE.md canon-facts block.</action>
+  <verify>Draft exists at book/chapters/ch-vault-heist.md; frontmatter echoes the chapter_contract exactly; word count within 10 percent of word_count_target; declared threads and pov match the plan</verify>
+  <acceptance_criteria>
+    - book/chapters/ch-vault-heist.md frontmatter carries pov and chapter_id matching the contract
+    - Body word count within 10 percent of word_count_target
+    - Every thread touch/open/close the contract declares happens on the page
+  </acceptance_criteria>
+  <done>Chapter drafted, contract echoed, machine floor green</done>
+</task>
+
 <!-- For checkpoint task examples and patterns, see @~/.claude/ferrox-core/references/checkpoints.md -->
 
 <task type="checkpoint:decision" gate="blocking">

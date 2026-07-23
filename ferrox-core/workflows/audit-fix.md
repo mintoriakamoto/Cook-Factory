@@ -107,7 +107,19 @@ Agent(
 **b. Run tests:**
 ```bash
 AUDIT_TEST_CMD=$(ferrox_run query config-get workflow.test_command --default "" 2>/dev/null || true)
-if [ -z "$AUDIT_TEST_CMD" ]; then
+# v1.13 Wave 0 (B5): non-code domains resolve the audit test sniff to a no-op so a
+# stray package.json cannot drag npm test into a prose increment. Explicit
+# workflow.test_command still wins; code domains fall through to the unchanged sniff.
+FERROX_DOMAIN=$(ferrox_run query config-get domain --default "" 2>/dev/null || true)
+FERROX_DOMAIN_KEY=$(printf '%s' "$FERROX_DOMAIN" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]_][[:space:]_]*/-/g')
+FERROX_NONCODE_DOMAIN=0
+case "$FERROX_DOMAIN_KEY" in
+  writing|long-form|research|reports|content|design|conversation|support|rag|factual-synthesis) FERROX_NONCODE_DOMAIN=1 ;;
+esac
+if [ -z "$AUDIT_TEST_CMD" ] && [ "$FERROX_NONCODE_DOMAIN" = "1" ]; then
+  AUDIT_TEST_CMD="true"
+  echo "Non-code domain '$FERROX_DOMAIN': audit test sniff skipped, no code test runner applies to prose deliverables"
+elif [ -z "$AUDIT_TEST_CMD" ]; then
   if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
     AUDIT_TEST_CMD="make test"
   elif [ -f "Justfile" ] || [ -f "justfile" ]; then

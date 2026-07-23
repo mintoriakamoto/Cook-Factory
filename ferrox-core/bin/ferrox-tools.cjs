@@ -1512,6 +1512,29 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         } catch { return 'unavailable'; }
       })();
       lines.push(`config domain: ${domainVal}`);
+      // v1.13 P2 W0 (A14): 1 team-manifest line. Defensive require + read so a
+      // missing lib or unreadable TEAM.md can never take doctor down.
+      const teamVal = (() => {
+        try {
+          const teamManifest = require('./lib/team-manifest.cjs');
+          const teamPath = path.join(docRoot || process.cwd(), '.planning', 'TEAM.md');
+          if (!fs.existsSync(teamPath)) return 'team manifest: none';
+          // A10: inject the known-agent roster from the model catalog so
+          // W_UNKNOWN_AGENT is live and "bound" counts only real agents; a
+          // missing catalog degrades to no roster check (the prior behavior).
+          let agents;
+          try { agents = Object.keys(require('./lib/model-catalog.cjs').AGENT_DEFAULT_TIERS); } catch { agents = undefined; }
+          const parsed = teamManifest.parseTeamManifest(fs.readFileSync(teamPath, 'utf8'), agents === undefined ? undefined : { agents });
+          if (!parsed.ok) {
+            const first = parsed.errors[0];
+            return `team manifest: INVALID (${first ? first.message : 'unknown error'})`;
+          }
+          const roles = parsed.manifest.roles;
+          const bound = roles.filter((r) => r.effective_binding === 'agent').length;
+          return `team manifest: ok (${roles.length} roles, ${bound} bound)`;
+        } catch { return 'team manifest: unavailable'; }
+      })();
+      lines.push(teamVal);
       output(lines.join('\n'));
       break;
     }

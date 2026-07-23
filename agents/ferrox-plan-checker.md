@@ -446,6 +446,57 @@ issue:
   fix_hint: "Consider moving display formatting to frontend server per Architectural Responsibility Map"
 ```
 
+## Dimension 7d: Team Staffing Integrity (if .planning/TEAM.md exists)
+
+**Question:** Are the plans' role stamps trustworthy echoes of the blessed roster?
+
+**Skip if:** `.planning/TEAM.md` does not exist. All team checks skip SILENTLY (A9): no output line, no mention; unstamped plans stay fully valid. Roleless plans in a staffed project are also never flagged for being roleless.
+
+**Process:** parse the live manifest with the deterministic contract `ferrox-core/bin/lib/team-manifest.cjs` (exports `parseTeamManifest`, `validateTeamManifest`, `computeTeamManifestHash`, `verifyTeamManifestHash`, `globsOverlap`):
+
+```bash
+TEAM_LIB=""; for _tl in "${FERROX_TOOLS%/*}/lib/team-manifest.cjs" "$HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs" "./.claude/ferrox-core/bin/lib/team-manifest.cjs" "./ferrox-core/bin/lib/team-manifest.cjs"; do if [ -f "$_tl" ]; then TEAM_LIB="$_tl"; break; fi; done
+if [ -z "$TEAM_LIB" ]; then echo "ERROR: team-manifest.cjs not found; tried: ${FERROX_TOOLS%/*}/lib/team-manifest.cjs, $HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs, ./.claude/ferrox-core/bin/lib/team-manifest.cjs, ./ferrox-core/bin/lib/team-manifest.cjs" >&2; exit 1; fi
+node -e '
+const fs = require("node:fs");
+const tm = require(process.argv[1]);
+const path = require("node:path");
+// A10: inject the known-agent roster from the model catalog beside the lib,
+// so W_UNKNOWN_AGENT is live and "bound" counts only real agents; a missing
+// catalog degrades to no roster check (the prior behavior).
+let agents;
+try { agents = Object.keys(require(path.join(path.dirname(process.argv[1]), "model-catalog.cjs")).AGENT_DEFAULT_TIERS); } catch { agents = undefined; }
+const parsed = tm.parseTeamManifest(fs.readFileSync(".planning/TEAM.md", "utf8"), agents === undefined ? undefined : { agents });
+const live = parsed.ok ? tm.computeTeamManifestHash(parsed.manifest) : null;
+console.log(JSON.stringify({ ok: parsed.ok, errors: parsed.errors, warnings: parsed.warnings, live_hash: live,
+  roles: parsed.ok ? parsed.manifest.roles.map((r) => ({ id: r.id, charter: r.charter, owns: r.owns, reviews: r.reviews })) : [] }, null, 2));
+' "$TEAM_LIB"
+```
+
+Then, for every plan whose frontmatter carries any of `role_id` / `role_charter` / `team_manifest_hash`:
+
+**Check T1: role exists.** Every `role_id` stamped in a plan names a role present in TEAM.md. Unknown id: BLOCKER (fix: re-stamp against the live TEAM.md, or add the role through the governed mutation ops, never by hand).
+
+**Check T2: charter echo, byte for byte.** The plan's inlined `role_charter` equals TEAM.md's charter for that role EXACTLY, byte for byte. No trim, no paraphrase, no "improvement". Any difference: BLOCKER (the stamp is authorship, not an echo; the A1 blessing gate made TEAM.md's exact text the trust root).
+
+**Check T3: stamp freshness (A2).** The plan's `team_manifest_hash` equals the live manifest hash (recompute via `computeTeamManifestHash`; TEAM.md's own declared hash must also verify via `verifyTeamManifestHash`). A stale stamp is a FAIL with a NAMED fix: **re-stamp** the plans against the live TEAM.md (the roster is right, the stamps are old) or **re-bless** the roster (the roster drifted without a blessing). Never silently accept a stale stamp. Severity: BLOCKER.
+
+**Check T4: non-redundancy validators consulted (A3).** Run `validateTeamManifest` over the live manifest (`globsOverlap` backs the owns-overlap check). A plan staffed by a role that fails the deterministic validators, `E_OWNS_OVERLAP` (2 roles' owns globs overlap without an explicit review edge) or `E_EMPTY_SURFACES` (a role with empty owns AND reviews), is REFUSED: BLOCKER until the roster is repaired through the mutation ops or the plan is re-staffed.
+
+**Check T5: complete stamp.** `role_id`, `role_charter`, and `team_manifest_hash` travel together: any subset without the other 2 is a partial stamp. BLOCKER.
+
+**Example: stale stamp**
+```yaml
+issue:
+  dimension: team_staffing_integrity
+  severity: blocker
+  description: "Plan 02 team_manifest_hash does not match the live TEAM.md manifest hash"
+  plan: "02"
+  stamped_hash: "3f9a...c210"
+  live_hash: "b774...05de"
+  fix_hint: "Re-stamp plan 02 against the live TEAM.md, or re-bless the roster if the drift was unblessed"
+```
+
 ## Dimension 8: Nyquist Compliance
 
 Skip if: `workflow.nyquist_validation` is explicitly set to `false` in config.json (absent key = enabled), phase has no RESEARCH.md, or RESEARCH.md has no "Validation Architecture" section. Output: "Dimension 8: SKIPPED (nyquist_validation disabled or not applicable)"

@@ -190,11 +190,22 @@ fi
 
 The tier→model-id mapping rides the **existing `dynamic_routing.tier_models` seam** that
 ROUTE-FLUX-01 already locks (`heavy→flux-reasoning`, `standard→flux-standard`, `light→flux-fast`),
-resolved provider-agnostically by `model-resolver`. Pass the resolved id as `model=` on the executor
-`Agent()` call. **Known wiring gap (FF-B26):** there is today no single verb that takes a bare tier
-and returns its `tier_models` id — `resolve-model` resolves by *agent name*, `model.route` returns a
-*tier*. Until FF-B26 lands that thin resolver, the fast-path model override is applied by mapping
-`EXECUTOR_TIER` through the operator's `tier_models` block directly. **This is the one place "faster"
+resolved provider-agnostically by `model-resolver`. **FF-B26 is CLOSED (v1.13 P2 W3, A13):** the thin
+bare-tier resolver landed as the `model.resolve-tier` verb, and this seam resolves through it. 1 seam,
+no inline `tier_models` mapping here anymore:
+
+```bash
+RT=$(ferrox_run query model.resolve-tier --tier "$EXECUTOR_TIER" --raw 2>/dev/null || echo '{}')
+EXECUTOR_MODEL_ID=$(printf '%s' "$RT" | ferrox_run query - --pick modelId 2>/dev/null || echo "")
+RT_NOTICE=$(printf '%s' "$RT" | ferrox_run query - --pick notice 2>/dev/null || echo "")
+# A10 loud ladder miss: when the tier is not in the ladder the verb returns modelId null
+# plus a NOT IN LADDER notice. SURFACE the notice verbatim in the wave log, then dispatch
+# on the default executor model (executor_model from init). Never pass a null/empty model
+# id silently.
+if [ -n "$RT_NOTICE" ] && [ "$RT_NOTICE" != "null" ]; then echo "$RT_NOTICE"; fi
+```
+
+Pass the resolved id as `model=` on the executor `Agent()` call. **This is the one place "faster"
 could cost "better,"** so it is fenced hard: only low-risk plans take the fast model, a boundary plan
 can never be routed down, and every increment still passes the same fail-closed merge-gate.
 
@@ -790,6 +801,150 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    The dispatch branches in step 3 below MUST gate on `USE_WORKTREES_FOR_PLAN` for the current plan, not on the project-level `USE_WORKTREES`.
 
+2.6. **Role-stamp dispatch preflight (v1.13 P2 W3; run for each plan in this wave BEFORE its dispatch):**
+
+   Read the 3 team stamp keys from the plan frontmatter: `role_id`, `role_charter`,
+   `team_manifest_hash`. All 3 absent: set `ROLE_ASSIGNED=false`, skip this whole step,
+   zero behavior change (A9). Any subset present without the other 2 is a partial stamp
+   (plan-checker Check T5 territory): STOP and route the plan back to plan-phase rather
+   than dispatch on a half stamp.
+
+   **A2 dispatch re-validation: the stamp must match the LIVE `.planning/TEAM.md` at
+   dispatch time,** not only at plan-check time; a roster mutation between stamping and
+   dispatch makes the stamp stale. The deterministic contract is
+   `ferrox-core/bin/lib/team-manifest.cjs` (exports `parseTeamManifest`,
+   `verifyTeamManifestHash`, `computeTeamManifestHash`):
+
+   ```bash
+   TEAM_LIB=""; for _tl in "${FERROX_TOOLS%/*}/lib/team-manifest.cjs" "$HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs" "./.claude/ferrox-core/bin/lib/team-manifest.cjs" "./ferrox-core/bin/lib/team-manifest.cjs"; do if [ -f "$_tl" ]; then TEAM_LIB="$_tl"; break; fi; done
+   if [ -z "$TEAM_LIB" ]; then echo "ERROR: team-manifest.cjs not found; tried: ${FERROX_TOOLS%/*}/lib/team-manifest.cjs, $HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs, ./.claude/ferrox-core/bin/lib/team-manifest.cjs, ./ferrox-core/bin/lib/team-manifest.cjs" >&2; exit 1; fi
+   # STAMPED_HASH, ROLE_ID, and STAMPED_CHARTER come from this plan frontmatter
+   # (team_manifest_hash, role_id, role_charter).
+   ROLE_CHECK=$(node -e '
+   const fs = require("node:fs");
+   const tm = require(process.argv[1]);
+   const path = require("node:path");
+   // A10: inject the known-agent roster from the model catalog beside the lib,
+   // so W_UNKNOWN_AGENT is live and "bound" counts only real agents; a missing
+   // catalog degrades to no roster check (the prior behavior).
+   let agents;
+   try { agents = Object.keys(require(path.join(path.dirname(process.argv[1]), "model-catalog.cjs")).AGENT_DEFAULT_TIERS); } catch { agents = undefined; }
+   const stampedHash = process.argv[2];
+   const roleId = process.argv[3];
+   const stampedCharter = process.argv[4];
+   let md = null;
+   try { md = fs.readFileSync(".planning/TEAM.md", "utf8"); } catch { /* absent */ }
+   if (md === null) { console.log(JSON.stringify({ verdict: "degrade", reason: "team-md-absent" })); process.exit(0); }
+   const parsed = tm.parseTeamManifest(md, agents === undefined ? undefined : { agents });
+   if (!parsed.ok) { console.log(JSON.stringify({ verdict: "stop", reason: "team-md-invalid", errors: parsed.errors })); process.exit(0); }
+   const self = tm.verifyTeamManifestHash(parsed.manifest);
+   const live = tm.computeTeamManifestHash(parsed.manifest);
+   if (!self.ok || live !== stampedHash) { console.log(JSON.stringify({ verdict: "stop", reason: "stale-stamp", stamped_hash: stampedHash, live_hash: live })); process.exit(0); }
+   const seat = parsed.manifest.roles.find((r) => r.id === roleId);
+   if (seat === undefined) { console.log(JSON.stringify({ verdict: "degrade", reason: "role-missing" })); process.exit(0); }
+   if (seat.charter !== stampedCharter) { console.log(JSON.stringify({ verdict: "stop", reason: "charter-drift", role_id: roleId })); process.exit(0); }
+   console.log(JSON.stringify({ verdict: "role", tier: seat.tier, binding: seat.binding, charter: seat.charter }));
+   ' "$TEAM_LIB" "$STAMPED_HASH" "$ROLE_ID" "$STAMPED_CHARTER")
+   ```
+
+   Handle the verdict:
+
+   - **`stop` with `stale-stamp`:** STOP. Do NOT dispatch this plan. This mirrors
+     plan-checker Check T3 exactly, with the same NAMED fix: **re-stamp** the plans
+     against the live TEAM.md (the roster is right, the stamps are old) or **re-bless**
+     the roster (the roster drifted without a blessing). Never dispatch on a stale stamp,
+     and never silently strip the stamp to force a dispatch.
+   - **`stop` with `charter-drift`:** STOP. Do NOT dispatch this plan. The plan's inlined
+     `role_charter` stamp is no longer byte-identical to the live TEAM.md charter for
+     that role. This mirrors plan-checker Check T2 exactly, with the same NAMED fix:
+     **re-stamp** the plan's charter from the blessed TEAM.md (the roster is right, the
+     stamp drifted) or **re-bless** the roster (the charter changed without a blessing).
+     Never dispatch a drifted charter, and never patch the stamp inline to force a
+     dispatch.
+   - **`stop` with `team-md-invalid`:** STOP and surface the parser errors verbatim. The
+     manifest is repaired through the governed `team-manifest.cjs` mutation ops, never by
+     hand, before any staffed dispatch.
+   - **`degrade` (A8; the stamped role is absent from the live roster, or TEAM.md itself
+     is gone):** dispatch ROLELESS, loudly. Set `ROLE_ASSIGNED=false`, drop the
+     `<role_assignment>` block from the prompt, and print this receipt line VERBATIM
+     (with the plan's role id substituted for `<id>`) in the wave log AND record it in
+     the step 6 wave report beside the plan:
+
+     ```
+     ROLE DEGRADE: role '<id>' absent from live TEAM.md; dispatched roleless
+     ```
+
+     A silent degrade is forbidden: the stamp promised a seat, and the wave record must
+     say the seat was gone.
+   - **`role`:** set `ROLE_ASSIGNED=true` and inject the `<role_assignment>` block in the
+     dispatch prompt below (step 3).
+
+   **Role tier resolution (A7 + A10 + A13):**
+
+   - Agent-bound role (`binding.agent`) with NO explicit `tier`: the model resolves via
+     the catalog default, exactly as an unstaffed dispatch of this plan would (the
+     `executor_model` from init through the FAST-05 depth tiering above). No new
+     resolution path.
+   - Role with an explicit `tier` (either binding rung): resolve through the FF-B26 verb,
+     the same 1 seam as FAST-05: `ferrox_run query model.resolve-tier --tier "<tier>"`.
+     On a ladder miss (A10) the verb returns `modelId: null` plus a `NOT IN LADDER`
+     notice: SURFACE the notice verbatim in the wave log, add this receipt line beside
+     the plan in the step 6 wave report, and dispatch on the default executor model.
+     Never a silently null model id:
+
+     ```
+     TIER LADDER MISS: role '<id>' tier '<tier>' not in model.tier_models; dispatched on the default executor model
+     ```
+   - `FORCE_FRONTIER` still wins over any role tier: a boundary plan can never be routed
+     down by a role (the FAST-05 precedence above is unchanged).
+
+   **Dispatch is ALWAYS ferrox-executor (A7).** The role binding is metadata (a tier
+   default plus provenance), NEVER a `subagent_type` swap: an agent-bound role and an
+   inline-charter role BOTH dispatch `subagent_type="ferrox-executor"`. The injected
+   charter is the blessed TEAM.md charter text on both rungs; the A2 check above proved
+   the plan stamp byte-identical to it, so the stamp is injected as stamped.
+
+   **TEAM.md mutation stale-stamp sweep (A2/A8).** Whenever the roster mutates (add,
+   remove, swap through the governed `team-manifest.cjs` mutation ops, or any re-bless),
+   run this sweep BEFORE the next staffed dispatch: every role stamp in
+   `.planning/phases/*/*-PLAN.md` whose `team_manifest_hash` no longer matches the live
+   manifest is STALE and is NAMED for re-stamp. A documented deterministic procedure, not
+   a new module:
+
+   ```bash
+   TEAM_LIB=""; for _tl in "${FERROX_TOOLS%/*}/lib/team-manifest.cjs" "$HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs" "./.claude/ferrox-core/bin/lib/team-manifest.cjs" "./ferrox-core/bin/lib/team-manifest.cjs"; do if [ -f "$_tl" ]; then TEAM_LIB="$_tl"; break; fi; done
+   if [ -z "$TEAM_LIB" ]; then echo "ERROR: team-manifest.cjs not found; tried: ${FERROX_TOOLS%/*}/lib/team-manifest.cjs, $HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs, ./.claude/ferrox-core/bin/lib/team-manifest.cjs, ./ferrox-core/bin/lib/team-manifest.cjs" >&2; exit 1; fi
+   node -e '
+   const fs = require("node:fs");
+   const path = require("node:path");
+   const tm = require(process.argv[1]);
+   const parsed = tm.parseTeamManifest(fs.readFileSync(".planning/TEAM.md", "utf8"));
+   if (!parsed.ok) { console.error("stale-stamp sweep: TEAM.md does not parse; repair the manifest first"); process.exit(1); }
+   const live = tm.computeTeamManifestHash(parsed.manifest);
+   const stale = [];
+   const root = ".planning/phases";
+   for (const entry of fs.existsSync(root) ? fs.readdirSync(root, { withFileTypes: true }) : []) {
+     if (!entry.isDirectory()) continue;
+     const dir = path.join(root, entry.name);
+     for (const f of fs.readdirSync(dir)) {
+       if (!f.endsWith("-PLAN.md")) continue;
+       // Only the frontmatter block carries a stamp: a hash-shaped line in the
+       // plan BODY (prose, examples, quoted receipts) must never flag.
+       const fm = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(fs.readFileSync(path.join(dir, f), "utf8"));
+       const m = fm === null ? null : /^team_manifest_hash:\s*"?([0-9a-f]{64})"?\s*$/m.exec(fm[1]);
+       if (m !== null && m[1] !== live) stale.push(path.join(dir, f));
+     }
+   }
+   if (stale.length === 0) { console.log("stale-stamp sweep: 0 stale role stamps against live TEAM.md " + live.slice(0, 12)); process.exit(0); }
+   console.log("stale-stamp sweep: " + stale.length + " stale role stamp(s); re-stamp each against the live TEAM.md (or re-bless the roster):");
+   for (const p of stale) console.log("  STALE STAMP: " + p);
+   process.exit(1);
+   ' "$TEAM_LIB"
+   ```
+
+   Exit 1 with named files means those plans re-enter plan-phase for a re-stamp before
+   they can dispatch; the sweep never edits a plan itself.
+
 3. **Spawn executor agents:**
 
    **Emit a plan-start heartbeat (literal line, no tool call) immediately before
@@ -875,7 +1030,14 @@ increases monotonically across waves. `{status}` is `complete` (success),
        @~/.claude/ferrox-core/workflows/execute-plan.md
        @~/.claude/ferrox-core/templates/summary.md
        @~/.claude/ferrox-core/references/checkpoints.md
-       @~/.claude/ferrox-core/references/tdd.md
+       ${NONCODE_DOMAIN ? '' : '@~/.claude/ferrox-core/references/tdd.md'}
+       <!-- v1.13 Wave 0 (B5): NONCODE_DOMAIN is an ORCHESTRATOR build-time fact, true only
+            when this plan's `domain` frontmatter (falling back to `.planning/config.json`
+            `domain` when the plan omits it) normalizes per gate-select (lowercase, trim,
+            spaces/underscores to hyphens, alias to canonical) to `writing`, `long-form`,
+            or `research`. Non-code increments get NO tdd.md injection: RED/GREEN test
+            discipline is a code instrument and a prose increment has no failing test to
+            write. Every other domain gets tdd.md exactly as before. -->
        @~/.claude/ferrox-core/references/worktree-path-safety.md
        ${CONTEXT_WINDOW < 200000 ? '' : '@~/.claude/ferrox-core/references/executor-examples.md'}
        </execution_context>
@@ -888,6 +1050,11 @@ increases monotonically across waves. `{status}` is `complete` (success),
        - ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
        - ${PROJECT_ROOT}/.planning/STATE.md (State)
        - ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
+       ${NONCODE_DOMAIN ? `
+       - ${PROJECT_ROOT}/LORE.md (Canon store: declared facts bind the draft; the fenced canon-facts YAML is authoritative, if exists)
+       - ${PROJECT_ROOT}/SOURCES.md (Sources ledger: every claim traces to a ledger entry, if exists)
+       - ${PROJECT_ROOT}/book/SPINE.md (Spine manifest: the single chapter ordering truth, if exists)
+       ` : ''}
        ${CONTEXT_WINDOW >= 500000 ? `
        - ${PROJECT_ROOT}/${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
        - ${PROJECT_ROOT}/${phase_dir}/*-RESEARCH.md (Technical research — pitfalls and patterns to follow)
@@ -896,6 +1063,52 @@ increases monotonically across waves. `{status}` is `complete` (success),
        - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
        - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
        </files_to_read>
+
+       ${NONCODE_DOMAIN ? `
+       <chapter_drafting>
+       v1.13 Wave 2 (A1) book-domain drafting discipline: ferrox-chapter-drafter is the
+       drafting agent for chapter tasks. Read agents/ferrox-chapter-drafter.md and hold
+       every drafting task to its contract. The chapter contract below is PLANNER-AUTHORED and
+       TRUSTED: the orchestrator copied it verbatim from the plan's frontmatter
+       chapter_contract block, never from a draft. Do not invent, drop, or reinterpret its
+       fields. The draft frontmatter must ECHO the contract exactly, self-declaring only
+       additional_on_stage and optional ages.
+
+       <chapter_contract>
+       pov: {chapter_contract.pov}
+       scene_date: {chapter_contract.scene_date}
+       location: {chapter_contract.location}
+       threads: {chapter_contract.threads}
+       flashback: {chapter_contract.flashback}
+       required_on_stage: {chapter_contract.required_on_stage}
+       word_count_target: {chapter_contract.word_count_target}
+       beats: {chapter_contract.beats}
+       </chapter_contract>
+
+       Research-domain plans carry no chapter contract: skip the block above and execute the
+       plan's report-shaped tasks against the SOURCES.md ledger instead.
+       </chapter_drafting>
+       ` : ''}
+
+       ${ROLE_ASSIGNED ? `
+       <role_assignment>
+       v1.13 P2 W3 (A7) team-staffed dispatch: ROLE_ASSIGNED is an ORCHESTRATOR build-time
+       fact, true only when this plan frontmatter carries all 3 stamp keys (role_id +
+       role_charter + team_manifest_hash) AND the step 2.6 preflight verdict was "role".
+       The charter below is PLANNER-STAMPED and TRUSTED: the orchestrator copied it
+       VERBATIM from the plan's role_charter frontmatter stamp (which the A2 preflight
+       proved byte-identical to the blessed .planning/TEAM.md charter), never from any
+       agent output. ECHO it, never author it: do not restate, extend, trim, or
+       reinterpret the charter. Your SUMMARY.md frontmatter must echo role_id and
+       role_charter byte for byte from the plan stamp; the verifier checks the echo and
+       FAILS any difference.
+
+       <role_charter>
+       role_id: {role_id}
+       {role_charter}
+       </role_charter>
+       </role_assignment>
+       ` : ''}
 
        ${AGENT_SKILLS}
 
@@ -1232,6 +1445,147 @@ increases monotonically across waves. `{status}` is `complete` (success),
    in isolation. But when merged, add/add conflicts in shared files (models, registries,
    CLI entry points) can silently drop code. The post-merge gate catches this before
    the next wave builds on a broken foundation.
+
+5.9. **Non-code floor gates (`NONCODE_DOMAIN` waves only; v1.13 Wave 3, the ui-phase 9.7 idiom):**
+
+   Skip this step entirely when `NONCODE_DOMAIN` is false. Otherwise the orchestrator runs
+   the domain's mechanical floor gate on every artifact this wave landed, BEFORE reporting
+   the wave complete. Capture RAW STDOUT per artifact. Do NOT route the handoff through
+   gateRunner.runGate: parseGateOutput consumes only the FAIL lines plus the summary and
+   drops INDET, WARN, verdict, and hash lines by design; the raw stdout is the only surface
+   that carries them.
+
+   **Chapter path (book domain: every plan in this wave that carries a `chapter_contract`).**
+   For each chapter draft the wave landed, the ORCHESTRATOR builds the gate bundle to a temp
+   path and runs the lore-consistency pack (input contract: `gates/lore-consistency/card.md`):
+
+   ```bash
+   BUNDLE=$(mktemp -t lore-bundle-XXXXXX).json
+   # Bundle members, trusted side built by the orchestrator, never by the draft:
+   #   schema           "ferrox.lore-consistency.bundle/1"
+   #   chapter          { filename: "ch-<slug>.md", markdown: <the landed draft, verbatim> }
+   #   lore             the full LORE.md content
+   #   trusted_contract copied VERBATIM from the plan's chapter_contract frontmatter block
+   #                    (pov, scene_date or scene_date_window, location, threads, flashback,
+   #                    required_on_stage, word_count_target, beats); never read from a draft
+   #   prior_state      { previous_scene_date, chapters, thread_events } from the keeper's
+   #                    chapter/thread event ledger and the spine manifest
+   #   thresholds       { word_tolerance_pct: 10 } plus era bounds when the canon declares them
+   LORE_GATE_OUT=$(node gates/lore-consistency/gate.cjs "${BUNDLE}" 2>&1)
+   ```
+
+   Then split the raw stdout 3 ways:
+
+   - `FAIL <LC-id> <category>` lines: declared-fact contract violations. Route to the A2 fix
+     lane: re-dispatch ferrox-chapter-drafter in revision mode with the FAIL lines as revision
+     context, max 2 passes, then stop honestly and surface the remaining FAILs to the user.
+     Never hand a FAIL to the line-editor; style findings only live there.
+   - `INDET <LC-id> <reason-code>` lines: the gate refused to guess. Carry them verbatim into
+     the continuity-eyes cross-audit below as named judgment items in the book eye's
+     `<gate_indet_items>` block; record them in the wave summary as well.
+   - `WARN ...` advisory lines (near-miss spelling, unlisted entities): display with the count,
+     never block.
+
+   Record the receipt in the wave summary verbatim: the `LORE GATE:` verdict line, the 1-line
+   scope disclaimer, and the `canon_facts_hash:` line (amendment A3; a keeper retcon voids
+   receipts recorded under a different hash).
+
+   **Keeper ingest is SERIAL and between waves (amendment A5):** after every chapter in the
+   wave passes the floor (or its FAILs are resolved), run the lore-keeper ingest ONCE for the
+   whole wave, serially, before the next wave dispatches. Parallel chapter waves are legal only
+   for timeline-independent chapters the plan names as such.
+
+   **Research path (research or long-form domain: report-shaped artifacts).** For each report
+   artifact the wave landed, run the citation-sources pack against the project ledger:
+
+   ```bash
+   CIT_GATE_OUT=$(node gates/citation-sources/gate.cjs --ledger "${PROJECT_ROOT}/SOURCES.md" "${report}" 2>&1)
+   ```
+
+   Same 3-way split of the raw stdout: `FAIL <CS-id> <category>` lines route to a capped
+   executor revision pass (max 2, then stop honestly); `INDET CS-03 <reason>` lines are the
+   quote-alteration judgment slice, carry them verbatim to the research judgment eye
+   (ferrox-method-reviewer) below in its `<gate_indet_items>` block;
+   `WARN CS-06 unused-source <id>` lines are advisory, display and move on. The gate never
+   touches the network; live link checking stays a workflow-layer advisory and is NOT run here.
+
+   **Continuity eyes cross-audit (v1.13 Wave 4; the ui-phase 9.7 idiom transposed).**
+   The floor gates above are mechanical; the eyes own exactly the judgment slices the gates
+   refuse. No rule is owned by 2 tiers: everything a gate scored stays with the gate, and the
+   eyes receive only the INDET and WARN lines plus the artifacts. Prose quality is NOT an eye
+   here; it stays Crucible-routed by the universal gate-first routing consult (UGE-08) per
+   doctrine. The cross-audit owns facts (book) and method (research), never taste.
+
+   The eyes are independent, so fire every eye this wave needs in a SINGLE message and wait;
+   wall clock is the slower eye, not the sum. Do no other work while they run. A wave that
+   landed both chapter and report artifacts fires 2 parallel dispatches; a single-lane wave
+   fires 1.
+
+   **Book eye (chapter artifacts landed this wave):**
+
+   ```
+   Agent(
+     prompt="Read ~/.claude/agents/ferrox-continuity-checker.md for instructions.
+
+     <objective>Cross-chapter continuity audit for wave {N}: check the landed chapters against declared canon and each other.</objective>
+     <required_reading>
+     - LORE.md (project root, declared canon-facts block)
+     - book/SPINE.md (ordering truth)
+     - {landed chapter files this wave}
+     </required_reading>
+     <gate_indet_items>{raw INDET LC-* lines from the lore gate, verbatim; omit the block when none}</gate_indet_items>
+     <gate_advisories>{raw WARN lines from the lore gate, verbatim; omit the block when none}</gate_advisories>",
+     subagent_type="ferrox-continuity-checker",
+     model="{CONTINUITY_CHECKER_MODEL}",
+     description="Continuity eye wave {N}"
+   )
+   ```
+
+   **Research eye (report artifacts landed this wave):**
+
+   ```
+   Agent(
+     prompt="Read ~/.claude/agents/ferrox-method-reviewer.md for instructions.
+
+     <objective>Method, bias, source-quality, and claim-support audit of the wave {N} report artifacts.</objective>
+     <required_reading>
+     - SOURCES.md (project root, the ledger with stored excerpts)
+     - {landed report artifacts this wave}
+     </required_reading>
+     <gate_indet_items>{raw INDET CS-03 lines from the citation gate, verbatim; omit the block when none}</gate_indet_items>
+     <gate_advisories>{raw WARN CS-06 lines, verbatim; omit the block when none}</gate_advisories>",
+     subagent_type="ferrox-method-reviewer",
+     model="{METHOD_REVIEWER_MODEL}",
+     description="Method review eye wave {N}"
+   )
+   ```
+
+   **Findings merge:** merge the eye returns into 1 structured list (severity, kind, artifact,
+   provenance, evidence, fix) and record it verbatim in the wave summary; the archived merge is
+   the critique receipt. Then resolve-or-waive by severity:
+
+   - **BLOCK severity, book lane** (`CONTINUITY_BREAK` or `TIMELINE_INVERSION` at HIGH): the A2
+     fix lane. Re-dispatch ferrox-chapter-drafter in revision mode with the findings as revision
+     context, max 2 passes, then stop honestly and surface what remains. After any revision pass,
+     re-run the lore gate on the revised chapter before treating the finding as resolved. Never
+     hand these to the line-editor.
+   - **BLOCK severity, research lane** (any HIGH from the method reviewer, including
+     `CLAIM_NOT_SUPPORTED` and `QUOTE_MEANING_SHIFT`): capped executor revision pass, max 2, then
+     stop honestly. Re-run the citation gate on the revised report before treating it resolved.
+   - **Style findings** (from the Crucible critique when prose quality routed there; the
+     continuity eye never emits style): route to ferrox-line-editor inside the A2 batch wrapper,
+     the code-review --fix precedent: group findings per chapter, tier triage ONCE up front
+     (DEFER meaning-touching findings before any edit), apply bottom-up so line anchors never
+     shift, then 1 atomic commit per chapter plus an EDIT-LOG entry listing every applied and
+     deferred finding.
+   - **Waive:** any BLOCK the user declines to fix is recorded verbatim in a
+     `## Continuity Waivers` section of the wave summary (finding, reason, who waived, date).
+     A waiver is loud, never silent. Ask per finding, recommendation first: state the fix you
+     would apply and why before offering the waiver.
+   - **MEDIUM and NOTE:** display with counts, record in the wave summary, never block the wave.
+
+   If BLOCK findings remain after the revision caps and the user declines to waive, report the
+   wave with the findings list; do not report it complete as clean.
 
 6. **Report completion — spot-check claims first:**
 

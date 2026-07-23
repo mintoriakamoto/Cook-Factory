@@ -491,6 +491,33 @@ function handleGateFirstRun(args: string[], cwd: string, raw: boolean, error: (m
   });
 }
 
+/**
+ * FF-B26 model.resolve-tier (v1.13 P2 W0, A13) - the THIN bare tier->model
+ * resolve verb. Wraps the existing model-backend ladderModel lookup over the
+ * config-resolved `model.tier_models` ladder; no transport decision, no env
+ * probes. A tier missing from the ladder resolves modelId to null with a loud
+ * notice line so dispatch receipts the ladder miss instead of guessing.
+ */
+function handleResolveTier(args: string[], cwd: string, raw: boolean, error: (m: string, r?: string) => void): void {
+  const tier = parseFlag(args, '--tier');
+  if (tier === undefined) {
+    error('Usage: ferrox-tools query model.resolve-tier --tier <rung>', 'InvalidArgs');
+    return;
+  }
+  const model = resolveModel(cwd);
+  const { modelId, miss } = modelBackend.ladderModel(resolveObject(model, 'tier_models'), tier);
+  const result: Record<string, unknown> = {
+    tier,
+    modelId,
+    inLadder: modelId !== null,
+    reason: miss === '' ? 'ok' : miss,
+  };
+  if (modelId === null) {
+    result.notice = `NOT IN LADDER: tier '${tier}' resolves to no model in model.tier_models (${miss})`;
+  }
+  writeJson(result, raw);
+}
+
 /** True if `bin` resolves on PATH — a lookup only, the binary is never executed. */
 function hasOnPath(bin: string): boolean {
   const dirs = (process.env.PATH || '').split(path.delimiter);
@@ -517,6 +544,7 @@ function routeModelCommand({ args, cwd, raw, error }: RouteModelCommandOptions):
       'escalate': () => handleEscalate(args, cwd, raw, error),
       'risk-grade': () => handleRiskGrade(args, cwd, raw, error),
       'backend': () => handleBackend(args, cwd, raw, error),
+      'resolve-tier': () => handleResolveTier(args, cwd, raw, error),
       'anvil-run': () => handleAnvilRun(args, cwd, raw, error),
       'gate-first-eligibility': () => handleGateFirstEligibility(args, cwd, raw, error),
       'gate-first-run': () => handleGateFirstRun(args, cwd, raw, error),

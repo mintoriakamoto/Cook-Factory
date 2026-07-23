@@ -64,6 +64,12 @@ One sentence that drives prioritization when tradeoffs arise.]
 
 Common types: Tech stack, Timeline, Budget, Dependencies, Compatibility, Performance, Security
 
+Domain-neutral rule: constraints state what binds the work and why, whatever the deliverable is. Non-software examples:
+
+- **Voice** (book): First-person present, single POV per chapter, locked at canon-init
+- **Word count** (book): Every chapter lands within 10 percent of its word_count_target
+- **Sources** (research): Every claim traces to a SOURCES.md ledger entry, no unledgered citations
+
 ## Key Decisions
 
 <!-- Decisions that constrain future work. Add throughout project lifecycle. -->

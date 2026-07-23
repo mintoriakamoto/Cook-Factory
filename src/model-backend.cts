@@ -99,4 +99,6 @@ function resolveModelBackend(opts?: {
   };
 }
 
-export = { resolveModelBackend };
+// FF-B26 (v1.13 P2 W0): the bare ladder lookup is exported so the thin
+// model.resolve-tier verb can wrap it without reimplementing the seam.
+export = { resolveModelBackend, ladderModel };

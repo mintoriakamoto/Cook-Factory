@@ -124,7 +124,7 @@ For "Users can securely access their accounts":
 - User can log out from any page
 - User can reset forgotten password
 
-**Test:** Each truth should be verifiable by a human using the application.
+**Test:** Each truth should be verifiable by a human using the deliverable: the running application for software, the draft chapters or the report for book and research domains.
 
 **Step 3: Cross-Check Against Requirements**
 For each success criterion:

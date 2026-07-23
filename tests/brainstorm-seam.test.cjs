@@ -156,6 +156,246 @@ test('brainstorm.md promotion rule and provenance format are untouched', () => {
   assert.match(brainstorm, /Park closes without promoting anything, and that is\s+success, not failure/);
 });
 
+// ─── v1.13 Part 2 Wave 1: the team assembly station inside promote/seed ──────
+
+const teamLib = require('../ferrox-core/bin/lib/team-manifest.cjs');
+
+test('brainstorm.md: the team moment is inside routes 1 and 2 only; park stays untouched success', () => {
+  assert.match(brainstorm, /run `<team_assembly>` BEFORE executing the route/);
+  assert.match(brainstorm, /Park \(route 3\) never assembles a team/);
+  assert.match(brainstorm, /Park closes without promoting anything, and that is\s+success, not failure/);
+  assert.match(brainstorm, /never a 4th exit/);
+});
+
+test('brainstorm.md: TEAM.md is the only representation; the artifact skeletons carry no team block', () => {
+  assert.match(brainstorm, /ONLY representation of the roster/);
+  const step10 = brainstorm.split('## Step 10')[1].split('## Step 11')[0];
+  assert.ok(!/team-manifest/.test(step10), 'no team-manifest fence in the artifact templates');
+  assert.ok(!/## Team/.test(step10), 'no Team section in the artifact skeletons');
+  assert.ok(!/TEAM\.md/.test(step10), 'Step 10 writes BRAINSTORM.md only');
+});
+
+test('brainstorm.md: the A11 receipt format and the A8 governed-mutation route are pinned', () => {
+  assert.ok(brainstorm.includes('team-manifest/v1: K/K checks, N roles, M bound'), 'machine receipt format pinned');
+  assert.match(brainstorm, /roster DIFF/);
+  assert.match(brainstorm, /A silent rewrite is a workflow failure/);
+});
+
+test('the documented receipt command runs against the real lib and emits the pinned machine format', () => {
+  // Build a blessed 2-role roster through the lib itself (1 inline seat,
+  // 1 agent-bound seat), then run the workflow doc's own bash block against
+  // it, so the doc's command and the lib can never drift apart silently.
+  const manifest = {
+    schema: 'team-manifest/v1',
+    derived_from: { brainstorm: 'realtime-collab-2026-07-23', milestone: 'v1.13' },
+    manifest_hash: '',
+    roles: [
+      {
+        id: 'sync-engineer',
+        charter: 'Own the CRDT sync engine end to end: data model, merge semantics, and offline queue.',
+        rationale: 'The Decisions lock CRDT sync as the core of the build.',
+        non_redundancy: 'Sole writer of the sync engine surface.',
+        provenance: '(stance: guided, confirmed at exit)',
+        binding: { inline: true },
+        tier: 'standard',
+        owns: ['src/sync/**'],
+        reviews: [],
+      },
+      {
+        id: 'reviewer',
+        charter: 'Review every sync engine change for merge-semantics regressions before it lands.',
+        rationale: 'Conflict handling is the highest-risk decision in the brief.',
+        non_redundancy: 'Verification duty only; owns no write surface.',
+        provenance: '(stance: guided, confirmed at exit)',
+        binding: { agent: 'ferrox-code-reviewer' },
+        owns: [],
+        reviews: ['src/sync/**'],
+      },
+    ],
+  };
+  const teamMd = teamLib.serializeTeamManifest(manifest);
+  const parsed = teamLib.parseTeamManifest(teamMd);
+  assert.equal(parsed.ok, true, JSON.stringify(parsed.errors));
+
+  // Extract the bash block that carries the validator invocation from the doc.
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  assert.ok(script, 'the workflow doc documents the validator invocation');
+
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'team-receipt-'));
+  const teamPath = path.join(tmp, 'TEAM.md');
+  fs.writeFileSync(teamPath, teamMd);
+  const patched = script.replace('".planning/TEAM.md"', JSON.stringify(teamPath));
+  assert.notEqual(patched, script, 'the documented command reads .planning/TEAM.md');
+
+  const res = spawnSync('bash', ['-c', patched], { cwd: ROOT, encoding: 'utf8', timeout: 30000 });
+  assert.equal(res.status, 0, `receipt command must exit 0:\n${res.stdout}${res.stderr}`);
+  const receipt = res.stdout.trim();
+  assert.match(receipt, /^team-manifest\/v1: (\d+)\/\1 checks, 2 roles, 1 bound$/);
+  assert.equal(
+    Number(receipt.match(/^team-manifest\/v1: (\d+)\//)[1]),
+    teamLib.PARSE_CODES.length,
+    'the K/K denominator is the honest parse-evaluable set, never the full CODES map'
+  );
+  console.log(`seam receipt (team): ${receipt}`);
+});
+
+test('the receipt denominator is PARSE_CODES: mutation-only refusals never inflate K/K', () => {
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  assert.ok(script, 'the workflow doc documents the validator invocation');
+  assert.match(script, /const checks = tm\.PARSE_CODES;/, 'the snippet takes the exported honest denominator');
+  assert.ok(!script.includes('Object.keys(tm.CODES)'), 'the inflated all-E_-codes denominator is retired');
+  for (const code of ['E_ROLE_EXISTS', 'E_ROLE_NOT_FOUND', 'E_ROLE_LIVE_IN_PLAN']) {
+    assert.ok(!teamLib.PARSE_CODES.includes(code), `${code} is mutation-only and stays out of the denominator`);
+  }
+  const allParseEvaluable = Object.keys(teamLib.CODES).filter(
+    (c) => c.startsWith('E_') && !['E_ROLE_EXISTS', 'E_ROLE_NOT_FOUND', 'E_ROLE_LIVE_IN_PLAN'].includes(c)
+  );
+  assert.deepEqual([...teamLib.PARSE_CODES], allParseEvaluable, 'PARSE_CODES is exactly the parse-evaluable E_ set');
+});
+
+test('the receipt command injects the catalog agent roster: a ghost-bound seat never counts as bound', () => {
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  assert.ok(script, 'the workflow doc documents the validator invocation');
+  assert.match(script, /model-catalog\.cjs/, 'the snippet consults the model catalog for the agent roster');
+  assert.match(script, /AGENT_DEFAULT_TIERS/, 'the roster is the catalog agent set');
+  assert.match(script, /catch \{ agents = undefined; \}/, 'a missing catalog degrades to no roster check');
+
+  const manifest = {
+    schema: 'team-manifest/v1',
+    derived_from: { brainstorm: 'realtime-collab-2026-07-23', milestone: 'v1.13' },
+    manifest_hash: '',
+    roles: [
+      {
+        id: 'builder',
+        charter: 'Own the src surface end to end and hand off with receipts.',
+        rationale: 'the brief calls for a builder seat',
+        non_redundancy: 'sole writer of the src surface',
+        provenance: '(stance: guided, confirmed at exit)',
+        binding: { inline: true },
+        tier: 'standard',
+        owns: ['src/**'],
+        reviews: [],
+      },
+      {
+        id: 'phantom-eye',
+        charter: 'Review every src change for regressions.',
+        rationale: 'a second eye on the only write surface',
+        non_redundancy: 'reviews, never writes',
+        provenance: '(stance: guided, confirmed at exit)',
+        binding: { agent: 'ghost-agent-nobody-ships' },
+        owns: [],
+        reviews: ['src/**'],
+      },
+    ],
+  };
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'team-receipt-ghost-'));
+  const teamPath = path.join(tmp, 'TEAM.md');
+  fs.writeFileSync(teamPath, teamLib.serializeTeamManifest(manifest));
+  const patched = script.replace('".planning/TEAM.md"', JSON.stringify(teamPath));
+  const res = spawnSync('bash', ['-c', patched], { cwd: ROOT, encoding: 'utf8', timeout: 30000 });
+  assert.equal(res.status, 0, `receipt command must exit 0:\n${res.stdout}${res.stderr}`);
+  assert.match(
+    res.stdout.trim(),
+    /^team-manifest\/v1: (\d+)\/\1 checks, 2 roles, 0 bound$/,
+    'the ghost-bound seat degrades to the inline rung in the bound count (W_UNKNOWN_AGENT is live)'
+  );
+});
+
+test('the receipt command carries the shared FERROX_TOOLS shim and the TEAM_LIB fallback chain', () => {
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  assert.ok(script, 'the workflow doc documents the validator invocation');
+  assert.match(script, /_FERROX_SHIM_NAME="ferrox-tools\.cjs"/, 'the standard shim resolves FERROX_TOOLS first');
+  assert.match(script, /require\(process\.argv\[1\]\)/, 'the lib path arrives as argv, never a cwd-relative require');
+  assert.ok(!script.includes('require("./ferrox-core'), 'no cwd-relative lib require survives (installed layouts)');
+  for (const root of [
+    '"${FERROX_TOOLS%/*}/lib/team-manifest.cjs"',
+    '"$HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs"',
+    '"./.claude/ferrox-core/bin/lib/team-manifest.cjs"',
+    '"./ferrox-core/bin/lib/team-manifest.cjs"',
+  ]) {
+    assert.ok(script.includes(root), `TEAM_LIB fallback chain tries ${root}`);
+  }
+  assert.match(script, /ERROR: team-manifest\.cjs not found; tried:/, 'a total miss errors loudly naming every tried path');
+});
+
+test('the receipt command runs from an installed layout (~/.claude style, no dev repo in reach)', () => {
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  assert.ok(script, 'the workflow doc documents the validator invocation');
+
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'team-receipt-installed-'));
+  const proj = path.join(scratch, 'proj');
+  const fakeHome = path.join(scratch, 'home');
+  const binDir = path.join(proj, '.claude', 'ferrox-core', 'bin');
+  fs.mkdirSync(path.join(binDir, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(binDir, 'vendor'), { recursive: true });
+  fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
+  fs.mkdirSync(fakeHome, { recursive: true });
+
+  // The installed tree: file copies, no node_modules, no dev repo above it.
+  const devBin = path.join(ROOT, 'ferrox-core', 'bin');
+  fs.copyFileSync(path.join(devBin, 'ferrox-tools.cjs'), path.join(binDir, 'ferrox-tools.cjs'));
+  fs.copyFileSync(path.join(devBin, 'lib', 'team-manifest.cjs'), path.join(binDir, 'lib', 'team-manifest.cjs'));
+  fs.copyFileSync(path.join(devBin, 'vendor', 'js-yaml-4.2.0.cjs'), path.join(binDir, 'vendor', 'js-yaml-4.2.0.cjs'));
+
+  const manifest = {
+    schema: 'team-manifest/v1',
+    derived_from: { brainstorm: 'realtime-collab-2026-07-23', milestone: 'v1.13' },
+    manifest_hash: '',
+    roles: [
+      {
+        id: 'solo-builder',
+        charter: 'Own the whole surface end to end and hand off with receipts.',
+        rationale: 'A 1-seat roster is the floor and the installed smoke needs only 1.',
+        non_redundancy: 'Sole seat.',
+        provenance: '(stance: guided, confirmed at exit)',
+        binding: { inline: true },
+        tier: 'standard',
+        owns: ['src/**'],
+        reviews: [],
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(proj, '.planning', 'TEAM.md'), teamLib.serializeTeamManifest(manifest));
+
+  // HOME points at an empty scratch home, cwd is not a git repo: the shim must
+  // land on the project-local .claude tree and TEAM_LIB must follow it there.
+  const res = spawnSync('bash', ['-c', script], {
+    cwd: proj,
+    encoding: 'utf8',
+    timeout: 30000,
+    env: { ...process.env, HOME: fakeHome, CLAUDE_CONFIG_DIR: '', CLAUDE_ENV_FILE: '' },
+  });
+  assert.equal(res.status, 0, `installed-layout receipt must exit 0:\n${res.stdout}${res.stderr}`);
+  assert.match(res.stdout.trim(), /^team-manifest\/v1: (\d+)\/\1 checks, 1 roles, 0 bound$/m);
+  console.log(`seam receipt (installed layout): ${res.stdout.trim().split('\n').pop()}`);
+});
+
+test('the receipt command fails closed on an invalid manifest and still emits the machine line', () => {
+  const bashBlocks = brainstorm.split('```bash').slice(1).map((s) => s.split('```')[0]);
+  const script = bashBlocks.find((b) => b.includes('team-manifest.cjs'));
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'team-receipt-bad-'));
+  const teamPath = path.join(tmp, 'TEAM.md');
+  fs.writeFileSync(teamPath, '# TEAM\n\nno fenced team block here\n');
+  const patched = script.replace('".planning/TEAM.md"', JSON.stringify(teamPath));
+  const res = spawnSync('bash', ['-c', patched], { cwd: ROOT, encoding: 'utf8', timeout: 30000 });
+  assert.notEqual(res.status, 0, 'INVALID must exit nonzero');
+  assert.match(res.stdout, /^team-manifest\/v1: \d+\/\d+ checks, 0 roles, 0 bound/m);
+  assert.match(res.stdout, /FAIL E_TEAM_BLOCK_MISSING/);
+});
+
 // ─── The parser: N in = N out, provenance parsed, hedges never promoted ──────
 
 const fixtureText = read(FIXTURE_MD);

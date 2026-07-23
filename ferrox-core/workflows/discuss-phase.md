@@ -238,7 +238,10 @@ Read project-level and prior phase context to avoid re-asking decided questions.
 cat .planning/PROJECT.md 2>/dev/null || true
 cat .planning/REQUIREMENTS.md 2>/dev/null || true
 cat .planning/STATE.md 2>/dev/null || true
+cat .planning/TEAM.md 2>/dev/null || true
 ```
+
+`.planning/TEAM.md` (Team Manifest: blessed roster of roles with charters, if exists) is settled context: never re-derive or edit the team here; absent means zero behavior change (A9).
 
 Read at most **3** prior CONTEXT.md files (most recent 3 phases before current). If `.planning/DECISIONS-INDEX.md` exists, read that instead — it is a bounded rolling summary that supersedes per-phase reads.
 

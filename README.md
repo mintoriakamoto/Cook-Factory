@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1001%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1241%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -252,8 +252,8 @@ self-checking generator that reads the raw results and refuses to draw on any mi
 
 ## The gate library
 
-The gates the climb runs against are a library, not a pile of scripts: 6 validated packs
-(39 checks, 36 sealed mutants) ship in [`gates/`](gates/README.md), each with a Gate Card
+The gates the climb runs against are a library, not a pile of scripts: 8 validated packs
+(54 checks, 47 sealed mutants) ship in [`gates/`](gates/README.md), each with a Gate Card
 declaring its checks, tools, validation status, and known gamed-modes. Since v1.12 the
 library is template-keyed: a pack can carry separate sealed validation blocks per artifact
 shape, and the first template-keyed pack gates both software and book brainstorm artifacts
@@ -282,6 +282,19 @@ with per-template semantics.
   selectors, `:root`-only custom properties) gets a distinct UNSUPPORTED-INPUT refusal. As
   far as we know, it is the first static a11y gate that computes contrast and tap targets
   without a browser.
+- **lore-consistency**: the fiction floor. Scores a chapter against DECLARED bible facts
+  only, from a fenced canon block the lore keeper owns: entities resolve, dead characters
+  stay dead, timelines stay monotonic against the prior chapter, declared ages match the
+  birthdate arithmetic, threads follow the ledger, the word floor holds. It never prints
+  a bare PASS: the verdict is `LORE GATE: CONTRACT HONORED (N/M declared-fact checks)`
+  with a scope disclaimer and the `canon_facts_hash` it was earned under. Prose quality
+  is never gated; taste stays with the judgment eyes, on purpose and in the receipt.
+- **citation-sources**: the research floor. Gates a report against a source ledger whose
+  archived entries carry a verbatim excerpt and its hash captured at ingest: claim
+  markers resolve honestly, retractions must be acknowledged, quoted spans match their
+  excerpts verbatim under a locked normalization and alteration grammar (an ellipsis that
+  hides a negation fails; an alteration beyond the grammar abstains as INDET and routes
+  to the eyes). URL checking is syntax only; the gate never touches the network.
 
 Every pack is validated to a sealed standard before it may gate anything: a pool of at
 least 5 **fluent-but-wrong** mutant fixtures (convincing garbage a human skim would accept)
@@ -334,6 +347,139 @@ opening to a gated book-template artifact, is archived in-repo as a demo:
 
 *A real companion screen: the agent presents 2 directions with its recommendation stated
 first, you click, the session continues with your choice on record.*
+
+## The declared-canon line
+
+Since v1.13 a book and a research report run the same hardened line as software:
+roadmap, phases, waves, gates, eyes, bounded stops, with the software stations swapped
+for domain twins. `/ferrox-canon-init` writes the canon store (`LORE.md` for fiction,
+`SOURCES.md` for research and nonfiction; both are legal in 1 project), and the store's
+machine slice is 1 fenced block the lore keeper alone maintains, every entry checkable
+with chapter:line provenance.
+
+The trust split is the point: the chapter contract (POV, scene date, location, threads,
+cast, word target, beats) is authored by the planner and injected into the trusted side
+of the gate bundle by the orchestrator, so a draft cannot edit the contract it is graded
+against. The floor gate then scores declared facts deterministically and hands exactly
+what it refuses to judge, by name, to the continuity and method eyes. The receipt says
+what it covered every single run:
+
+```
+canon_facts_hash: f0adf230a5316b0959c77e649a84a3279b902f5081d7b09748c529d3d2077d4a
+LORE GATE: CONTRACT HONORED (9/9 declared-fact checks)
+Scope: only declared facts were checked; prose canon fidelity outside the declared contract stays with the judgment eyes.
+```
+
+Change a birthdate in the bible and the retcon sweep voids every receipt pinned to the
+old hash and re-earns them deterministically; in the shipped dogfood run the re-gate
+flipped the verdict to `FAIL LC-06` until the contradiction was resolved on the record.
+When the chapters clear, the manuscript assembler compiles `book/SPINE.md` plus
+`book/chapters/` into `build/manuscript.md` with a compile report, and hard-errors on
+any file the manifest does not own. The published numbers explain the design: the best
+long-narrative claim-verification result is 55.8 percent (NoCha) and planted plot holes
+are caught in at most 63 percent of stories (FlawedFictions), so this line refuses to
+gate with a model that is right 6 times in 10 and gates with a pure function instead,
+scoped to what was declared.
+
+## The dynamic team
+
+Since v1.13 the factory staffs itself. Finish a brainstorm, say GO, and before any plan
+exists the line derives the team the work actually needs: not a domain template, not a
+prebuilt roster, but roles read off the captured work shape the way you would state them
+yourself ("for this I would need X, X, and X"). Each proposed role arrives with a 1 line
+charter, a non-redundancy case for its seat (every specialist earns their seat, or the
+roster collapses toward 1), and a recommended binding to an existing agent or a fresh
+inline charter. You bless or edit the roster in 1 move, recommendation-first, and the
+blessed roster is written to `.planning/TEAM.md`, the single team manifest,
+hash-stamped so nothing downstream can drift from it silently.
+
+The shipped demo continues the v1.12 cyberpunk-novel brainstorm into exactly that moment:
+the roster below is the real validated artifact from
+[`docs/demos/brainstorm-cyberpunk-novel/TEAM.md`](docs/demos/brainstorm-cyberpunk-novel/TEAM.md),
+4 seats bound by reference to shipped agents and 1 chartered inline because no registry
+agent carries the expertise (excerpted; the full manifest carries 5 roles):
+
+```yaml
+schema: team-manifest/v1
+derived_from:
+  brainstorm: cyberpunk-novel-2026-07-23
+  milestone: wetlease-novel-v1
+manifest_hash: 2217ce11a06339bb110997d935fb1afe78534f2229855ed1818a71629290778d
+roles:
+  - id: chapter-drafter
+    charter: >-
+      Draft and revise chapters against the planner-stamped chapter contract and the declared canon: salt-rot noir
+      register, waterline settings, dialogue as bartering, every scene honoring the locked memory physics and the 3-week
+      countdown.
+    non_redundancy: Sole owner of the book/chapters/** write surface; the only seat that authors prose.
+    binding:
+      agent: ferrox-chapter-drafter
+    owns:
+      - book/chapters/**
+  - id: memory-economy-specialist
+    charter: >-
+      Own the memory-property tech bible under book/tech/: work out the Ledger notary mechanics, custody-stamp format,
+      render-tax arithmetic, and the forgery-verification asymmetry as internally consistent rules; propose tech canon
+      to the lore keeper and review chapters for any scene where the technology breaks its own economics.
+    non_redundancy: >-
+      Distinct expertise and write surface: the lore keeper records blessed canon, this seat invents and stress-tests
+      the tech economics under book/tech/** before anything reaches the canon store.
+    binding:
+      inline: true
+    tier: frontier
+    owns:
+      - book/tech/**
+```
+
+The assembly receipt is machine output, never prose. The station runs the validator the
+moment TEAM.md is written, and the dogfood run earned this line verbatim:
+
+```
+team-manifest/v1: 23/23 checks, 5 roles, 4 bound
+```
+
+The trust mechanics are the chapter-contract discipline generalized. The planner stamps
+each staffed plan with the role id, the charter copied byte for byte, and the manifest
+hash; execute-phase re-validates that hash against the live TEAM.md at dispatch time and
+injects the charter as a trusted block on the generic executor. The executor echoes the
+charter, never authors it, and the verifier fails any echo drift. A stale stamp stops
+the dispatch with a named fix (re-stamp the plans or re-bless the roster), and a role
+that vanished from the roster degrades the dispatch to roleless with a loud receipt,
+never silently. Dispatch is always the same hardened executor: a role never swaps the
+agent, it shapes the prompt and the model tier. The fixed gates and eyes are untouched
+by construction: dynamic where creativity lives, fixed where trust lives.
+
+From the dogfood run, the staffed plan's 3-key stamp as the planner wrote it:
+
+```yaml
+role_id: chapter-drafter
+role_charter: >-
+  Draft and revise chapters against the planner-stamped chapter contract and the declared canon: salt-rot noir register,
+  waterline settings, dialogue as bartering, every scene honoring the locked memory physics and the 3-week countdown.
+team_manifest_hash: 2217ce11a06339bb110997d935fb1afe78534f2229855ed1818a71629290778d
+```
+
+The dispatch preflight returned `{"verdict":"role", ...}` against the live manifest, the
+executor's SUMMARY echoed the stamp, and the verifier's echo check passed it on the record:
+
+```
+role_id echo: ok
+role_charter echo: ok, byte for byte (234 bytes)
+ROLE-CHARTER ECHO: VERIFIED
+```
+
+This is graph engineering shipped as a product lifecycle, and the factory was doing the
+practice before the term had a name: the lifecycle already builds a work graph (tasks
+and artifacts as nodes, dependencies and handoffs as edges, receipts per node), and team
+assembly is role-labeling that graph and matching agents to the labels. The research
+validated deriving rosters from the work (AutoAgents, IJCAI 2024; AgentVerse, ICLR
+2024); what those papers do not ship is the lifecycle around it, and that is the gap
+this release closes: derive the roster from the work, staff the plan, execute under
+fixed trust gates. Against the MAST failure taxonomy the claim is scoped honestly:
+write-disjoint waves answer the inter-agent misalignment cluster, per-node receipts
+answer the verification and termination cluster, and role-violation mitigation is
+partial today (charter injection plus the verifier echo); per-role least-privilege tool
+allowlists are the named follow-up.
 
 ## The ignition path
 
@@ -421,6 +567,7 @@ run the matching skill):
 | `/ferrox-brainstorm` | research brainstorm with the live visual companion, hard design gate |
 | `/ferrox-design-init` | write DESIGN.md, the binding design contract for all UI work |
 | `/ferrox-new-project` | initialize a project (PROJECT.md, ROADMAP.md, config) |
+| `/ferrox-canon-init` | write the declared canon store (LORE.md or SOURCES.md) that gates creative work |
 | `/ferrox-plan-phase N` | plan a phase into executable PLAN.md files |
 | `/ferrox-execute-phase N` | build a phase with wave-based parallel sub-agents |
 | `/ferrox-quick` | a small fix with atomic-commit + state guarantees, minimal ceremony |
@@ -467,7 +614,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **1001 tests** across the halting, coordination, strength, model-routing, memory,
+The suite is **1248 tests (1241 passing, 7 environment skips)** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

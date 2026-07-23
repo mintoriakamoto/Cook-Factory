@@ -111,6 +111,29 @@ Acknowledge each in 1 line: `Found a brainstorm from {date} on {topic} with {N} 
 
 Store the parsed results beside `$SELECTED_SEEDS` (e.g. `$BRAINSTORM_INTAKE`) as locked context for milestone definition and step 9 requirements. These decisions are OFF LIMITS: never re-ask a decided item unprompted; requirement questions build on top of them instead. OFF LIMITS is not immutable: the user reopening a decision by name always works. Brainstorm Notes and Open Questions sections are fair game and GOOD question seeds when probing milestone scope.
 
+## 2.7. Detect Team Manifest
+
+After the brainstorm scan, check for a blessed team roster. Detection is direct presence: `.planning/TEAM.md` is the ONLY representation of the team (A5: no parseBrainstormArtifact extension, no second source).
+
+```bash
+ls .planning/TEAM.md 2>/dev/null
+```
+
+**If absent:** skip silently, zero behavior change (A9).
+
+**If present:** parse it with the deterministic contract `ferrox-core/bin/lib/team-manifest.cjs` (`parseTeamManifest`), then acknowledge in 1 line with the roster summary:
+
+```
+Team manifest found: {N} roles ({M} bound to existing agents): {role id list}.
+```
+
+**Scope match (A4):** read the manifest's `derived_from` block (`brainstorm` slug + `milestone`). If it names a different milestone or brainstorm than the milestone being entered here, the manifest is FOREIGN: say so plainly and offer re-derivation via AskUserQuestion, recommendation-first:
+
+- **"Re-derive the team at the next brainstorm exit (Recommended)"**: the roster was sized to {derived_from.milestone}'s work shape, not this one; re-derive the team for the new work shape. The existing TEAM.md stays untouched until derivation runs.
+- **"Keep the existing roster"**: consume it as is, knowing it was shaped for different work.
+
+The existing TEAM.md is never silently consumed out of scope, and never silently rewritten (A8: roster changes route through the mutation ops).
+
 ## 3. Determine Milestone Version
 
 - Parse last version from MILESTONES.md

@@ -179,6 +179,84 @@ test('guided mode keeps ambiguity scoring and degree-vs-kind scoring', () => {
   assert.match(doc, /false precision/);
 });
 
+// ─── v1.13 Part 2 Wave 1: the team moment inside the promote/seed exits ─────
+
+test('team assembly: block present, fires only on promote/seed after Step 12, never on park or decline', () => {
+  assert.match(doc, /<team_assembly>/);
+  assert.match(doc, /route 1\s+\(promote\) or route 2 \(seed\), AFTER the Step 12 artifact approval gate/);
+  assert.match(doc, /Park \(route 3\) never assembles a team/);
+  assert.match(doc, /neither does declining\s+all 3 routes/);
+});
+
+test('step 13 keeps exactly 3 exits and runs the team moment inside routes 1 and 2, never as a 4th exit', () => {
+  assert.match(doc, /## Step 13: Route the result \(exactly 3 exits\)/);
+  const step13 = doc.split('## Step 13')[1].split('</process>')[0];
+  assert.match(step13, /run `<team_assembly>` BEFORE executing the route/);
+  assert.match(step13, /Park assembles no team/);
+  assert.match(step13, /never a 4th exit/);
+});
+
+test('A1 blessing gate: full charter verbatim with owns/reviews globs, never a rationale summary', () => {
+  assert.match(doc, /FULL charter VERBATIM/);
+  assert.match(doc, /including its `owns` and `reviews` globs/);
+  assert.match(doc, /never a rationale summary/);
+  assert.match(doc, /what the user blesses is what dispatch runs/);
+  assert.match(doc, /Blessed roles carry exit provenance/);
+  assert.match(doc, /Unblessed or edited-out roles\s+become Notes in the artifact, never manifest rows/);
+});
+
+test('register-aware presentation: hiring feel for guided/generative, recap prose for sounding board', () => {
+  assert.match(doc, /hired, not configured/);
+  assert.match(doc, /every specialist earns their seat/);
+  assert.match(doc, /swap qa for a performance engineer/);
+  assert.match(doc, /recap prose register/);
+  assert.match(doc, /1 blessing move/);
+  assert.match(doc, /NO option-list wizard/);
+});
+
+test('solo outcome is first-class, floor of 1, non-redundancy collapse', () => {
+  assert.match(doc, /no second seat survives the non-redundancy test/);
+  assert.match(doc, /floor of 1/);
+  assert.match(doc, /never an anticlimax/);
+  assert.match(doc, /collapses into another seat/);
+});
+
+test('derivation reads the work; templates are priors; binding ladder carries tiers not model ids', () => {
+  assert.match(doc, /Derive from the WORK/);
+  assert.match(doc, /PRIORS only, never fences/);
+  assert.match(doc, /composes across domains/);
+  assert.match(doc, /binds by reference/);
+  assert.match(doc, /Tiers, never model ids, on both rungs/);
+  assert.match(doc, /`non_redundancy` line naming its distinct write-surface, expertise,\s+or verification duty/);
+});
+
+test('A8: an existing roster gets a diff through the governed mutation ops, never a silent rewrite', () => {
+  assert.match(doc, /roster DIFF/);
+  assert.match(doc, /`addTeamRole`,\s+`removeTeamRole`, `swapTeamRole`/);
+  assert.match(doc, /A silent rewrite is a workflow failure/);
+});
+
+test('A11: the machine receipt format is pinned and the validator command targets the real lib', () => {
+  assert.match(doc, /team-manifest\/v1: K\/K checks, N roles, M bound/);
+  assert.match(doc, /ferrox-core\/bin\/lib\/team-manifest\.cjs/);
+  assert.match(doc, /a bare prose "team\s+assembled" line is a workflow failure/);
+  assert.match(doc, /the station never leaves an\s+invalid manifest behind/);
+});
+
+test('TEAM.md only after blessing, the only representation, committed as its own commit', () => {
+  assert.match(doc, /Materialize ONLY after blessing/);
+  assert.match(doc, /ONLY representation of the roster/);
+  assert.match(doc, /no\s+team block rides `BRAINSTORM\.md`/);
+  assert.match(doc, /Commit TEAM\.md as its OWN commit/);
+  assert.match(doc, /`derived_from`/);
+  assert.match(doc, /`manifest_hash`/);
+});
+
+test('team assembly credits ijfw-team', () => {
+  const block = doc.split('\n<team_assembly>\n')[1].split('\n</team_assembly>')[0];
+  assert.match(block, /ijfw-team, internal port, with credit/);
+});
+
 // ─── Dogfood: the doc passes its own gate ────────────────────────────────────
 
 test('the rewritten workflow doc scores 6/6 on the skill-instruction-files gate', () => {

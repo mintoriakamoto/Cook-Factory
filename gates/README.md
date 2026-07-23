@@ -1,6 +1,6 @@
 # The Ferrox Gate Library
 
-6 validated gate packs, 39 machine checks, 36 sealed fluent-but-wrong mutants, every pack
+8 validated gate packs, 54 machine checks, 47 sealed fluent-but-wrong mutants, every pack
 proven to catch all of its mutants before it is allowed to gate anything. This directory
 is the public face of that library: the packs, their Gate Cards, and their fixture
 generators. The fixtures themselves are sealed and never committed.
@@ -173,6 +173,52 @@ verdict validity.
 | SS-04 | relation | every cross-sheet reference names an existing worksheet |
 | SS-05 | relation | declared totals recompute from their ranges within tolerance |
 
+### citation-sources (domain: `research`, tier 4)
+
+Fills the research registry lane: the grounding floor for report deliverables whose claims
+trace to a SOURCES.md ledger. The failure mode it kills is the citation that looks
+scholarly and is not load-bearing: the paraphrase presented as a quote, the marker pointing
+at the wrong source, the retraction nobody flagged. Everything runs offline: the ledger's
+stored excerpt (captured at ingest) is the trusted verbatim anchor, URL checks are syntax
+only, and live link checking stays a workflow-layer advisory. Quote matching runs under a
+locked normalization table (NFC, whitespace collapse, curly-to-straight quotes and dashes,
+plus a legal alteration grammar of ellipsis and at most 1 bracketed substitution); an
+alteration beyond that grammar returns INDETERMINATE for the judgment eye, never a guessed
+FAIL, except that an ellipsis eliding a negation always fails.
+
+| Check | Category | What it asserts |
+|---|---|---|
+| CS-01 | structure | ledger parses, sources schema valid, integrity holds: archived and paywalled entries carry excerpt plus content_hash, and every content_hash equals the sha256 of the stored excerpt (a drifted excerpt fails here) |
+| CS-02 | grounding | claim referential integrity: every `[S:id]` marker cites an existing ledger id, and a retracted entry cited without acknowledgment fails |
+| CS-03 | grounding | verbatim quote match against the ledger excerpt under the locked normalization and alteration grammar; beyond-grammar alterations return INDET, a negation-hiding ellipsis fails |
+| CS-04 | value | every ledger url parses as a WHATWG URL; syntax only, no network ever |
+| CS-05 | grounding | unresolved-claim scan: in a `claims: declared` report every enumerated claim carries a marker, and markers hidden in comments or fences do not count |
+| CS-06 | value | dead-ledger advisory: entries the report never cites surface as WARN lines only, never a FAIL |
+
+### lore-consistency (domain: `writing`, tier 2, relational)
+
+The declared-canon gate for chapter drafts: tier 2 relational, measured against the
+canon-facts block a lore-keeper maintains plus a planner-authored trusted contract, via an
+orchestrator-built JSON bundle (the test-generation mechanism; the chapter markdown is the
+only builder-authored member). It checks the declared slice with 100 percent reliability
+and leaves prose judgment explicitly to the eyes: the receipt never prints a bare PASS, it
+prints `LORE GATE: CONTRACT HONORED (N/M declared-fact checks)` with a scope disclaimer and
+the canon_facts_hash it was validated against, alongside the standard `FAIL` and `gate: N/M`
+machine lines. An advisory tier (near-miss name spellings at edit distance 1 to 2, unlisted
+entities) warns and never fails.
+
+| Check | Category | What it asserts |
+|---|---|---|
+| LC-01 | structure | bible integrity: the lore member parses and validates through the canon-facts library |
+| LC-02 | grounding | contract referential integrity: every pov, location, cast, and thread id in the trusted contract resolves against the declared canon |
+| LC-03 | relation | required-cast presence: every required and self-declared on-stage id matches in the chapter body by word-boundary canonical name or declared alias |
+| LC-04 | relation | status and lifecycle vs scene date: dead or departed entities stay off stage, nobody appears before their ledgered introduction |
+| LC-05 | value | timeline stamp: the date parses under the canon calendar, sits inside era bounds, and is monotone vs the prior chapter unless a truthful flashback flag says otherwise |
+| LC-06 | value | age arithmetic: every declared age equals birthdate vs scene date arithmetic; an age with no declared birthdate fails as unverifiable |
+| LC-07 | structure | POV contract echo: the draft frontmatter echoes the trusted contract exactly, self-declaring only additional cast and ages |
+| LC-08 | relation | thread ledger legality: touch, open, and close events replay legally against the prior-state event ledger |
+| LC-09 | value | the machine floor: body word count within 10 percent of target and every contract beat id present in the draft's beat manifest |
+
 ## The sealing model
 
 Gate assets (references, mutants, calibration stubs) live in a content-addressed sealed
@@ -216,6 +262,12 @@ node gates/brainstorm-artifact/gate.cjs --workspace . .planning/brainstorms/topi
 
 # spreadsheets: the workbook, with the card-declared ranges in config
 python3 gates/spreadsheets/gate.py --config config.json model.xlsx
+
+# citation-sources: the report, grounded against the SOURCES.md ledger (offline always)
+node gates/citation-sources/gate.cjs --ledger SOURCES.md report.md
+
+# lore-consistency: the orchestrator-constructed bundle (chapter + lore + trusted contract + prior state)
+node gates/lore-consistency/gate.cjs bundle.json
 ```
 
 Inside the factory, the gate-first executor drives these through `gate-runner` and the

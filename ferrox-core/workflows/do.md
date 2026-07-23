@@ -50,6 +50,7 @@ Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** 
 | Wrapping up sketches, "package the designs", "consolidate sketch findings" | `/ferrox:sketch --wrap-up` | Package sketch findings into reusable skill |
 | Exploring, researching, comparing, or "how does X work" against the existing codebase | `/ferrox:explore` | Codebase-grounded Socratic ideation and idea routing |
 | Brainstorming a topic, "help me think through", "I have an idea", "what if", a blank page | `/ferrox:brainstorm` | Topic ideation with stances, stance-keyed exits into the lifecycle |
+| A world bible, lore, sources ledger, canon, or source-of-truth for a book or research project | `/ferrox:canon-init` | Creates the declared canon store the creative line gates against |
 | Discussing vision for a specific phase, "how should phase N look" | `/ferrox:discuss-phase` | Needs phase context gathering |
 | A complex task: refactoring, migration, multi-file architecture, system redesign | `/ferrox:phase` | Needs a full phase with plan/build cycle |
 | Planning a specific phase or "plan phase N" | `/ferrox:plan-phase` | Direct planning request |

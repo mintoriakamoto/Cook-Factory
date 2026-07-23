@@ -93,7 +93,7 @@ If .planning/ missing: Error — project not initialized.
 <step name="load_plan">
 Read the plan file provided in your prompt context.
 
-Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective, context (@-references), tasks with types, verification/success criteria, output spec.
+Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on, plus the team stamp keys role_id / role_charter / team_manifest_hash when present), objective, context (@-references), tasks with types, verification/success criteria, output spec.
 
 **If plan references CONTEXT.md:** Honor user's vision throughout execution.
 </step>
@@ -627,6 +627,8 @@ This file is the canonical output of this step. The orchestrator reads `.plannin
 **Use template:** @~/.claude/ferrox-core/templates/summary.md
 
 **Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date), status (`status: complete` — required so the audit-open scanner recognises the summary as done).
+
+**Team-staffed plans (v1.13 P2 W3):** when your dispatch prompt carries a `<role_assignment>` block (the plan frontmatter is role-stamped), the SUMMARY frontmatter must additionally ECHO `role_id` and `role_charter` byte for byte from the plan stamp. You echo the role_charter, never author it: do not restate, trim, extend, or reinterpret the charter anywhere in your output. The verifier compares the echo to the plan stamp and FAILS any difference.
 
 **Title:** `# Phase [X] Plan [Y]: [Name] Summary`
 

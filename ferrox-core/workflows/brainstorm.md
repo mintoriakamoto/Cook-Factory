@@ -1,7 +1,7 @@
 ---
 name: brainstorm-workflow
 description: Topic ideation with 3 silent stances (guided, generative, sounding board), stance-keyed exits, Decision promotion, and park-and-resume session records routed into the lifecycle
-budget_tokens: 9500
+budget_tokens: 13000
 ---
 
 <!-- Discipline modeled on Superpowers brainstorming by Obra (MIT), adapted. -->
@@ -19,7 +19,10 @@ thinking-out-loud. Parallel researcher subagents stay on tap and a browser
 companion serves questions better seen than read. Output:
 `.planning/brainstorms/{slug}-{date}/BRAINSTORM.md` (+ `research/` +
 `screens/` + `SESSION-NOTES.md`), committed, then routed into the lifecycle
-through exactly 3 exits.
+through exactly 3 exits. The promote and seed exits also assemble the
+project's dynamic team (`<team_assembly>`): the roster is derived from the
+approved work, blessed by the user, written to .planning/TEAM.md, and
+committed before the route executes.
 
 Boundary: `/ferrox:explore` is codebase-grounded Socratic ideation, thinking
 through ideas against the code that exists; `/ferrox:brainstorm` is topic
@@ -430,6 +433,14 @@ Offer exactly 3 routes, recommendation-first (this is a judgment question):
    session emitting only Notes and Open Questions is a valid artifact, and
    `SESSION-NOTES.md` makes it resumable.
 
+**The team moment (routes 1 and 2 only).** When the pick is promote or
+seed, run `<team_assembly>` BEFORE executing the route: the roster is
+derived from the approved artifact, blessed, materialized as
+.planning/TEAM.md, validated to a machine receipt, and committed, so the
+downstream workflow arrives staffed. Park assembles no team, and neither
+does declining all 3 routes: the team moment lives INSIDE exits 1 and 2
+and is never a 4th exit.
+
 Execute the chosen route by invoking that command's workflow, passing the
 BRAINSTORM.md path as context. If the user declines all 3, the artifact
 stays in place and the session ends. Either way, stop the visual server if
@@ -578,6 +589,116 @@ askable downstream. Park closes without promoting anything, and that is
 success, not failure.
 </exit_gates>
 
+<team_assembly>
+**When this fires.** Only inside Step 13, when the user picks route 1
+(promote) or route 2 (seed), AFTER the Step 12 artifact approval gate has
+closed. Park (route 3) never assembles a team, and neither does declining
+all 3 routes: a parked session stays a first-class success with no roster.
+
+**Derive from the WORK.** Read the just-approved `BRAINSTORM.md` (the
+Decisions, the captured shape, the Open Questions) and derive the roles
+the work itself needs: name the duties of creation, review, integration,
+and verification the captured shape demands, then size the roster by
+complexity, floor of 1. Domain templates are PRIORS only, never fences: a
+book brainstorm suggests lore, continuity, and line-editor archetypes; a
+software brainstorm suggests reviewer and security archetypes; a mixed
+project composes across domains. Tier heuristic: deep reasoning and review
+duties climb toward higher tiers, primary creation sits mid-tier, lookups
+and mechanical passes sit low; roles carry tiers, never model ids. Risk
+raises seats: auth or payment surfaces add a security duty. (The
+derivation heuristics and the hiring presentation below are adapted from
+Sean Donahoe's ijfw-team, internal port, with credit.)
+
+Every role carries: `id` (kebab-case), `charter` (the full trusted role
+text), `rationale` tied to the brief ("because your Decision on X..."),
+and a `non_redundancy` line naming its distinct write-surface, expertise,
+or verification duty. Write `owns` and `reviews` globs with ONLY `*`, `?`,
+and `**` over `/`-separated segments; matching is case-insensitive, and
+the validator refuses `{`, `[`, and `\` outright (`E_BAD_SURFACE`, fail
+closed) because the deterministic overlap check cannot evaluate them. A role that cannot state its non-redundancy
+collapses into another seat: the roster shrinks toward 1, never pads.
+
+**Binding ladder.** For each role, check the agent registry (`agents/`
+plus the model catalog): a matching existing agent binds by reference
+(`binding: {agent: <name>}`; tier optional, the catalog default applies).
+No match means `binding: {inline: true}` with the full charter carried in
+the manifest and a required tier. Tiers, never model ids, on both rungs.
+
+**The blessing gate (the trust root).** Present the roster
+recommendation-first, and present each role's FULL charter VERBATIM,
+including its `owns` and `reviews` globs: never a rationale summary. The
+charter shown here is the exact text injected downstream as a trusted
+block, so what the user blesses is what dispatch runs. Register-aware
+presentation:
+
+- Guided and generative: the hiring presentation. The team should feel
+  hired, not configured: every specialist earns their seat with a
+  because-rationale tied to the brief, and the adjust affordance is
+  explicit ("swap qa for a performance engineer" works exactly as said).
+- Sounding board: the roster rides the recap prose register, a natural
+  paragraph, 1 blessing move, and NO option-list wizard.
+
+A solo outcome is first-class, never an anticlimax: "this work needs 1
+generalist; no second seat survives the non-redundancy test" is a
+complete, correct presentation. Blessed roles carry exit provenance
+`(stance: {stance}, confirmed at exit)`. Unblessed or edited-out roles
+become Notes in the artifact, never manifest rows.
+
+**Materialize ONLY after blessing.** Write the manifest to
+.planning/TEAM.md: manifest-level `derived_from` carries the brainstorm
+slug and the current (or target) milestone, and `manifest_hash` is
+computed by the lib. TEAM.md is the ONLY representation of the roster: no
+team block rides `BRAINSTORM.md`, and the artifact template in Step 10 is
+unchanged.
+
+**Derive over an existing roster (governed, never silent).** If
+.planning/TEAM.md already exists, do not rewrite it: present a roster DIFF
+against the existing manifest (kept, added, removed, and swapped seats)
+and route every change through the governed mutation ops (`addTeamRole`,
+`removeTeamRole`, `swapTeamRole` in
+`ferrox-core/bin/lib/team-manifest.cjs`); each op re-validates the result
+and refuses an invalid roster. A silent rewrite is a workflow failure.
+
+**The station floor (machine receipt).** After writing TEAM.md, run the
+validator and emit its MACHINE output as the seam receipt:
+
+```bash
+_FERROX_SHIM_NAME="ferrox-tools.cjs"; _FERROX_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; FERROX_TOOLS="${_FERROX_RUNTIME_ROOT}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; if [ -f "$FERROX_TOOLS" ]; then ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${_FERROX_RUNTIME_ROOT}/.claude/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${_FERROX_RUNTIME_ROOT}/.claude/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${_FERROX_RUNTIME_ROOT}/.codex/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${_FERROX_RUNTIME_ROOT}/.codex/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif command -v ferrox-tools >/dev/null 2>&1; then FERROX_TOOLS="$(command -v ferrox-tools)"; ferrox_run() { "$FERROX_TOOLS" "$@"; }; elif [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${HERMES_HOME:-$HOME/.hermes}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${HERMES_HOME:-$HOME/.hermes}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${CURSOR_CONFIG_DIR:-$HOME/.cursor}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${CODEX_HOME:-$HOME/.codex}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${CODEX_HOME:-$HOME/.codex}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${GEMINI_CONFIG_DIR:-$HOME/.gemini}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${COPILOT_CONFIG_DIR:-$HOME/.copilot}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${AUGMENT_CONFIG_DIR:-$HOME/.augment}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${TRAE_CONFIG_DIR:-$HOME/.trae}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${TRAE_CONFIG_DIR:-$HOME/.trae}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${QWEN_CONFIG_DIR:-$HOME/.qwen}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${QWEN_CONFIG_DIR:-$HOME/.qwen}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${CLINE_CONFIG_DIR:-$HOME/.cline}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${CLINE_CONFIG_DIR:-$HOME/.cline}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${GROK_AGENTS_HOME:-$HOME/.agents}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${GROK_AGENTS_HOME:-$HOME/.agents}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; elif [ -f "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/ferrox-core/bin/${_FERROX_SHIM_NAME}" ]; then FERROX_TOOLS="${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/ferrox-core/bin/${_FERROX_SHIM_NAME}"; ferrox_run() { node "$FERROX_TOOLS" "$@"; }; else echo "ERROR: ferrox-tools.cjs not found at $FERROX_TOOLS and ferrox-tools is not on PATH. Run: npx -y ferrox-factory@latest --claude --local" >&2; exit 1; fi; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${FERROX_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${FERROX_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+TEAM_LIB=""; for _tl in "${FERROX_TOOLS%/*}/lib/team-manifest.cjs" "$HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs" "./.claude/ferrox-core/bin/lib/team-manifest.cjs" "./ferrox-core/bin/lib/team-manifest.cjs"; do if [ -f "$_tl" ]; then TEAM_LIB="$_tl"; break; fi; done
+if [ -z "$TEAM_LIB" ]; then echo "ERROR: team-manifest.cjs not found; tried: ${FERROX_TOOLS%/*}/lib/team-manifest.cjs, $HOME/.claude/ferrox-core/bin/lib/team-manifest.cjs, ./.claude/ferrox-core/bin/lib/team-manifest.cjs, ./ferrox-core/bin/lib/team-manifest.cjs" >&2; exit 1; fi
+node -e '
+const fs = require("node:fs");
+const tm = require(process.argv[1]);
+const path = require("node:path");
+// A10: inject the known-agent roster from the model catalog beside the lib,
+// so W_UNKNOWN_AGENT is live and "bound" counts only real agents; a missing
+// catalog degrades to no roster check (the prior behavior).
+let agents;
+try { agents = Object.keys(require(path.join(path.dirname(process.argv[1]), "model-catalog.cjs")).AGENT_DEFAULT_TIERS); } catch { agents = undefined; }
+const checks = tm.PARSE_CODES;
+const r = tm.parseTeamManifest(fs.readFileSync(".planning/TEAM.md", "utf8"), agents === undefined ? undefined : { agents });
+const failed = new Set(r.errors.map((e) => e.code));
+const roles = r.ok ? r.manifest.roles : [];
+const bound = roles.filter((x) => x.effective_binding === "agent").length;
+console.log("team-manifest/v1: " + (checks.length - failed.size) + "/" + checks.length + " checks, " + roles.length + " roles, " + bound + " bound");
+for (const e of r.errors) console.log("FAIL " + e.code + " " + e.path + ": " + e.message);
+process.exit(r.ok ? 0 : 1);
+' "$TEAM_LIB"
+```
+
+The receipt is the machine line, shaped exactly
+`team-manifest/v1: K/K checks, N roles, M bound`; a bare prose "team
+assembled" line is a workflow failure. The denominator is `tm.PARSE_CODES`,
+the checks a parse can actually evaluate: mutation-op-only refusals
+(`E_ROLE_EXISTS`, `E_ROLE_NOT_FOUND`, `E_ROLE_LIVE_IN_PLAN`) are excluded,
+so K never overcounts. On any FAIL line, fix the manifest
+and re-run until valid BEFORE proceeding: the station never leaves an
+invalid manifest behind.
+
+**Commit loudly.** Commit TEAM.md as its OWN commit (never folded into the
+brainstorm commit) before executing the chosen route, and say so in-chat.
+</team_assembly>
+
 <session_record>
 `SESSION-NOTES.md` lives beside the artifact at
 `.planning/brainstorms/{slug}-{date}/SESSION-NOTES.md` and is APPEND-ONLY:
@@ -685,5 +806,7 @@ ferrox-tools visual.stop --project-dir .
 - [ ] `SESSION-NOTES.md` appended with stable checkpoint ids and a current status
 - [ ] User reviewed the written doc before routing
 - [ ] Exactly 3 routes offered at the end, park treated as a successful exit
+- [ ] Team moment: promote and seed ran `<team_assembly>` (derived from the work, floor of 1, verbatim-charter blessing, register-aware); park and decline assembled no team
+- [ ] TEAM.md written only after blessing, validated to the machine receipt (`team-manifest/v1: K/K checks, N roles, M bound`), committed as its own commit; an existing roster diffed and mutated through the governed ops, never rewritten
 - [ ] No scoring gates run on ideation, no subagent builders spawned
 </success_criteria>

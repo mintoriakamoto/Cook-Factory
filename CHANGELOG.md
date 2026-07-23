@@ -1,5 +1,216 @@
 # Changelog
 
+## 1.13.0 (2026-07-23): The Dynamic Team
+
+The factory now staffs itself. Finish a brainstorm, say GO, and v1.13 derives the team
+the work needs before any plan exists ("for this I would need X, X, and X"), presents
+every role with its full charter and its case for a seat, and writes the blessed roster
+to `.planning/TEAM.md`, a hash-stamped manifest the whole line trusts. The planner
+staffs plans from it, dispatch injects each charter as a trusted block on the generic
+executor, the executor echoes and never authors, and the fixed gates and eyes stay
+exactly where they were: dynamic where creativity lives, fixed where trust lives. The
+same release lands the declared-canon line: a novel and a codebase now run the same
+hardened line, receipts included.
+The combined release ships with the gate library at 8 packs, 54 machine checks, and 47
+sealed fluent-but-wrong mutants, and the suite at 1248 tests, 1241 passing, 7 skipped, 0
+failing, green twice consecutively with identical aggregates.
+
+### The team moment: work-derived roles at the brainstorm exit
+
+- **Derived from the WORK, never a template.** At the brainstorm's promote and seed
+  exits, after the artifact is approved and before any plan exists, the derivation reads
+  the captured work shape and proposes the roles it needs. Domain rosters (book,
+  software, campaign) are priors that inform, never fences; mixed projects compose
+  cross-domain rosters.
+- **Floor of 1, and every seat earns itself.** Each derived role states its
+  non-redundancy (a distinct write surface, expertise, or verification duty) or the
+  roster collapses toward 1. A solo outcome is first-class: "this work needs 1
+  generalist; no second seat survives the non-redundancy test."
+- **Hiring-feel blessing is the trust root.** Every role is presented with its FULL
+  charter verbatim (including owns and reviews surfaces), a because-rationale tied to
+  the brief, and a swap affordance; you bless or edit recommendation-first, in 1 move.
+  Unblessed roles are notes, never manifest rows.
+- **`.planning/TEAM.md` is the single manifest** (team-manifest/v1 fenced YAML) with a
+  deterministic parser lib, content hash, referential integrity validators (overlapping
+  owns without a review edge refused, empty surfaces refused), and governed mutation ops
+  (add, remove, swap) that re-validate the result and refuse invalid rosters. The
+  assembly receipt is machine output, never prose: `team-manifest/v1: K/K checks, N
+  roles, M bound`.
+
+Proven by dogfood on the shipped demo: the v1.12 cyberpunk-novel brainstorm exits into a
+5 seat roster, 4 bound by reference to shipped agents and 1 chartered inline
+(`docs/demos/brainstorm-cyberpunk-novel/TEAM.md`, the real validated artifact). The
+manifest head and the inline seat, from that file:
+
+```yaml
+schema: team-manifest/v1
+derived_from:
+  brainstorm: cyberpunk-novel-2026-07-23
+  milestone: wetlease-novel-v1
+manifest_hash: 2217ce11a06339bb110997d935fb1afe78534f2229855ed1818a71629290778d
+roles:
+  # ... 4 agent-bound seats (lore-keeper, chapter-drafter, continuity-checker, line-editor) ...
+  - id: memory-economy-specialist
+    charter: >-
+      Own the memory-property tech bible under book/tech/: work out the Ledger notary mechanics, custody-stamp format,
+      render-tax arithmetic, and the forgery-verification asymmetry as internally consistent rules; propose tech canon
+      to the lore keeper and review chapters for any scene where the technology breaks its own economics.
+    binding:
+      inline: true
+    tier: frontier
+```
+
+The assembly seam receipt from the run, verbatim:
+
+```
+team-manifest/v1: 23/23 checks, 5 roles, 4 bound
+```
+
+### The staffed plan and the trusted dispatch
+
+- **The chapter-contract discipline generalized.** The planner stamps each staffed plan
+  with 3 keys: `role_id` (assigned by owns and reviews surface match), `role_charter`
+  (copied byte for byte from TEAM.md), and `team_manifest_hash` (the staleness guard).
+  Plan-checker validates all of it: role exists, charter echoes byte for byte, stamp
+  fresh against the live manifest, non-redundancy validators consulted, stamp complete.
+- **Dispatch re-validates, then injects.** Before dispatching a role-stamped plan,
+  execute-phase re-verifies the stamp hash against the LIVE TEAM.md; a stale stamp stops
+  the dispatch with the named fix (re-stamp the plans or re-bless the roster). A fresh
+  stamp injects the charter as a trusted `role_charter` block on the generic executor,
+  which echoes it in the SUMMARY frontmatter; the verifier fails any echo drift.
+- **Always the same hardened executor.** A role never swaps the agent: agent-bound and
+  inline-charter roles both dispatch ferrox-executor, and the binding shapes only the
+  prompt and the model tier (explicit tiers resolve through the new `model.resolve-tier`
+  verb; agent-bound roles without a tier take the catalog default).
+- **Degrades are loud, never silent.** A stamped role missing from the live roster
+  dispatches roleless with a pinned receipt line in the wave record (`ROLE DEGRADE: role
+  '<id>' absent from live TEAM.md; dispatched roleless`); a tier missing from the ladder
+  surfaces the resolver's NOT IN LADDER notice and dispatches on the default model. A
+  roster mutation triggers a documented stale-stamp sweep that names every affected plan
+  for re-stamp.
+- **Absent TEAM.md is zero behavior change.** No manifest, a foreign manifest, or
+  unmatched surfaces all mean roleless plans, which stay fully valid everywhere.
+
+From the dogfood run, the staffed plan's
+3-key stamp exactly as the planner wrote it:
+
+```yaml
+role_id: chapter-drafter
+role_charter: >-
+  Draft and revise chapters against the planner-stamped chapter contract and the declared canon: salt-rot noir register,
+  waterline settings, dialogue as bartering, every scene honoring the locked memory physics and the 3-week countdown.
+team_manifest_hash: 2217ce11a06339bb110997d935fb1afe78534f2229855ed1818a71629290778d
+```
+
+The step 2.6 preflight returned `{"verdict":"role", ...}` against the live manifest,
+plan-checker Dimension 7d passed 5/5 (complete stamp, role exists, charter echo byte for
+byte, stamp fresh, non-redundancy validators clean), and the verifier's echo check closed
+the loop verbatim:
+
+```
+role_id echo: ok
+role_charter echo: ok, byte for byte (234 bytes)
+ROLE-CHARTER ECHO: VERIFIED
+```
+
+The negative paths were receipted too, each repaired on the record: a hand-edit to
+TEAM.md failed `E_HASH_MISMATCH` and flipped the doctor line to INVALID, removing a role
+live in a stamped plan refused with `E_ROLE_LIVE_IN_PLAN`, a roster mutation after
+stamping stopped dispatch with `{"verdict":"stop","reason":"stale-stamp"}` and the sweep
+named the plan, and an unconfigured tier surfaced the resolver's NOT IN LADDER notice.
+
+### The work graph, positioned honestly
+
+- The lifecycle already builds a work graph: tasks and artifacts as nodes, dependencies
+  and handoffs as edges, receipts per node. Team assembly is role-labeling that graph
+  and matching agents to the labels. The claim is priority of practice, not coinage of
+  the term: research validated deriving rosters from the work (AutoAgents, IJCAI 2024;
+  AgentVerse, ICLR 2024), and what ships here is the product lifecycle around it:
+  derive the roster from the work, staff the plan, execute under fixed trust gates.
+- Against the MAST failure taxonomy, scoped honestly: write-disjoint waves answer the
+  inter-agent misalignment cluster, per-node receipts answer the verification and
+  termination cluster, and role-violation mitigation is partial (charter injection plus
+  the verifier echo); per-role least-privilege tool allowlists are the named follow-up.
+
+### The declared-canon line
+
+A novel and a codebase now run the same hardened line, receipts included. v1.13 adds a
+declared canon store to the factory (a lore bible for fiction, a source ledger for
+research and nonfiction), 2 new gate packs that score creative work against that store
+deterministically, judgment eyes for exactly the calls the gates refuse, a retcon sweep
+that voids receipts when the canon moves, and a manuscript assembler that compiles the
+book. Proven by dogfood on both lanes: a 2 chapter cyberpunk serial gated CONTRACT
+HONORED (9/9) and assembled, and a sourced research report gated 6/6 with the planted
+quote alteration routing to the judgment eye as designed. At the Part 1 checkpoint the
+library totals were 8 packs, 54 checks, 47 sealed mutants, and the suite grew 1139 to
+1157 tests, all green.
+
+### The canon store and /ferrox-canon-init
+
+- **Declared canon is the contract.** `/ferrox-canon-init` writes the store for the
+  project's domain: `LORE.md` for book projects, `SOURCES.md` for research and
+  nonfiction, both legal in 1 project. Human prose stays human-owned byte for byte; the
+  machine slice is 1 fenced `canon-facts` block (schema canon-facts/v1) that the keeper
+  writes and the gates and eyes consume. Every entry is checkable by a reviewer without
+  asking the author: `status: dead` with `provenance: ch-vault-heist:44`, never "a
+  brooding city".
+- **Ordering lives in 1 place.** `book/SPINE.md` is the single ordering truth; chapter
+  files carry stable slugs and a chapter_id, never sequence numbers. Insertion is a
+  manifest edit only.
+
+### The trust split: planner-authored chapter contracts
+
+- The design insight of the release: the chapter contract (pov, scene_date, location,
+  threads, on-stage cast, word target, beats) is authored by the PLANNER and injected
+  into the trusted side of the gate bundle by the orchestrator. The draft self-declares
+  only additions and ages. A draft can no longer grade its own homework by editing the
+  contract it is graded against.
+
+### 2 packs: lore-consistency and citation-sources
+
+- **lore-consistency** (tier 2 relational, LC-01 to LC-09, 6 sealed fluent mutants):
+  scores a chapter against DECLARED bible facts only. Entities resolve, dead characters
+  stay dead, timelines stay monotonic, declared ages match the arithmetic, threads
+  follow the ledger, the word floor holds. The receipt never prints a bare PASS: the
+  verdict is `LORE GATE: CONTRACT HONORED (N/M declared-fact checks)` plus the scope
+  disclaimer and the `canon_facts_hash` it was earned under, every run.
+- **citation-sources** (research lane, CS-01 to CS-06, 5 sealed fluent mutants): ledger
+  integrity with excerpt hashes, claim markers that resolve honestly, verbatim quote
+  matching under a locked normalization and alteration grammar, URL syntax without ever
+  touching the network. A quote altered beyond the grammar is INDET, never a guess.
+- **The honest-scope doctrine, cited.** On long-narrative claim verification the best
+  published model result is 55.8 percent (NoCha), and frontier models catch planted
+  plot holes in at most 63 percent of stories (FlawedFictions). Competitors answer the
+  big question with a model that is right about 6 times in 10; these packs answer a
+  smaller question, "does the draft contradict a declared fact", with a pure function
+  that is right every time, and say so in the receipt.
+
+### Eyes, fix lanes, and the retcon sweep
+
+- **ferrox-continuity-checker** (book) and **ferrox-method-reviewer** (research) own
+  exactly the judgment slices the gates refuse: INDET and WARN lines route to them
+  verbatim, and no rule is owned by 2 tiers. Continuity BLOCK findings re-dispatch the
+  chapter drafter in revision mode, max 2 passes, then stop honestly; style findings
+  live with the line-editor and its respect_voice guard, never with the gate lane.
+- **The retcon sweep (keeper update mode):** every chapter receipt is pinned to a
+  `canon_facts_hash`. Change a birthdate in the bible and the sweep names every receipt
+  under the old hash as VOID, re-runs the gate deterministically, and either re-pins or
+  flips the verdict. In the dogfood run a 3 year birthdate retcon flipped CONTRACT
+  HONORED (9/9) to FAIL LC-06 / CONTRACT BREACHED (8/9), and the triad resolved it on
+  the record.
+
+### Prose-lane fences and the assembler
+
+- The software line is untouched by construction: verifier, verify-work, merge-gate,
+  and all 5 test-sniff sites are domain-conditioned, with regression tests proving
+  software paths byte-identical.
+- **The manuscript assembler** compiles `book/SPINE.md` plus `book/chapters/` into
+  `build/manuscript.md` with title page and part breaks from the manifest, frontmatter
+  stripped, and a compile report (chapter count, total words, per-chapter words vs
+  target). It hard-errors on orphans in both directions: a chapter file with no spine
+  row, a spine row with no file. The pure render plus serializer split is ported from
+  the changeset pipeline, credit in the header.
+
 ## 1.12.0 (2026-07-23): Brainstorm v3, the Sounding Board
 
 `/ferrox-brainstorm` learns to hold a real creative conversation. v3 gives the workflow

@@ -82,4 +82,4 @@ function resolveModelBackend(opts) {
         reason: notes.length > 0 ? notes.join('+') : 'ok',
     };
 }
-module.exports = { resolveModelBackend };
+module.exports = { resolveModelBackend, ladderModel };

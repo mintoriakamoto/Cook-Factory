@@ -85,6 +85,54 @@ function block(reason) {
   process.exit(2);
 }
 
+// v1.13 Wave 0 (B1): non-code domain waiver, scoped to the 2 CODE instruments.
+// Coverage delta and mutation kill are measurements of a test suite over source
+// code; a prose deliverable (book chapter, research report) has neither, so a
+// non-code project could NEVER clear them and the merge gate would wedge shut.
+// When `.planning/config.json` `domain` normalizes (gate-select rules) to a
+// non-code canonical key, a block whose reasons are ONLY coverage/mutation is
+// converted to an allow with a LOUD 1-line waiver on stdout. Every other
+// criterion (receipts, ownership, hot-seam, burndown, security, verb errors)
+// stays enforced on every domain. A code domain, an absent domain, or an
+// unreadable config never enters this branch, so software behavior is
+// byte-identical. The alias table mirrors src/gate-select.cts ALIASES; the
+// prose-lane-fences test asserts the 2 lists agree so they cannot drift.
+const NON_CODE_CANONICAL = ['writing', 'long-form', 'research'];
+const NON_CODE_ALIASES = {
+  reports: 'long-form',
+  content: 'writing',
+  design: 'writing',
+  conversation: 'writing',
+  support: 'writing',
+  rag: 'research',
+  'factual-synthesis': 'research',
+};
+const WAIVABLE_NON_CODE_REASONS = ['coverage-not-landed', 'mutation-survived'];
+
+/** gate-select normalization: lowercase, trim, spaces/underscores to hyphens. */
+function normalizeDomain(domain) {
+  if (typeof domain !== 'string') return '';
+  return domain.trim().toLowerCase().replace(/[\s_]+/g, '-');
+}
+
+/**
+ * Resolve the project domain from `.planning/config.json` (the A8 domain source
+ * for this hook). Best-effort and never throws: a missing/unreadable config or
+ * absent `domain` key yields nonCode:false, which means NO waiver (fail strict).
+ */
+function projectDomain(cwd) {
+  let raw = '';
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+    if (cfg && typeof cfg.domain === 'string') raw = cfg.domain;
+  } catch {
+    /* no/invalid config: no domain, never waive */
+  }
+  const key = normalizeDomain(raw);
+  const canonical = NON_CODE_ALIASES[key] || key;
+  return { raw, canonical, nonCode: NON_CODE_CANONICAL.indexOf(canonical) !== -1 };
+}
+
 // GitHub MCP tools that can merge/write to a protected branch WITHOUT a shell.
 const MCP_MERGE_PR = 'mcp__com-github-github-mcp-server__merge_pull_request';
 const MCP_PUSH_FILES = 'mcp__com-github-github-mcp-server__push_files';
@@ -342,6 +390,19 @@ process.stdin.on('end', () => {
 
     if (verdict && verdict.decision === 'pass') {
       process.exit(0); // evidence present and the gate passed → ALLOW the merge
+    }
+
+    // v1.13 Wave 0 (B1): the non-code waiver. Only reachable when EVERY failing
+    // reason is a code instrument (coverage/mutation) AND the project's config
+    // domain normalizes to a non-code canonical. Any other reason in the list
+    // (receipts, ownership, security, verb errors, ...) falls through to block.
+    const failing = verdict && Array.isArray(verdict.reasons) ? verdict.reasons : [];
+    if (failing.length > 0 && failing.every((r) => WAIVABLE_NON_CODE_REASONS.indexOf(r) !== -1)) {
+      const dom = projectDomain(cwd);
+      if (dom.nonCode) {
+        process.stdout.write(`Merge-gate guard: NON-CODE DOMAIN WAIVER (domain '${dom.raw}' -> '${dom.canonical}'): waived ${failing.join(' + ')} because coverage and mutation are code-suite instruments that do not exist for prose deliverables; every other merge-gate requirement was enforced and passed.\n`);
+        process.exit(0);
+      }
     }
 
     const reasons = verdict && Array.isArray(verdict.reasons) && verdict.reasons.length

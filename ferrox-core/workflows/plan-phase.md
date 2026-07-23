@@ -765,6 +765,7 @@ Planner prompt:
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
 - {BRAINSTORM_PATHS} (Brainstorm artifacts from step 4.2 — exit-confirmed Decisions are locked constraints, OFF LIMITS to re-litigate; Notes and Open Questions are leads, not constraints; if any exist)
+- .planning/TEAM.md (Team Manifest: blessed roster of roles with charters; consult per the Team-Staffed Plan Stamping discipline in ferrox-planner.md, if exists)
 - {API_SURFACE_PATH} (API Surface — HINT ONLY, when intel capability is active; see <intel_surface_hint> below)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
@@ -830,6 +831,7 @@ ${SPECLESS_FALLBACK_DISABLED ? `
 Output consumed by /ferrox:execute-phase. Plans need:
 - Frontmatter (wave, depends_on, files_modified, autonomous)
 - OPTIONAL gate metadata frontmatter (UGE-02) — emit when known, omit when not (absent is always valid): `domain:` the increment's nature as a gate-select registry key (e.g. `code`, `structured-gen`, `data-sql`, `research`, `extraction`, `writing`); `deliverable_kind:` what the plan produces (e.g. `python-single-file`, `js-module`); `gate_present: true` ONLY when a runnable gate script exists for this increment (never speculatively); `gate_script:` the repo-relative path to that script (required when `gate_present: true`). Execute-phase routes gateable increments to the gate-first executor on these fields — a wrong `gate_present: true` breaks routing, a missing field merely skips the fast lane.
+- BOOK-DOMAIN ONLY (v1.13 Wave 2, A1): a `chapter_contract:` frontmatter block (pov, scene_date, location, threads touch/open/close, flashback, required_on_stage, word_count_target, beats) authored by the planner from `book/SPINE.md` + the LORE.md canon-facts block; execute-phase injects it verbatim into the drafting prompt as the TRUSTED side of the gate bundle. Research-domain plans instead carry report-shaped tasks naming the `SOURCES.md` ledger. Software plans omit the block and are byte-identical to today.
 - Tasks in XML format with read_first and acceptance_criteria fields (MANDATORY on every task)
 - Verification criteria
 - must_haves for goal-backward verification

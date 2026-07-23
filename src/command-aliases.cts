@@ -1161,6 +1161,14 @@ export const MODEL_COMMAND_ALIASES: CommandAlias[] = [
     "subcommand": "backend",
     "mutation": false
   },
+  // FF-B26 (v1.13 P2 W0, A13): bare tier->model resolve over the tier_models
+  // ladder; the thin wrap of the model-backend ladderModel lookup.
+  {
+    "canonical": "model.resolve-tier",
+    "aliases": ["model resolve-tier"],
+    "subcommand": "resolve-tier",
+    "mutation": false
+  },
   {
     "canonical": "model.anvil-run",
     "aliases": ["model anvil-run"],

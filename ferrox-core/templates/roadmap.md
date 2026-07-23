@@ -119,6 +119,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 - Flow downstream to `must_haves` in plan-phase
 - Verified by verify-phase after execution
 - Format: "User can [action]" or "[Thing] works/exists"
+- Non-code example: a book phase is a part or chapter cluster; its must_haves carry the machine floor, e.g. "Chapter ch-vault-heist drafted within 10 percent of word_count_target: 4000" and "beats [heist goes wrong, betrayal surfaces] delivered", and word_count_target + beats flow into the plan's chapter_contract
 
 **After milestones ship:**
 - Collapse completed milestones in `<details>` tags

@@ -259,6 +259,12 @@ For each artifact in result:
 | true   | false        | ✗ STUB      |
 | false  | -            | ✗ MISSING   |
 
+**Artifact-type guard (v1.13 Wave 0, B3):** resolve the increment domain first: the PLAN.md frontmatter `domain:` key, falling back to `.planning/config.json` `domain` when the plan omits it, normalized per gate-select (lowercase, trim, spaces/underscores to hyphens, aliases to canonical). When the canonical domain is `writing`, `long-form`, or `research` AND the artifact is a prose document (`.md` or other non-source text), Level 3 wiring is NOT an import grep: a chapter or report has no TypeScript importers, and grepping `src/` would file every healthy deliverable as a false ORPHANED. Instead verify wiring as: the file exists, is non-empty, its frontmatter (when present) parses as valid YAML, and it matches the shape its must_haves declare (required sections or contract keys present). All hold → WIRED; missing/empty → MISSING or STUB exactly as Levels 1-2 already classify. Software artifacts, and every other domain, use the import/usage greps below unchanged.
+
+**Chapter-contract spine-backward check (v1.13 Wave 2):** when the plan frontmatter carries a `chapter_contract` block (book-domain plans), spine-backward verification extends the prose branch above with the contract checks: the draft exists at its slug path (`book/chapters/ch-<slug>.md`, the slug from the spine manifest), the draft frontmatter ECHOES the trusted contract fields exactly (pov, scene_date, location, threads, flashback, required_on_stage, word_count_target, beats; only `additional_on_stage` and optional `ages` may be self-declared), the body word count lands within 10 percent of `word_count_target`, and the declared threads and pov match the plan. Any echo mismatch or out-of-band word count → STUB with the mismatched field named in issues; a missing draft → MISSING. Research-domain artifacts and software artifacts are untouched by this check.
+
+**Role-charter echo check (v1.13 Part 2 Wave 3):** when the plan frontmatter carries the 3-key team stamp (`role_id`, `role_charter`, `team_manifest_hash`; team-staffed plans, any domain), the plan's SUMMARY.md frontmatter must ECHO the stamp: `role_id` equal to the plan's, and `role_charter` equal to the plan's EXACTLY, byte for byte. This is the chapter_contract echo discipline generalized: the planner stamps, the executor echoes, never authors. A missing echo or any byte difference is a FAIL, named as a role-charter echo mismatch with the plan and the differing field in issues. One exception: when the wave log or the SUMMARY carries the loud degrade receipt verbatim (`ROLE DEGRADE: role '<id>' absent from live TEAM.md; dispatched roleless`), the plan was dispatched roleless by design and no echo is expected; in that case the receipt line itself must be present, and a missing echo WITHOUT the receipt line is the same named FAIL. Roleless plans (no stamp keys) are untouched by this check.
+
 **For wiring verification (Level 3)**, check imports/usage manually for artifacts that pass Levels 1-2:
 
 ```bash
@@ -288,6 +294,8 @@ grep -r "$artifact_name" "${search_path:-src/}" --include="*.ts" --include="*.ts
 Artifacts that pass Levels 1-3 (exist, substantive, wired) can still be hollow if their data source produces empty or hardcoded values. Level 4 traces upstream from the artifact to verify real data flows through the wiring.
 
 **When to run:** For each artifact that passes Level 3 (WIRED) and renders dynamic data (components, pages, dashboards — not utilities or configs).
+
+**Artifact-type guard (v1.13 Wave 0, B3):** for a prose artifact in a non-code domain (`writing`, `long-form`, `research` per the Level 3 guard above), SKIP the React-hook and data-source greps below: they cannot match prose and a zero-hit grep must never read as hollow. Instead confirm the document carries real content, not placeholder headings only: at least 1 body paragraph under its required sections, and no TODO/TBD/lorem placeholder markers standing in for content. Note the check with 1 line in the report. Software artifacts proceed below unchanged.
 
 **How:**
 

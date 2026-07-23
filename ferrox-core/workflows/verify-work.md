@@ -264,6 +264,20 @@ Then **prepend** this test to the test list:
 - expected: "Kill any running server/service. Clear ephemeral state (temp DBs, caches, lock files). Start the application from scratch. Server boots without errors, any seed/migration completes, and a primary query (health check, homepage load, or basic API call) returns live data."
 
 This catches bugs that only manifest on fresh start — race conditions in startup sequences, silent seed failures, missing environment setup — which pass against warm state but break in production.
+
+**Non-code domain branch (v1.13 Wave 0, B2):**
+
+Resolve the phase domain BEFORE injecting the smoke test: read the `domain:` frontmatter key from the executed plans' PLAN.md files, falling back to `.planning/config.json` `domain` when no plan declares one. Normalize per gate-select (lowercase, trim, spaces/underscores to hyphens, resolve aliases to the canonical key). When the canonical domain is `writing`, `long-form`, or `research` (aliases: reports, content, design, conversation, support, rag, factual-synthesis):
+
+- Do NOT inject the Cold Start Smoke Test above: there is no server to boot for a prose deliverable.
+- Instead **prepend** this test:
+  - name: "Deliverable Shape Test"
+  - expected: "Open the primary deliverable(s) named by the plan. Each one exists, is non-empty, its frontmatter (when declared) parses as valid YAML, and the document matches its declared shape: the sections, headings, or chapter contract the plan promised. No application boot is required."
+- When any executed plan carries a `chapter_contract` frontmatter block (book-domain, v1.13 Wave 2), also **prepend**:
+  - name: "Chapter Contract Test"
+  - expected: "For each chapter the phase drafted: the draft exists at its `book/chapters/ch-<slug>.md` path, its frontmatter echoes the plan's trusted chapter_contract exactly (pov, scene_date, location, threads, flashback, required_on_stage, word_count_target, beats), the body word count is within 10 percent of word_count_target, and the declared threads and POV match the plan. Only additional_on_stage and optional ages are self-declared."
+
+Every other domain follows the software path above unchanged.
 </step>
 
 <step name="create_uat_file">
@@ -440,6 +454,7 @@ Infer severity from description:
 - Contains: doesn't work, wrong, missing, can't → major
 - Contains: slow, weird, off, minor, small → minor
 - Contains: color, font, spacing, alignment, visual → cosmetic
+- Non-code domains (writing/long-form/research) add: deliverable missing, file empty, frontmatter does not parse → blocker; contradicts canon, wrong facts, missing section, broken citation, quote does not match source → major; awkward phrasing, repetitive, pacing → minor; formatting, heading style → cosmetic
 - Default if unclear: major
 
 Update Tests section:
@@ -951,6 +966,9 @@ On context reset: File shows last checkpoint. Resume from there.
 | "doesn't work", "nothing happens", "wrong behavior" | major |
 | "works but...", "slow", "weird", "minor issue" | minor |
 | "color", "spacing", "alignment", "looks off" | cosmetic |
+| Non-code (writing/long-form/research): "deliverable missing", "file empty", "frontmatter does not parse" | blocker |
+| Non-code: "contradicts the canon", "wrong facts", "missing section", "broken citation" | major |
+| Non-code: "awkward phrasing", "repetitive", "pacing feels off" | minor |
 
 Default to **major** if unclear. User can correct if needed.
 

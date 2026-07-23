@@ -163,6 +163,12 @@
     "ferrox-intel-updater":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
     "ferrox-mempalace-curator":      { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
     "ferrox-security-auditor":       { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "verification", "routingTier": "heavy" },
-    "ferrox-user-profiler":          { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "research",     "routingTier": "heavy" }
+    "ferrox-user-profiler":          { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "research",     "routingTier": "heavy" },
+
+    "ferrox-lore-keeper":            { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "execution",    "routingTier": "light" },
+    "ferrox-continuity-checker":     { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "ferrox-line-editor":            { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "execution",    "routingTier": "light" },
+    "ferrox-chapter-drafter":        { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "execution",    "routingTier": "standard" },
+    "ferrox-method-reviewer":        { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" }
   }
 }

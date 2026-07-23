@@ -127,6 +127,11 @@ Which phases cover which requirements. Updated during roadmap creation.
   - Feature is verified (tests pass, manual check done)
   - Feature is committed
 
+Completion criteria are domain-shaped. Non-software examples:
+
+- A book chapter is "Complete" when: the draft exists at its `book/chapters/ch-<slug>.md` path, frontmatter echoes the chapter contract, word count is within 10 percent of word_count_target, and the continuity receipts are green
+- A research report is "Complete" when: every claim maps to a SOURCES.md ledger entry, quoted text matches the stored excerpt, and the citation gate passes
+
 </evolution>
 
 <example>

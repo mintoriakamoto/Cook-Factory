@@ -338,6 +338,23 @@ deliverable_kind: ""        # OPTIONAL — what this plan produces (e.g. python-
 gate_present: false         # OPTIONAL — set true ONLY when a runnable gate script exists for this increment; omit otherwise
 gate_script: ""             # OPTIONAL — repo-relative path to the gate script (required when gate_present: true)
 
+chapter_contract:           # BOOK-DOMAIN ONLY (v1.13 A1): planner-authored TRUSTED contract; omit for every other domain
+  pov: ""                   # Point-of-view character
+  scene_date: ""            # Scene date or window
+  location: ""
+  threads:                  # Thread moves this chapter makes
+    touch: []
+    open: []
+    close: []
+  flashback: false
+  required_on_stage: []     # Characters that must appear on the page
+  word_count_target: 0
+  beats: []                 # The beats the draft must deliver
+
+role_id: ""                 # TEAM-STAFFED ONLY (v1.13 P2): role id from .planning/TEAM.md; omit when TEAM.md is absent, foreign, or no role matches
+role_charter: ""            # TRUSTED charter text copied VERBATIM (byte for byte) from TEAM.md for role_id; executor echoes, never authors
+team_manifest_hash: ""      # TEAM.md manifest_hash at stamp time (A2 staleness guard); required whenever role_id is present
+
 must_haves:
   truths: []                # Observable behaviors
   artifacts: []             # Files that must exist
@@ -424,8 +441,43 @@ Create `.planning/phases/XX-name/{padded_phase}-{plan}-SUMMARY.md` when done
 | `deliverable_kind` | No | What the plan produces (e.g. `python-single-file`) — UGE-02 gate routing |
 | `gate_present` | No | `true` ONLY when a runnable gate script exists (never speculatively) — UGE-02 gate routing |
 | `gate_script` | No | Repo-relative path to the gate script; required when `gate_present: true` |
+| `chapter_contract` | No | BOOK-DOMAIN ONLY (v1.13 A1): the TRUSTED planner-authored chapter contract (pov, scene_date, location, threads touch/open/close, flashback, required_on_stage, word_count_target, beats), derived from the spine manifest `book/SPINE.md` + the LORE.md canon-facts block. Execute-phase injects it verbatim into the drafting prompt; the verifier checks the draft echoes it. Omit for software plans. |
+| `role_id` | No | TEAM-STAFFED ONLY (v1.13 P2 A4): id of the `.planning/TEAM.md` role this plan is assigned to. Assign by owns[]/reviews[] surface match against the plan's `files_modified`. Omit when TEAM.md is absent, foreign (derived_from mismatch), or no role's surfaces match: roleless plans stay fully valid (A9). |
+| `role_charter` | No | TEAM-STAFFED ONLY (v1.13 P2): the TRUSTED role charter for `role_id`, copied VERBATIM (byte for byte) from TEAM.md. The planner authors the stamp; execute-phase injects it into the dispatch prompt; the executor echoes it and never authors it; the verifier checks the echo. Required whenever `role_id` is present. |
+| `team_manifest_hash` | No | TEAM-STAFFED ONLY (v1.13 P2 A2): TEAM.md's `manifest_hash` at stamp time. Plan-checker and dispatch re-validate against the live manifest; a stale stamp FAILS with a named fix (re-stamp the plan or re-bless the roster). Required whenever `role_id` is present. |
 
 Wave numbers are pre-computed during planning. Execute-phase reads `wave` directly from frontmatter.
+
+## Non-Code Domain Task Shaping (v1.13 Wave 2)
+
+Resolve the increment domain first: the plan's `domain:` frontmatter key, falling back to `.planning/config.json` `domain`, normalized per gate-select (lowercase, trim, spaces/underscores to hyphens, aliases to canonical). Software and every other code domain: everything below is skipped and planning is unchanged.
+
+**Book-domain phases (canonical `writing` or `long-form` with a book template):**
+
+- The plan frontmatter CARRIES the `chapter_contract` block above, and the planner authors it: derive `pov`, `scene_date` (or window), `location`, `threads` (touch/open/close), `flashback`, `required_on_stage`, `word_count_target`, and `beats` from the spine manifest (`book/SPINE.md`) plus the LORE.md canon-facts block. These are the A1 TRUSTED fields: execute-phase injects them into the drafting prompt and the draft may only echo them, never author them.
+- Tasks are chapter-shaped: draft or revise against the contract (`files`: `book/chapters/ch-<slug>.md`; `read_first`: `book/SPINE.md`, `LORE.md`, the prior chapter). Never emit tsc/npm/build commands for a prose increment: they have nothing to compile and a green build proves nothing about a chapter.
+- `<verify>` is the machine floor, not a compiler: the draft exists at its slug path, its frontmatter echoes the contract exactly, word count within 10 percent of word_count_target, and the declared threads and pov match the plan. Prose quality (voice, pacing, rhythm) is NEVER a task verify: the eyes and the Crucible own judgment.
+
+**Research-domain phases (canonical `research`):**
+
+- Tasks are report-shaped: gather, synthesize, and draft sections with the sources ledger (`SOURCES.md`) named in read_first, and every claim tasked to trace to a ledger entry.
+- `<verify>` checks ledger integrity (each claim maps to a source id, quoted text anchors to the stored excerpt), never build commands.
+
+## Team-Staffed Plan Stamping (v1.13 Part 2 Wave 2)
+
+The chapter_contract discipline generalized: when a blessed team roster exists, the planner is the TRUSTED author of each plan's role stamp, and everything downstream only echoes it.
+
+**When it applies (A4 scope match):** `.planning/TEAM.md` exists, parses per `ferrox-core/bin/lib/team-manifest.cjs` (`parseTeamManifest`), AND its `derived_from` names the current milestone. Foreign manifest (different milestone or brainstorm) or no TEAM.md: stamp nothing, plans are roleless, planning is unchanged (A9).
+
+**The stamp (per plan):**
+
+1. `role_id`: assign by surface match. Compare the plan's `files_modified` against each role's `owns[]` globs first (the writer seat), then `reviews[]` (the reviewer duty). The role whose owns[] covers the plan's write surface takes the seat. No match: leave the plan roleless; never force-fit or invent a role.
+2. `role_charter`: copy the assigned role's charter text from TEAM.md VERBATIM, byte for byte. Never paraphrase, trim, or improve it: the blessing gate (A1) made that exact text the trust root, and plan-checker compares the echo byte for byte.
+3. `team_manifest_hash`: copy `manifest_hash` from the TEAM.md manifest block (A2). Plan-checker and dispatch re-validate against the live manifest; a roster mutation after stamping makes the stamp stale, and stale stamps FAIL closed.
+
+**Trust split (locked decision 7):** the planner stamps; the executor echoes, never authors. Execute-phase injects `role_charter` into the dispatch prompt exactly as stamped; the executor may not restate, extend, or reinterpret the charter.
+
+**Roleless plans stay fully valid (A9):** absent TEAM.md, foreign manifest, or unmatched surfaces all mean the 3 keys are simply omitted. Zero behavior change; no team mention in the plan.
 
 ## Interface Context for Executors
 
