@@ -1,7 +1,7 @@
 ---
 name: ferrox:brainstorm
-description: Research brainstorm with a visual helper. Hard-gated design dialogue with recommendation-first questions, researcher subagents on tap, and a browser companion; artifact routed into the lifecycle
-argument-hint: "[topic] [--research]"
+description: Research brainstorm with 3 silent stances (guided convergence, agent-generated options, free-form sounding board), researcher subagents on tap, a browser companion, and stance-keyed exits that promote Decisions into the lifecycle
+argument-hint: "[topic] [--research] [--text]"
 allowed-tools:
   - Read
   - Write
@@ -11,27 +11,38 @@ allowed-tools:
   - Glob
   - Agent
   - AskUserQuestion
-requires: [capture, discuss-phase, new-milestone]
+requires: [capture, discuss-phase, explore, new-milestone]
 ---
 <objective>
-Brainstorm session that ends with an approved design artifact. Superpowers
-brainstorming discipline is the floor: hard gate (no implementation until the
-design is approved), 1 question per message, scope check before detail, 2 to 3
-approaches with tradeoffs, sectioned design presentation, self-review, and a
-user review gate on the written doc. On top of that floor: every question is
-recommendation-first (house law), parallel researcher subagents can be fired
-at any point, and a local browser companion shows mockups and diagrams for
-questions better seen than read.
+Brainstorm session that ends with an approved artifact, run in 1 of 3
+stances chosen silently to fit the opening: guided (recommendation-first
+questions and 2 to 3 approaches, for concrete decisions), generative (1
+intake batch, then 4 to 6 pre-checked named options the user reacts to, for
+blank pages), or sounding board (free-form creative collaboration with
+content-triggered capture, for thinking out loud). Superpowers brainstorming
+discipline stays the floor: hard gate (no implementation until the artifact
+is approved), scope check before detail, self-review, and a user review gate
+on the written doc. Parallel researcher subagents stay on tap and a local
+browser companion shows mockups and diagrams for questions better seen than
+read. Exits are stance-keyed (GO fork or recap-confirm); only exit-confirmed
+items are promoted to Decisions, and park is a first-class exit with
+resumable session notes.
 
 Output: `.planning/brainstorms/{slug}-{date}/BRAINSTORM.md` (+ `research/` +
-`screens/`), committed, then routed through exactly 3 exits: promote to
-`/ferrox:discuss-phase`, seed a milestone via `/ferrox:new-milestone`, or park
-via `/ferrox:capture --backlog`.
+`screens/` + `SESSION-NOTES.md`), committed, then routed through exactly 3
+exits: promote to `/ferrox:discuss-phase`, seed a milestone via
+`/ferrox:new-milestone`, or park (optionally `/ferrox:capture --backlog`).
+
+Boundary: `/ferrox:explore` is codebase-grounded Socratic ideation;
+`/ferrox:brainstorm` is topic ideation with stances.
 
 Flags:
 - `--research`: fire 2 to 4 parallel researcher subagents up front, seeded by
-  the topic. The same research fires mid-session whenever the discussion hits
-  a genuine unknown.
+  the topic (in the sounding-board stance this means a visible pre-read
+  before the first reply, never an auto-fire mid-conversation). The same
+  research fires mid-session whenever the discussion hits a genuine unknown.
+- `--text`: plain-text prompts instead of AskUserQuestion, for non-Claude
+  runtimes.
 
 Accepts an optional topic argument: `/ferrox:brainstorm pricing model for the API tier`
 </objective>
@@ -43,8 +54,9 @@ Accepts an optional topic argument: `/ferrox:brainstorm pricing model for the AP
 <context>
 Arguments: $ARGUMENTS
 
-Strip `--research` if present (enables research mode). The remainder is the
-brainstorm topic; if empty, ask for one.
+Strip `--research` if present (enables research mode) and `--text` if
+present (enables TEXT_MODE). The remainder is the brainstorm topic; if
+empty, ask for one.
 </context>
 
 <process>

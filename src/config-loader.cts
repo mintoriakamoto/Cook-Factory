@@ -119,6 +119,10 @@ const CONFIG_DEFAULTS = {
   context_window: _getConfigDefault('context_window'),
   phase_naming: _getConfigDefault('phase_naming'),
   project_code: _getConfigDefault('project_code'),
+  // v1.12 Wave 0.1: the domain fact — classified once, stored here, read by
+  // brainstorm/new-project/design flows and passed into selectGate() by call
+  // sites (gate-select stays PURE, no fs inside the module). Null = unset.
+  domain: _getConfigDefault('domain'),
   subagent_timeout: _getNestedConfigDefault('workflow', 'subagent_timeout'),
   security_enforcement: _getNestedConfigDefault('workflow', 'security_enforcement'),
   security_asvs_level: _getNestedConfigDefault('workflow', 'security_asvs_level'),
@@ -658,6 +662,11 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       context_window: get('context_window') ?? defaults.context_window,
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
       project_code: get('project_code') ?? defaults.project_code,
+      // v1.12 Wave 0.1: propagate the domain fact (schema-registered keys that
+      // never reach _baseConfig are silently inert — the MODEL-01..05 trap).
+      // Stored verbatim (canonical key or registered alias); read seams
+      // normalize via selectGate() exactly like any other domain string.
+      domain: get('domain') ?? defaults.domain,
       subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
       model_overrides: (parsed['model_overrides']) || null,
       models: (parsed['models']) || null,

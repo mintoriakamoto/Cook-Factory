@@ -126,7 +126,7 @@ All subsequent references to the project instruction file use `$INSTRUCTION_FILE
 
 ## 2. Brownfield Offer
 
-**If auto mode:** Skip to Step 4 (assume greenfield, synthesize PROJECT.md from provided document).
+**If auto mode:** Skip to Step 4 (assume greenfield, synthesize PROJECT.md from provided document). Skipping Steps 2b, 2c, and 3 does NOT skip brainstorm ingestion: Step 4's auto branch reads `.planning/brainstorms/*/BRAINSTORM.md` itself, so exit-confirmed brainstorm Decisions land in PROJECT.md either way.
 
 **If `needs_codebase_map` is true** (from init — existing code detected but no codebase map):
 
@@ -324,7 +324,7 @@ ferrox_run query commit "chore: add project config" --files .planning/config.jso
 ferrox_run query config-set workflow._auto_chain_active true
 ```
 
-Proceed to Step 4 (skip Steps 3 and 5).
+Proceed to Step 4 (skip Steps 3 and 5). Brainstorm ingestion is not lost with them: Step 4's auto branch performs the Step 2c artifact read itself.
 
 ## 2b. Prior Spike/Sketch Detection
 
@@ -355,6 +355,33 @@ These findings will be incorporated into project context and available to planni
 ```
 
 If spike/sketch findings skills exist, read their SKILL.md files to inform the questioning phase — they contain validated patterns, constraints, and design decisions that should shape the project definition.
+
+## 2c. Prior Brainstorm Detection
+
+Check for brainstorm artifacts, the exit-as-intake seam from `/ferrox:brainstorm`:
+
+```bash
+ls -dt .planning/brainstorms/*/BRAINSTORM.md 2>/dev/null
+```
+
+**If none exist:** Skip silently to Step 3.
+
+**If exactly 1 exists:** Use it.
+
+**If multiple exist:** Present them most recent first (the `ls -dt` order already is) and offer selection via AskUserQuestion (multiSelect; plain-text numbered list in TEXT_MODE). The most recent session is the recommendation.
+
+For each selected artifact, read the frontmatter (`template:`, `status:`) plus the Decisions, Notes, and Open Questions sections. Parsing is deterministic, not vibes: the contract is `ferrox-core/bin/lib/brainstorm-intake.cjs` (`parseBrainstormArtifact`). A Decisions entry counts ONLY when it carries exit provenance `(stance: {guided|generative|sounding-board}, confirmed at exit)`; anything hedged or unconfirmed is a note, never a decision, per brainstorm.md's promotion rule.
+
+Acknowledge in 1 line, then move on:
+
+```
+Found a brainstorm from {date} on {topic} with {N} locked decisions; using it as intake.
+```
+
+Build the intake split and thread it into Step 3:
+
+- **Exit-confirmed Decisions are the OFF-LIMITS list.** These decisions are OFF LIMITS: never re-ask a decided item unprompted. OFF LIMITS is not immutable: the user reopening a decision by name always works, and when they do, treat it as open again.
+- **Notes and Open Questions sections are fair game and GOOD question seeds.** Nothing there was blessed at exit, so probe them freely; each Open Question even names what would answer it.
 
 ## 3. Deep Questioning
 
@@ -404,6 +431,8 @@ Consult `questioning.md` for techniques:
 - Find edges
 - Reveal motivation
 
+**Brainstorm OFF-LIMITS rule (when Step 2c found artifacts):** exit-confirmed brainstorm Decisions are settled input, not question material: never re-ask a decided item unprompted; fold each into PROJECT.md as given. The user reopening a decision by name always works: if they bring one up, discuss it like any other thread. Brainstorm Notes and Open Questions are the opposite: they are fair game and GOOD question seeds, often the best threads to pull first.
+
 **Check context (background, not out loud):**
 
 As you go, mentally check the context checklist from `questioning.md`. If gaps remain, weave questions naturally. Don't suddenly switch to checklist mode.
@@ -425,6 +454,8 @@ Loop until "Create PROJECT.md" selected.
 ## 4. Write PROJECT.md
 
 **If auto mode:** Synthesize from provided document. No "Ready?" gate was shown — proceed directly to commit.
+
+**Auto mode brainstorm ingestion (the Step 2c read, performed here because auto skips Steps 2b and 3):** run `ls -dt .planning/brainstorms/*/BRAINSTORM.md 2>/dev/null`; for every artifact found, read frontmatter plus Decisions per the `ferrox-core/bin/lib/brainstorm-intake.cjs` contract (exit provenance required; hedged items are notes, never decisions). Auto asks no questions, so the OFF-LIMITS list has nothing to suppress; the obligation flips instead: every exit-confirmed Decision MUST land in the Key Decisions table below with its provenance, never silently skipped. Note any brainstorm Open Questions under Active requirements or Context so they stay visible downstream.
 
 Synthesize all context into `.planning/PROJECT.md` using the template from `templates/project.md`.
 
@@ -482,7 +513,7 @@ Infer Validated requirements from existing code:
 
 **Key Decisions:**
 
-Initialize with any decisions made during questioning:
+Initialize with any decisions made during questioning, plus every exit-confirmed brainstorm Decision from Step 2c (or from the auto-mode ingestion above). Brainstorm rows carry their provenance in the Rationale column so downstream workflows can see the decision was confirmed at a brainstorm exit, in both interactive and auto modes:
 
 ```markdown
 ## Key Decisions
@@ -490,6 +521,7 @@ Initialize with any decisions made during questioning:
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | [Choice from questioning] | [Why] | — Pending |
+| [Brainstorm decision text] | Brainstorm {slug}-{date} (stance: {stance}, confirmed at exit) | — Pending |
 ```
 
 **Last updated footer:**

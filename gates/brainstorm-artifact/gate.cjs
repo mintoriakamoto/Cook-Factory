@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Gate: brainstorm-artifact (MILESTONE v1.10 Wave 3, agent-ops pack).
+ * Gate: brainstorm-artifact (v1.10 Wave 3, template-keyed in v1.12 Wave 2).
  *
  * Tier 2 STRUCTURAL check for BRAINSTORM.md artifacts emitted by the
  * /ferrox-brainstorm workflow. HYGIENE FLOOR ONLY: ideation quality is
@@ -14,29 +14,49 @@
  * Exit 0 iff all checks pass.
  *
  * Usage:
- *   node gate.cjs [--workspace <dir>] <artifact.md>
+ *   node gate.cjs [--workspace <dir>] [--template <slug>] <artifact.md>
  *
  * The artifact path is ALWAYS the last argv token (gate-runner appends it).
  *
- * Checks (complete inventory, mirrored in card.md):
- *   BA-01 structure  all 6 required sections present as H2 headings, in
- *                    template order: Context, Options Considered,
+ * Template resolution (GATE-CARD-SPEC section 9.2 + ADR-ARTIFACT-TEMPLATE-FIELD):
+ *   1. `--template <slug>` wins when given (the card-driven invocation).
+ *   2. Else the artifact frontmatter `template:` field.
+ *   3. Else (no frontmatter or no template key): SOFTWARE. This is the
+ *      backward-compat rule: v1.10 artifacts predate the field and must gate
+ *      exactly as they always did; defaulting is honest because software was
+ *      the only shape that existed when they were written.
+ *   4. A DECLARED template this gate has no contract for (campaign until its
+ *      pack ships, or any unknown slug) FAILS CLOSED: BA-01 is forced to FAIL
+ *      (the artifact claims a shape whose structure cannot be verified) and
+ *      the remaining checks score against the software set so the output
+ *      still reports everything else that is wrong.
+ *
+ * Checks (complete inventory, mirrored in card.md; denominator 6 for every
+ * template, per-template semantics via the card's check_overrides):
+ *   BA-01 structure  required sections present as H2 headings in template
+ *                    order. software: Context, Options Considered,
  *                    Recommendation, Decisions, Open Questions, Next Step.
- *   BA-02 structure  Recommendation contains a definite pick: prose at or
- *                    over the length floor that does NOT match the hedge
- *                    pattern list (a polished "either could work" is a
- *                    non-pick and fails; a bare TBD fails on length).
- *   BA-03 value      editorial floor (Ferrox Labs standards): no em dash
- *                    (U+2014) or en dash (U+2013) anywhere; digits not
- *                    spelled-out numbers in front of countable nouns.
+ *                    book: Premise, World, Cast, Tone, Threads,
+ *                    Open Questions, Next Step, with the 5 content sections
+ *                    non-empty (a heading with no body is not a section).
+ *   BA-02 structure  software: Recommendation contains a definite pick
+ *                    (length floor + no hedge-pattern match).
+ *                    book: Next Step states 1 concrete action: non-empty and
+ *                    hedge-free ("keep it warm" park phrasing passes; a hedge
+ *                    is not an action); a Decisions section, when present,
+ *                    still requires definite wording (no hedge patterns).
+ *   BA-03 value      editorial floor. software: whole document. book: the
+ *                    em/en dash ban and spelled-number scan hold in the
+ *                    frontmatter block and section headings only; prose
+ *                    blocks are waived (fiction convention).
  *   BA-04 grounding  dead-reference scan: backticked relative file paths
  *                    must exist under --workspace. Without --workspace the
  *                    scan is skipped (documented degradation; the card
- *                    invocation supplies it).
+ *                    invocation supplies it). All templates.
  *   BA-05 structure  Open Questions and Next Step are non-empty: an honest
- *                    brainstorm always has both.
+ *                    brainstorm always has both. All templates.
  *   BA-06 value      no placeholder markers (TBD, TODO, FIXME, XXX,
- *                    lorem ipsum) anywhere in the document.
+ *                    lorem ipsum) anywhere in the document. All templates.
  *
  * Node stdlib only (sealed-store execution must not depend on node_modules).
  * Orchestrator-authored; fail-closed: an internal crash prints `gate: 0/6`.
@@ -54,24 +74,23 @@ const CHECKS = [
   ['BA-06', 'value'],
 ];
 
-const REQUIRED_SECTIONS = [
-  'Context',
-  'Options Considered',
-  'Recommendation',
-  'Decisions',
-  'Open Questions',
-  'Next Step',
-];
+const TEMPLATE_SECTIONS = {
+  software: ['Context', 'Options Considered', 'Recommendation', 'Decisions', 'Open Questions', 'Next Step'],
+  book: ['Premise', 'World', 'Cast', 'Tone', 'Threads', 'Open Questions', 'Next Step'],
+};
+
+/** Book content sections that must carry a body (BA-01 book: a heading is not a section). */
+const BOOK_CONTENT_SECTIONS = ['Premise', 'World', 'Cast', 'Tone', 'Threads'];
 
 /** Minimum stripped prose length for a Recommendation that states a pick. */
 const RECOMMENDATION_FLOOR_CHARS = 60;
-/** Minimum stripped prose length for Open Questions and Next Step. */
+/** Minimum stripped prose length for Open Questions, Next Step, and book content sections. */
 const SECTION_FLOOR_CHARS = 15;
 
 /**
  * Hedge patterns: fluent phrasings that read polished but contain no pick.
- * BA-02 fails when any of these matches the Recommendation section, no
- * matter how long or professional the prose around it is.
+ * BA-02 fails when any of these matches the checked section, no matter how
+ * long or professional the prose around it is.
  */
 const HEDGE_PATTERNS = [
   /\beither\s+(?:option|approach|direction|path|route)s?\b[^.\n]*\b(?:could|would|might|may|can)\s+work\b/i,
@@ -98,15 +117,43 @@ const SPELLED_NUMBER_RE = new RegExp(
 );
 
 function parseArgs(argv) {
-  const opts = { workspace: null, artifact: null };
+  const opts = { workspace: null, template: null, artifact: null };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--workspace') opts.workspace = argv[++i] ?? null;
+    else if (a === '--template') opts.template = argv[++i] ?? null;
     else rest.push(a);
   }
   opts.artifact = rest.length > 0 ? rest[rest.length - 1] : null;
   return opts;
+}
+
+/** The raw frontmatter block body, or null when the document has none. */
+function frontmatterBlock(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  return m === null ? null : m[1];
+}
+
+/** The frontmatter `template:` value, or null when absent. */
+function frontmatterTemplate(text) {
+  const fm = frontmatterBlock(text);
+  if (fm === null) return null;
+  const m = /^template:\s*(\S+)\s*$/m.exec(fm);
+  return m === null ? null : m[1];
+}
+
+/**
+ * Resolve the effective template: flag > frontmatter > software default.
+ * `known: false` marks a declared-but-uncontracted shape (fails closed on BA-01).
+ */
+function resolveTemplate(text, opts) {
+  const declared = opts.template ?? frontmatterTemplate(text);
+  if (declared === null) return { slug: 'software', known: true };
+  if (Object.prototype.hasOwnProperty.call(TEMPLATE_SECTIONS, declared)) {
+    return { slug: declared, known: true };
+  }
+  return { slug: 'software', known: false };
 }
 
 /** H2 sections in document order: { title, body }. Body runs to the next H2 or EOF. */
@@ -141,35 +188,72 @@ function sectionBody(secs, title) {
   return hit === undefined ? null : hit.body;
 }
 
-/** BA-01: all 6 required sections present as H2 headings, in template order. */
-function checkSections(secs) {
+/** BA-01: required sections present as H2 headings, in template order. */
+function checkSections(secs, template) {
+  const required = TEMPLATE_SECTIONS[template.slug];
   const titles = secs.map((s) => s.title);
   let cursor = -1;
-  for (const required of REQUIRED_SECTIONS) {
-    const at = titles.indexOf(required);
+  for (const req of required) {
+    const at = titles.indexOf(req);
     if (at === -1 || at <= cursor) return false;
     cursor = at;
+  }
+  if (template.slug === 'book') {
+    // A heading with no body is not a section: the 5 content sections carry prose.
+    for (const title of BOOK_CONTENT_SECTIONS) {
+      const body = sectionBody(secs, title);
+      if (body === null || strippedProse(body).length < SECTION_FLOOR_CHARS) return false;
+    }
   }
   return true;
 }
 
-/** BA-02: Recommendation holds a definite pick, not a fluent hedge or a stub. */
-function checkRecommendation(secs) {
+function hedged(prose) {
+  for (const hedge of HEDGE_PATTERNS) {
+    if (hedge.test(prose)) return true;
+  }
+  return false;
+}
+
+/**
+ * BA-02. software: Recommendation holds a definite pick, not a fluent hedge or a stub.
+ * book: Next Step states 1 concrete action (non-empty, hedge-free; park phrasing like
+ * "keep it warm" passes); a Decisions section, when present, requires definite wording.
+ */
+function checkPick(secs, template) {
+  if (template.slug === 'book') {
+    const nextStep = sectionBody(secs, 'Next Step');
+    if (nextStep === null) return false;
+    const prose = strippedProse(nextStep);
+    if (prose.length < SECTION_FLOOR_CHARS) return false;
+    if (hedged(prose)) return false;
+    const decisions = sectionBody(secs, 'Decisions');
+    if (decisions !== null && hedged(strippedProse(decisions))) return false;
+    return true;
+  }
   const body = sectionBody(secs, 'Recommendation');
   if (body === null) return false;
   const prose = strippedProse(body);
   if (prose.length < RECOMMENDATION_FLOOR_CHARS) return false;
-  for (const hedge of HEDGE_PATTERNS) {
-    if (hedge.test(prose)) return false;
-  }
-  return true;
+  return !hedged(prose);
 }
 
-/** BA-03: editorial floor. No em or en dash; digits not words before countable nouns. */
-function checkEditorial(text) {
-  if (text.includes('—') || text.includes('–')) return false;
-  if (SPELLED_NUMBER_RE.test(text)) return false;
-  return true;
+/**
+ * BA-03: editorial floor. software: the whole document. book: frontmatter and
+ * heading lines only; prose blocks are waived (fiction convention, card-declared).
+ */
+function checkEditorial(text, template) {
+  let scanTarget = text;
+  if (template.slug === 'book') {
+    const fm = frontmatterBlock(text) ?? '';
+    const headings = text
+      .split(/\r?\n/)
+      .filter((l) => /^#{1,6}\s/.test(l))
+      .join('\n');
+    scanTarget = `${fm}\n${headings}`;
+  }
+  if (scanTarget.includes('—') || scanTarget.includes('–')) return false;
+  return !SPELLED_NUMBER_RE.test(scanTarget);
 }
 
 /** BA-04: every backticked relative file path resolves under --workspace. */
@@ -220,12 +304,14 @@ function main() {
     console.log('gate: 0/6');
     process.exit(1);
   }
+  const template = resolveTemplate(text, opts);
   const secs = sections(text);
 
   const results = {
-    'BA-01': checkSections(secs),
-    'BA-02': checkRecommendation(secs),
-    'BA-03': checkEditorial(text),
+    // A declared-but-uncontracted template fails closed on the structure check.
+    'BA-01': template.known && checkSections(secs, template),
+    'BA-02': checkPick(secs, template),
+    'BA-03': checkEditorial(text, template),
     'BA-04': checkDeadRefs(text, opts),
     'BA-05': checkHonestySections(secs),
     'BA-06': checkPlaceholders(text),

@@ -12,6 +12,10 @@
  *   3. Draw i (0-based): u = first 8 bytes of sha256(seed0 || uint32BE(i)) read as a
  *      big-endian uint64; pick index u % remaining, remove, repeat until K drawn.
  *
+ * Per-template sampling (GATE-CARD-SPEC section 9.2, v1.12 Wave 2): when a templateSlug is
+ * provided the seed becomes sha256(utf8(runId + ":" + gateId + ":" + templateSlug)) and the
+ * run record carries the slug. Without a slug the Wave 1 algorithm is byte-identical.
+ *
  * Run-record shape: { runId, gateId, sampled: [{ id, hash }] }. Re-verification replays
  * with the recorded runId and reproduces the identical sample, so a third party with
  * store access can re-derive the verdict (ADR decision 2).
@@ -30,6 +34,7 @@ interface PoolEntry {
 interface RunRecord {
   runId: string;
   gateId: string;
+  templateSlug?: string;
   sampled: PoolEntry[];
 }
 
@@ -70,12 +75,14 @@ function normalizePool(raw: unknown): PoolEntry[] {
 function sampleMutants(opts?: {
   runId?: unknown;
   gateId?: unknown;
+  templateSlug?: unknown;
   pool?: unknown;
   k?: unknown;
 }): RunRecord {
   const o = opts && typeof opts === 'object' ? opts : {};
   const runId = typeof o.runId === 'string' ? o.runId : '';
   const gateId = typeof o.gateId === 'string' ? o.gateId : '';
+  const templateSlug = typeof o.templateSlug === 'string' && o.templateSlug !== '' ? o.templateSlug : null;
   const pool = normalizePool(o.pool);
   const k =
     typeof o.k === 'number' && Number.isFinite(o.k) && o.k >= 1
@@ -83,10 +90,11 @@ function sampleMutants(opts?: {
       : Math.min(DEFAULT_ROTATION_K, pool.length);
 
   if (runId === '' || gateId === '' || pool.length === 0) {
-    return { runId, gateId, sampled: [] };
+    return templateSlug === null ? { runId, gateId, sampled: [] } : { runId, gateId, templateSlug, sampled: [] };
   }
 
-  const seed0 = sha256Bytes(Buffer.from(`${runId}:${gateId}`, 'utf8'));
+  const seedInput = templateSlug === null ? `${runId}:${gateId}` : `${runId}:${gateId}:${templateSlug}`;
+  const seed0 = sha256Bytes(Buffer.from(seedInput, 'utf8'));
   const remaining = [...pool].sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
   const sampled: PoolEntry[] = [];
   for (let i = 0; i < k && remaining.length > 0; i++) {
@@ -97,7 +105,7 @@ function sampleMutants(opts?: {
     const index = Number(u % BigInt(remaining.length));
     sampled.push(remaining.splice(index, 1)[0]);
   }
-  return { runId, gateId, sampled };
+  return templateSlug === null ? { runId, gateId, sampled } : { runId, gateId, templateSlug, sampled };
 }
 
 /**

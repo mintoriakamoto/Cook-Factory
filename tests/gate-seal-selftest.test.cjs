@@ -344,3 +344,319 @@ test('C: the sample is recorded in the run-record shape (runId + sampled hashes)
   assert.equal(r.runId, 'RUN-PINNED-01');
   assert.equal(r.gateId, 'toposort');
 });
+
+// ---------- Section 9: per-template validation blocks (GATE-CARD-SPEC, v1.12 Wave 2) ----------
+
+test('9: per-template sampling seed, pinned vectors from an independent reimplementation', () => {
+  // seed0 = sha256(runId + ":" + gateId + ":" + templateSlug); everything else decision-2.
+  const pool = ['1', '2', '3', '4', '5'].map((c, i) => ({ id: `tm-m${i + 1}`, fixture: c.repeat(64) }));
+  const book = sampleMutants({ runId: 'RUN-PINNED-01', gateId: 'toposort', templateSlug: 'book', pool, k: 2 });
+  assert.deepEqual(book.sampled.map((s) => s.id), ['tm-m2', 'tm-m1']);
+  assert.equal(book.templateSlug, 'book');
+  const software = sampleMutants({ runId: 'RUN-PINNED-01', gateId: 'toposort', templateSlug: 'software', pool, k: 2 });
+  assert.deepEqual(software.sampled.map((s) => s.id), ['tm-m5', 'tm-m2']);
+  // No slug = the Wave 1 algorithm byte-for-byte (tm-m4 then tm-m1, locked above).
+  const bare = sampleMutants({ runId: 'RUN-PINNED-01', gateId: 'toposort', pool, k: 2 });
+  assert.deepEqual(bare.sampled.map((s) => s.id), ['tm-m4', 'tm-m1']);
+  assert.equal('templateSlug' in bare, false);
+});
+
+/**
+ * Templated gate: sorts keyed per shape. asc effective set = TS-01/TS-02/TS-03 (3 checks),
+ * desc declares applies_to routing + waives TS-03, effective set = TS-01/TS-04 (2 checks).
+ */
+const TEMPLATED_GATE_SOURCE = [
+  "const fs = require('node:fs');",
+  'const args = process.argv.slice(2);',
+  "let template = 'asc';",
+  'const rest = [];',
+  "for (let i = 0; i < args.length; i++) { if (args[i] === '--template') template = args[++i]; else rest.push(args[i]); }",
+  'let order = null;',
+  "try { order = JSON.parse(fs.readFileSync(rest[rest.length - 1], 'utf8')); } catch { /* fall through */ }",
+  'const isArr = Array.isArray(order);',
+  'if (!isArr) order = [];',
+  "const want = ['a', 'b', 'c', 'd'];",
+  'const set = new Set(order);',
+  'const results = {',
+  "  'TS-01': isArr,",
+  "  'TS-02': JSON.stringify(order) === JSON.stringify(want),",
+  "  'TS-03': order.length === 4 && set.size === 4 && want.every((n) => set.has(n)),",
+  "  'TS-04': JSON.stringify(order) === JSON.stringify([...want].reverse()),",
+  '};',
+  "const cats = { 'TS-01': 'structure', 'TS-02': 'value', 'TS-03': 'relation', 'TS-04': 'value' };",
+  "const sets = { asc: ['TS-01', 'TS-02', 'TS-03'], desc: ['TS-01', 'TS-04'] };",
+  'const ids = sets[template] || [];',
+  'let passed = 0;',
+  "for (const id of ids) { if (results[id]) passed++; else console.log('FAIL ' + id + ' ' + cats[id]); }",
+  "console.log('gate: ' + passed + '/' + ids.length);",
+].join('\n');
+
+function writeTemplatedGateScript() {
+  const dir = mkTemp('gate-seal-tgate-');
+  const file = path.join(dir, 'shapesort-gate.cjs');
+  fs.writeFileSync(file, TEMPLATED_GATE_SOURCE);
+  return file;
+}
+
+/** Templated card markdown per GATE-CARD-SPEC 9.1. Overrides via per-test knobs. */
+function templatedCardMarkdown({ asc, desc, topLevelValidation = false, extraCheckLines = [], descMustFail = 'TS-04', descOverrides = null, gateScriptHash = null, lastValidated = {} }) {
+  const mutantLines = (mutants) =>
+    mutants
+      .map(
+        (m) =>
+          `      - { id: ${m.id}, class: fluent-but-wrong, why_fluent: ${m.why}, expected_drop: ${m.drop}, must_fail: [${m.mustFail}], fixture: ${m.fixture} }`
+      )
+      .join('\n');
+  const lines = [
+    '---',
+    'card: 1',
+    'gate_id: shapesort',
+    'domain: code',
+    'tier: 1',
+    'relational_target: null',
+    'disclosure_default: opaque',
+  ];
+  if (gateScriptHash !== null) lines.push(`gate_script_hash: ${gateScriptHash}`);
+  lines.push(
+    'checks:',
+    '  - { id: TS-01, category: structure, desc: artifact parses as a JSON array, measures: JSON.parse on the artifact }',
+    '  - { id: TS-02, category: value, desc: ascending order exact, measures: sequence equality, applies_to: [asc] }',
+    '  - { id: TS-03, category: relation, desc: node set complete, measures: set equality vs the 4 nodes }',
+    '  - { id: TS-04, category: value, desc: descending order exact, measures: sequence equality, applies_to: [desc] }',
+    ...extraCheckLines,
+    'wrapped_tools:',
+    '  - { name: node, version: 22.0.0, license: MIT, role: gate runtime }'
+  );
+  if (topLevelValidation) {
+    lines.push('validation:', `  reference: ${asc.reference}`, '  pool_min: 5', '  pool_status: seeded', '  mutants: []', '  rotation_k: 2', '  last_validated: null');
+  }
+  lines.push('templates:', '  asc:', `    reference: ${asc.reference}`, '    pool_min: 5', '    pool_status: seeded');
+  lines.push('    mutants:', mutantLines(asc.mutants));
+  lines.push('    rotation_k: 2', `    last_validated: ${lastValidated.asc ?? 'null'}`);
+  lines.push('  desc:', `    reference: ${desc.reference}`, '    pool_min: 5', '    pool_status: seeded');
+  lines.push('    mutants:', mutantLines(desc.mutants.map((m) => ({ ...m, mustFail: descMustFail }))));
+  lines.push('    rotation_k: 2', `    last_validated: ${lastValidated.desc ?? 'null'}`);
+  lines.push('    check_overrides:');
+  if (descOverrides !== null) {
+    lines.push(...descOverrides);
+  } else {
+    lines.push('      TS-03:', '        waived: true');
+  }
+  lines.push(
+    'gamed_modes:',
+    '  - { mode: memorize the visible reference order, status: sealed, note: sealed fixtures rotate per run }',
+    '---',
+    '',
+    '## Intent',
+    'Self-test card for the per-template extension.',
+    '',
+    '## Gamed-mode rationale',
+    'Covered by the rotating sealed pools.',
+    '',
+    '## Change log',
+    '- 2026-07-23 authored by the wave 2 self-test.',
+    ''
+  );
+  return lines.join('\n');
+}
+
+/** Seal the standard asc/desc fixture set into a fresh store. */
+function sealTemplatedFixtures(store) {
+  const put = (content) => sealPut({ content, storeRoot: store });
+  return {
+    asc: {
+      reference: put('["a","b","c","d"]\n').uri,
+      mutants: [
+        { id: 'as-m1', why: 'valid-looking order with 1 swapped pair', drop: 1, mustFail: 'TS-02', fixture: put('["a","b","d","c"]\n').uri },
+        { id: 'as-m2', why: 'complete-looking order with a stranger node', drop: 2, mustFail: 'TS-03', fixture: put('["a","b","c","e"]\n').uri },
+      ],
+    },
+    desc: {
+      reference: put('["d","c","b","a"]\n').uri,
+      mutants: [
+        { id: 'de-m1', why: 'near-descending order with 1 swapped pair', drop: 1, fixture: put('["d","c","a","b"]\n').uri },
+        { id: 'de-m2', why: 'near-descending order with a different swap', drop: 1, fixture: put('["d","b","c","a"]\n').uri },
+      ],
+    },
+  };
+}
+
+test('9: templated positive control, per-template effective sets, denominators, and samples', () => {
+  const repo = initRepo({ 'README.md': 'clean repo\n' });
+  const store = mkTemp('gate-seal-store-');
+  const gateScript = writeTemplatedGateScript();
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc });
+  const r = validateGateCard(card, {
+    repoRoot: repo,
+    storeRoot: store,
+    runId: 'W2-TPL-01',
+    gateCmd: [process.execPath, gateScript],
+    gateScriptPath: gateScript,
+  });
+  assert.deepEqual(r.errors, []);
+  assert.equal(r.ok, true);
+  // asc reference scores 3/3 (TS-01, TS-02, TS-03), desc scores 2/2 (TS-01, TS-04 after the waiver).
+  assert.deepEqual(r.runRecord.templates.asc.referenceScore, [3, 3]);
+  assert.deepEqual(r.runRecord.templates.desc.referenceScore, [2, 2]);
+  assert.equal(r.runRecord.templates.asc.sampled.length, 2);
+  assert.equal(r.runRecord.templates.desc.sampled.length, 2);
+  for (const slug of ['asc', 'desc']) {
+    for (const s of r.runRecord.templates[slug].sampled) {
+      assert.equal(s.fails.length >= 1, true, `${slug} ${s.id} was caught`);
+    }
+  }
+  // Seeded pools of 2 warn under pool_min 5, per template.
+  assert.equal(r.warnings.filter((w) => w.code === 'W_POOL_BELOW_MIN').length, 2);
+});
+
+test('9: replaying the same runId reproduces both per-template samples', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc });
+  const first = validateGateCard(card, { storeRoot: store, runId: 'W2-TPL-REPLAY' });
+  const second = validateGateCard(card, { storeRoot: store, runId: 'W2-TPL-REPLAY' });
+  for (const slug of ['asc', 'desc']) {
+    assert.deepEqual(
+      first.runRecord.templates[slug].sampled.map((s) => s.id),
+      second.runRecord.templates[slug].sampled.map((s) => s.id)
+    );
+  }
+});
+
+test('9: templates: plus a top-level validation: block fails E_TEMPLATE_VALIDATION_CONFLICT', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc, topLevelValidation: true });
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'E_TEMPLATE_VALIDATION_CONFLICT');
+});
+
+test('9: applies_to naming an undeclared template fails E_UNKNOWN_TEMPLATE', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({
+    asc: fx.asc,
+    desc: fx.desc,
+    extraCheckLines: ['  - { id: TS-05, category: value, desc: campaign-only check, measures: never runs, applies_to: [campaign] }'],
+  });
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.some((e) => e.code === 'E_UNKNOWN_TEMPLATE'), true);
+});
+
+test('9: applies_to on a card with no templates: block fails E_UNKNOWN_TEMPLATE', () => {
+  const store = mkTemp('gate-seal-store-');
+  const ref = sealPut({ content: '["a","c","b","d"] \n', storeRoot: store });
+  const m1 = sealPut({ content: '["c","a","b","d"] \n', storeRoot: store });
+  const m2 = sealPut({ content: '["a","c","b","x"] \n', storeRoot: store });
+  const card = cardMarkdown({
+    reference: ref.uri,
+    mutants: [
+      { id: 'ts-m1', why: 'permutation swap', drop: 1, mustFail: 'TS-03', fixture: m1.uri },
+      { id: 'ts-m2', why: 'stranger node', drop: 2, mustFail: 'TS-02', fixture: m2.uri },
+    ],
+  }).replace(
+    '  - { id: TS-02, category: value, desc: node set complete and exact, measures: set equality vs the 4 nodes }',
+    '  - { id: TS-02, category: value, desc: node set complete and exact, measures: set equality vs the 4 nodes, applies_to: [software] }'
+  );
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.some((e) => e.code === 'E_UNKNOWN_TEMPLATE'), true);
+});
+
+test('9: a template with a reference but no pool fails E_TEMPLATE_POOL_INCOMPLETE', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: { reference: fx.desc.reference, mutants: [] } });
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(
+    r.errors.some((e) => e.code === 'E_TEMPLATE_POOL_INCOMPLETE' && e.template === 'desc'),
+    true
+  );
+});
+
+test('9: pool_status full below pool_min fails E_TEMPLATE_POOL_INCOMPLETE (5 EACH, never shared)', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc }).replace(
+    '  desc:\n' + `    reference: ${fx.desc.reference}\n` + '    pool_min: 5\n' + '    pool_status: seeded',
+    '  desc:\n' + `    reference: ${fx.desc.reference}\n` + '    pool_min: 5\n' + '    pool_status: full'
+  );
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(
+    r.errors.some((e) => e.code === 'E_TEMPLATE_POOL_INCOMPLETE' && e.template === 'desc'),
+    true
+  );
+});
+
+test('9: a waived check in that template must_fail fails E_TEMPLATE_CHECK_CONFLICT', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc, descMustFail: 'TS-03' });
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(
+    r.errors.some((e) => e.code === 'E_TEMPLATE_CHECK_CONFLICT' && e.template === 'desc'),
+    true
+  );
+});
+
+test('9: a check_overrides key outside the inventory fails E_TEMPLATE_CHECK_CONFLICT', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const card = templatedCardMarkdown({
+    asc: fx.asc,
+    desc: fx.desc,
+    descOverrides: ['      TS-03:', '        waived: true', '      TS-99:', '        waived: true'],
+  });
+  const r = validateGateCard(card, { storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.some((e) => e.code === 'E_TEMPLATE_CHECK_CONFLICT'), true);
+});
+
+test('9: repo-visible fixture under ANY template is rejected, not laundered', () => {
+  const store = mkTemp('gate-seal-store-');
+  const fx = sealTemplatedFixtures(store);
+  const repo = initRepo({ 'tasks/fixtures/desc_ref.json': '["d","c","b","a"]\n' });
+  const card = templatedCardMarkdown({ asc: fx.asc, desc: fx.desc });
+  const r = validateGateCard(card, { repoRoot: repo, storeRoot: store });
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'E_FIXTURE_REPO_VISIBLE');
+  assert.equal(
+    r.errors.some((e) => e.code === 'E_FIXTURE_REPO_VISIBLE' && e.template === 'desc' && e.role === 'reference'),
+    true
+  );
+});
+
+test('9.4: a gate script hash change nulls last_validated for ALL templates', () => {
+  const store = mkTemp('gate-seal-store-');
+  const gateScript = writeTemplatedGateScript();
+  const currentHash = crypto.createHash('sha256').update(fs.readFileSync(gateScript)).digest('hex');
+  const fx = sealTemplatedFixtures(store);
+  const dates = { asc: '2026-07-23', desc: '2026-07-23' };
+
+  // Recorded hash matches the current script: the per-template dates survive.
+  const intact = validateGateCard(
+    templatedCardMarkdown({ asc: fx.asc, desc: fx.desc, gateScriptHash: currentHash, lastValidated: dates }),
+    { storeRoot: store, gateScriptPath: gateScript, runId: 'W2-TPL-LV' }
+  );
+  assert.deepEqual(intact.lastValidated, { asc: '2026-07-23', desc: '2026-07-23' });
+
+  // Recorded hash differs (the gate script changed): null for ALL templates, by design.
+  const stale = validateGateCard(
+    templatedCardMarkdown({ asc: fx.asc, desc: fx.desc, gateScriptHash: 'f'.repeat(64), lastValidated: dates }),
+    { storeRoot: store, gateScriptPath: gateScript, runId: 'W2-TPL-LV' }
+  );
+  assert.deepEqual(stale.lastValidated, { asc: null, desc: null });
+
+  // No recorded hash at all: unverifiable, also null for all templates.
+  const unrecorded = validateGateCard(
+    templatedCardMarkdown({ asc: fx.asc, desc: fx.desc, lastValidated: dates }),
+    { storeRoot: store, gateScriptPath: gateScript, runId: 'W2-TPL-LV' }
+  );
+  assert.deepEqual(unrecorded.lastValidated, { asc: null, desc: null });
+});

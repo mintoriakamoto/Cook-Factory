@@ -260,7 +260,17 @@ If findings skills exist, read SKILL.md and reference files; extract validated p
 
 If raw spikes/sketches exist but no findings skill, note: `⚠ Unpackaged spikes/sketches detected — run /ferrox:spike --wrap-up or /ferrox:sketch --wrap-up to make findings available.`
 
-Build internal `<prior_decisions>` with sections for Project-Level (from PROJECT.md / REQUIREMENTS.md), From Prior Phases (per-phase decisions), and From Spike/Sketch Findings (validated patterns, landmines, design decisions).
+**Brainstorm artifacts (exit-as-intake):** Check for brainstorm sessions relevant to this phase's topic:
+
+```bash
+ls -dt .planning/brainstorms/*/BRAINSTORM.md 2>/dev/null
+```
+
+For each artifact whose topic touches this phase, read frontmatter (`template:`, `status:`) plus the Decisions, Notes, and Open Questions sections per the `ferrox-core/bin/lib/brainstorm-intake.cjs` contract (`parseBrainstormArtifact`): a Decisions entry counts ONLY with exit provenance `(stance: ..., confirmed at exit)`; hedged or unconfirmed items are notes, never decisions. Acknowledge in 1 line: `Found a brainstorm from {date} on {topic} with {N} locked decisions; using it as intake.`
+
+Add each exit-confirmed Decision to `<prior_decisions>` as a locked entry, provenance included. These decisions are OFF LIMITS: never re-ask a decided item unprompted. OFF LIMITS is not immutable: the user reopening a decision by name always works, and a reopened decision returns to the gray-area pool. Brainstorm Notes and Open Questions sections are fair game and GOOD gray-area seeds; they were never blessed at exit.
+
+Build internal `<prior_decisions>` with sections for Project-Level (from PROJECT.md / REQUIREMENTS.md), From Prior Phases (per-phase decisions), From Spike/Sketch Findings (validated patterns, landmines, design decisions), and From Brainstorms (exit-confirmed Decisions with provenance, marked OFF LIMITS).
 
 **Usage downstream:** `analyze_phase` skips already-decided gray areas; `present_gray_areas` annotates options ("You chose X in Phase 5"); `discuss_areas` pre-fills or flags conflicts.
 

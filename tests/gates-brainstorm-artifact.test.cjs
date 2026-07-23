@@ -2,12 +2,14 @@
 
 /**
  * v1.10 Wave 3: the brainstorm-artifact gate (agent-ops pack, tier 2, hygiene floor).
+ * v1.12 Wave 2: template-keyed per GATE-CARD-SPEC section 9 (software + book).
  *
- * Per-check unit coverage (BA-01..BA-06 each provoked and cleared), fluent-mutant pool
- * assurance (every generator mutant drops >= expected_drop and emits every must_fail id),
- * and the sealed end-to-end path through the Wave 1 v1.9 framework: generate -> seal into
- * a temp FERROX_SEALED_STORE -> validateGateCard green on the reference with all 5 mutants
- * caught, plus replay determinism and the repo-visibility rejection.
+ * Per-check unit coverage (BA-01..BA-06 provoked and cleared on BOTH templates),
+ * template resolution (frontmatter, --template override, legacy default, unknown
+ * fail-closed), fluent-pool assurance for both pools, and the sealed end-to-end path
+ * through the templated framework: generate -> seal into a temp FERROX_SEALED_STORE ->
+ * validateGateCard green with both references M/M and all 10 mutants caught, plus
+ * per-template replay determinism and the repo-visibility rejection.
  */
 
 const test = require('node:test');
@@ -152,6 +154,122 @@ test('BA-06: lorem ipsum filler fails the placeholder scan', () => {
   assert.deepEqual(r.fails, ['BA-06 value']);
 });
 
+// ---------- template resolution (v1.12 Wave 2) ----------
+
+function bookMutant(id) {
+  return gen.bookMutants({ nonce: NONCE }).find((m) => m.id === id);
+}
+
+test('legacy default: an artifact with no frontmatter gates as software (v1.10 compat rule)', () => {
+  // The v1.10 reference has no frontmatter at all and must keep scoring 6/6.
+  const r = runOn(gen.referenceContent({ nonce: NONCE }));
+  assert.deepEqual(r, { score: [6, 6], fails: [] });
+});
+
+test('frontmatter template: book routes the book check set', () => {
+  const r = runOn(gen.bookReferenceContent({ nonce: NONCE }));
+  assert.deepEqual(r, { score: [6, 6], fails: [] });
+});
+
+test('--template flag overrides frontmatter (book artifact forced onto the software set fails)', () => {
+  const r = runOn(gen.bookReferenceContent({ nonce: NONCE }), [
+    process.execPath,
+    GATE,
+    '--workspace',
+    WS,
+    '--template',
+    'software',
+  ]);
+  assert.equal(r.fails.includes('BA-01 structure'), true, 'software sections are absent from a book doc');
+});
+
+test('unknown declared template fails closed with a structure FAIL on BA-01', () => {
+  // campaign is declared in the workflow but its pack has not shipped: per the ADR a
+  // template without its block and pool does not exist, and the artifact fails closed.
+  const content = gen
+    .referenceContent({ nonce: NONCE })
+    .replace(
+      '# Brainstorm: session capture for the audit trail',
+      '---\ntemplate: campaign\nstatus: captured\n---\n\n# Brainstorm: session capture for the audit trail'
+    );
+  const r = runOn(content);
+  assert.equal(r.fails.includes('BA-01 structure'), true);
+  assert.equal(r.score[1], 6, 'denominator stays 6; the rest score against the software set');
+});
+
+// ---------- book per-check units ----------
+
+test('book reference: em dashes in prose are WAIVED (the BA-03-book carve-out, live)', () => {
+  const content = gen.bookReferenceContent({ nonce: NONCE });
+  assert.equal(content.includes('—'), true, 'the reference genuinely carries em dashes in prose');
+  const r = runOn(content);
+  assert.deepEqual(r.fails, []);
+});
+
+test('book BA-03: an em dash in a heading line still fails (ban retained in structure)', () => {
+  const content = gen
+    .bookReferenceContent({ nonce: NONCE })
+    .replace('# Brainstorm: the flare courier', '# Brainstorm: the flare courier — a mesh noir');
+  const r = runOn(content);
+  assert.deepEqual(r.fails, ['BA-03 value']);
+});
+
+test('book BA-03: an en dash in the frontmatter block still fails (ban retained there)', () => {
+  const content = gen.bookReferenceContent({ nonce: NONCE }).replace('status: parked', 'status: parked – warm');
+  const r = runOn(content);
+  assert.deepEqual(r.fails, ['BA-03 value']);
+});
+
+test('book BA-01: a premise-free worldbuilding doc fails structure', () => {
+  const r = runOn(bookMutant('bk-m1').content);
+  assert.deepEqual(r.fails, ['BA-01 structure']);
+});
+
+test('book BA-01: an empty Threads section fails (a heading is not a section)', () => {
+  const r = runOn(bookMutant('bk-m2').content);
+  assert.deepEqual(r.fails, ['BA-01 structure']);
+});
+
+test('book BA-02: a hedge-soup Decisions section fails the definite-wording rule', () => {
+  const r = runOn(bookMutant('bk-m3').content);
+  assert.deepEqual(r.fails, ['BA-02 structure']);
+});
+
+test('book BA-01: a skipped Tone section with plausible flow fails structure', () => {
+  const r = runOn(bookMutant('bk-m4').content);
+  assert.deepEqual(r.fails, ['BA-01 structure']);
+});
+
+test('book BA-04: a plausibly renamed lore path fails the dead-ref scan', () => {
+  const r = runOn(bookMutant('bk-m5').content);
+  assert.deepEqual(r.fails, ['BA-04 grounding']);
+});
+
+test('book BA-02: a hedged Next Step fails (a hedge is not an action); park phrasing passes', () => {
+  // The reference Next Step is park phrasing ("Keep it warm: ...") and passes above.
+  const content = gen
+    .bookReferenceContent({ nonce: NONCE })
+    .replace(/## Next Step\n\n[\s\S]*$/, '## Next Step\n\nHard to say what comes next until the world settles a bit more.\n');
+  const r = runOn(content);
+  assert.equal(r.fails.includes('BA-02 structure'), true);
+});
+
+test('book BA-05: an empty Open Questions section fails', () => {
+  const content = gen
+    .bookReferenceContent({ nonce: NONCE })
+    .replace(/## Open Questions\n\n[\s\S]*?\n\n## Next Step/, '## Open Questions\n\n## Next Step');
+  const r = runOn(content);
+  assert.deepEqual(r.fails, ['BA-05 structure']);
+});
+
+test('book BA-06: a fluent TBD fails the placeholder scan on the book set too', () => {
+  const content = gen
+    .bookReferenceContent({ nonce: NONCE })
+    .replace('- Who ordered the flare,', '- Casting for the Archivist: TBD pending the next pass.\n- Who ordered the flare,');
+  const r = runOn(content);
+  assert.deepEqual(r.fails, ['BA-06 value']);
+});
+
 // ---------- surface + card contract ----------
 
 test('every emitted FAIL token is v2 and inside the committed card inventory', () => {
@@ -179,7 +297,7 @@ test('every emitted FAIL token is v2 and inside the committed card inventory', (
   }
 });
 
-test('committed card declares the full 6-check inventory and a 5-mutant fluent pool', () => {
+test('committed card declares the 6-check inventory and per-template 5-mutant fluent pools', () => {
   const parsed = seal.parseGateCard(fs.readFileSync(CARD_FILE, 'utf8'));
   assert.equal(parsed.ok, true);
   assert.equal(parsed.card.gateId, 'brainstorm-artifact');
@@ -187,14 +305,22 @@ test('committed card declares the full 6-check inventory and a 5-mutant fluent p
     parsed.card.checks.map((c) => c.id),
     ['BA-01', 'BA-02', 'BA-03', 'BA-04', 'BA-05', 'BA-06']
   );
-  assert.equal(parsed.card.mutants.length, 5);
-  assert.equal(parsed.card.mutants.every((m) => m.mutantClass === 'fluent-but-wrong'), true);
-  assert.equal(parsed.card.poolMin, 5);
+  // Templated card (GATE-CARD-SPEC section 9): no top-level validation block,
+  // software + book each with a full fluent pool of 5.
+  assert.equal(parsed.card.hasTopLevelValidation, false);
+  assert.notEqual(parsed.card.templates, null);
+  assert.deepEqual(parsed.card.templates.map((t) => t.slug).sort(), ['book', 'software']);
+  for (const t of parsed.card.templates) {
+    assert.equal(t.poolMin, 5, `${t.slug} pool_min`);
+    assert.equal(t.mutants.length, 5, `${t.slug} pool size`);
+    assert.equal(t.mutants.every((m) => m.mutantClass === 'fluent-but-wrong'), true, `${t.slug} pool class`);
+    assert.equal(t.poolStatus, 'full', `${t.slug} pool_status`);
+  }
 });
 
-// ---------- fluent pool assurance ----------
+// ---------- fluent pool assurance (both templates) ----------
 
-test('every pool mutant drops >= expected_drop and emits every must_fail id', () => {
+test('every software pool mutant drops >= expected_drop and emits every must_fail id', () => {
   for (const m of gen.mutants({ nonce: NONCE })) {
     const r = runOn(m.content);
     assert.equal(r.fails.length >= m.expectedDrop, true, `${m.id} dropped ${r.fails.length}`);
@@ -205,26 +331,48 @@ test('every pool mutant drops >= expected_drop and emits every must_fail id', ()
   }
 });
 
-// ---------- sealed end-to-end through the Wave 1 v1.9 framework ----------
+test('every book pool mutant drops >= expected_drop and emits every must_fail id', () => {
+  for (const m of gen.bookMutants({ nonce: NONCE })) {
+    const r = runOn(m.content);
+    assert.equal(r.fails.length >= m.expectedDrop, true, `${m.id} dropped ${r.fails.length}`);
+    const ids = new Set(r.fails.map((f) => f.split(' ')[0]));
+    for (const id of m.mustFail) {
+      assert.equal(ids.has(id), true, `${m.id} must fail ${id}`);
+    }
+  }
+});
 
-test('e2e: generate, seal into a temp store, validateGateCard green with all 5 mutants caught', () => {
+// ---------- sealed end-to-end through the templated framework (section 9) ----------
+
+/** Seal both template pools into a fresh store and return cardMarkdown args. */
+function sealBothPools(store, nonce) {
+  const put = (content) => {
+    const r = seal.sealPut({ content, storeRoot: store });
+    assert.equal(r.ok, true);
+    return r;
+  };
+  return {
+    software: {
+      referenceUri: put(gen.referenceContent({ nonce })).uri,
+      mutants: gen.mutants({ nonce }).map((m) => ({ ...m, fixtureUri: put(m.content).uri })),
+    },
+    book: {
+      referenceUri: put(gen.bookReferenceContent({ nonce })).uri,
+      mutants: gen.bookMutants({ nonce }).map((m) => ({ ...m, fixtureUri: put(m.content).uri })),
+    },
+  };
+}
+
+test('e2e: seal both pools, validateGateCard green, both refs M/M, all 10 mutants caught', () => {
   const store = mkTemp('brainstorm-gate-store-');
   const repo = initRepo({ 'README.md': 'clean hermetic repo\n' });
-  const nonce = gen.mintNonce();
+  const pools = sealBothPools(store, gen.mintNonce());
 
-  const ref = seal.sealPut({ content: gen.referenceContent({ nonce }), storeRoot: store });
-  assert.equal(ref.ok, true);
-  const pool = gen.mutants({ nonce }).map((m) => {
-    const put = seal.sealPut({ content: m.content, storeRoot: store });
-    assert.equal(put.ok, true);
-    return { ...m, fixtureUri: put.uri };
-  });
-
-  const card = gen.cardMarkdown({ referenceUri: ref.uri, mutants: pool, rotationK: 5 });
+  const card = gen.cardMarkdown({ ...pools, rotationK: 5 });
   const r = seal.validateGateCard(card, {
     repoRoot: repo,
     storeRoot: store,
-    runId: 'W3-BRAINSTORM-01',
+    runId: 'W2-BRAINSTORM-01',
     gateCmd: GATE_CMD,
     gateScriptPath: GATE,
   });
@@ -232,45 +380,64 @@ test('e2e: generate, seal into a temp store, validateGateCard green with all 5 m
   assert.equal(r.ok, true);
   assert.deepEqual(r.warnings, []);
   assert.equal(r.runRecord.gateId, 'brainstorm-artifact');
-  assert.equal(r.runRecord.sampled.length, 5, 'rotation_k 5 samples the full pool');
-  assert.deepEqual(r.runRecord.referenceScore, [6, 6]);
-  for (const s of r.runRecord.sampled) {
-    assert.equal(s.fails.length >= 1, true, `${s.id} was caught`);
+  for (const slug of ['software', 'book']) {
+    const record = r.runRecord.templates[slug];
+    assert.deepEqual(record.referenceScore, [6, 6], `${slug} reference is M/M`);
+    assert.equal(record.sampled.length, 5, `${slug} rotation_k 5 samples the full pool`);
+    for (const s of record.sampled) {
+      assert.equal(s.fails.length >= 1, true, `${slug} ${s.id} was caught`);
+    }
   }
 });
 
-test('e2e: replaying the same runId reproduces the identical mutant sample', () => {
+test('e2e: replaying the same runId reproduces both per-template samples', () => {
   const store = mkTemp('brainstorm-gate-store-');
-  const nonce = gen.mintNonce();
-  const ref = seal.sealPut({ content: gen.referenceContent({ nonce }), storeRoot: store });
-  const pool = gen.mutants({ nonce }).map((m) => ({
-    ...m,
-    fixtureUri: seal.sealPut({ content: m.content, storeRoot: store }).uri,
-  }));
-  const card = gen.cardMarkdown({ referenceUri: ref.uri, mutants: pool, rotationK: 2 });
-  const first = seal.validateGateCard(card, { storeRoot: store, runId: 'W3-BRAINSTORM-REPLAY' });
-  const second = seal.validateGateCard(card, { storeRoot: store, runId: 'W3-BRAINSTORM-REPLAY' });
-  assert.deepEqual(
-    first.runRecord.sampled.map((s) => s.id),
-    second.runRecord.sampled.map((s) => s.id)
-  );
-  assert.equal(first.runRecord.sampled.length, 2);
+  const pools = sealBothPools(store, gen.mintNonce());
+  const card = gen.cardMarkdown({ ...pools, rotationK: 2 });
+  const first = seal.validateGateCard(card, { storeRoot: store, runId: 'W2-BRAINSTORM-REPLAY' });
+  const second = seal.validateGateCard(card, { storeRoot: store, runId: 'W2-BRAINSTORM-REPLAY' });
+  for (const slug of ['software', 'book']) {
+    assert.deepEqual(
+      first.runRecord.templates[slug].sampled.map((s) => s.id),
+      second.runRecord.templates[slug].sampled.map((s) => s.id)
+    );
+    assert.equal(first.runRecord.templates[slug].sampled.length, 2);
+  }
 });
 
 test('e2e: sealing fixture content that is committed in the repo is rejected, not laundered', () => {
   const store = mkTemp('brainstorm-gate-store-');
   const nonce = gen.mintNonce();
-  const refContent = gen.referenceContent({ nonce });
-  const repo = initRepo({ '.planning/brainstorms/committed/BRAINSTORM.md': refContent });
+  const bookRefContent = gen.bookReferenceContent({ nonce });
+  const repo = initRepo({ '.planning/brainstorms/committed/BRAINSTORM.md': bookRefContent });
 
-  const ref = seal.sealPut({ content: refContent, storeRoot: store });
-  const pool = gen.mutants({ nonce }).map((m) => ({
-    ...m,
-    fixtureUri: seal.sealPut({ content: m.content, storeRoot: store }).uri,
-  }));
-  const card = gen.cardMarkdown({ referenceUri: ref.uri, mutants: pool, rotationK: 5 });
+  const pools = sealBothPools(store, nonce);
+  const card = gen.cardMarkdown({ ...pools, rotationK: 5 });
   const r = seal.validateGateCard(card, { repoRoot: repo, storeRoot: store });
   assert.equal(r.ok, false);
   assert.equal(r.code, 'E_FIXTURE_REPO_VISIBLE');
-  assert.equal(r.errors.some((e) => e.code === 'E_FIXTURE_REPO_VISIBLE' && e.role === 'reference'), true);
+  assert.equal(
+    r.errors.some((e) => e.code === 'E_FIXTURE_REPO_VISIBLE' && e.role === 'reference' && e.template === 'book'),
+    true
+  );
+});
+
+test('e2e: the seal-recorded gate script hash keys last_validated for BOTH templates', () => {
+  const store = mkTemp('brainstorm-gate-store-');
+  const pools = sealBothPools(store, gen.mintNonce());
+  const currentHash = seal.sha256HexOf(fs.readFileSync(GATE));
+  const dates = { software: '2026-07-23', book: '2026-07-23' };
+
+  const intact = seal.validateGateCard(
+    gen.cardMarkdown({ ...pools, rotationK: 2, lastValidated: dates, gateScriptHash: currentHash }),
+    { storeRoot: store, runId: 'W2-BRAINSTORM-LV', gateScriptPath: GATE }
+  );
+  assert.deepEqual(intact.lastValidated, dates);
+
+  // A gate script edit (hash change) nulls last_validated for ALL templates by design.
+  const stale = seal.validateGateCard(
+    gen.cardMarkdown({ ...pools, rotationK: 2, lastValidated: dates, gateScriptHash: 'f'.repeat(64) }),
+    { storeRoot: store, runId: 'W2-BRAINSTORM-LV', gateScriptPath: GATE }
+  );
+  assert.deepEqual(stale.lastValidated, { software: null, book: null });
 });

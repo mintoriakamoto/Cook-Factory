@@ -26,7 +26,7 @@ Existing codebase? Run `/ferrox:onboard` to map the repo, ingest existing docs, 
 | `/ferrox:quick` | Small ad-hoc task with Ferrox guarantees (planning dir + atomic commit) |
 | `/ferrox:fast "<task>"` | Trivial inline change — no subagents, ≤3 file edits |
 | `/ferrox:discuss-phase <N>` | Capture vision and decisions before planning |
-| `/ferrox:brainstorm [topic] [--research]` | Research brainstorm with visual companion, saved to `.planning/brainstorms/{slug}-{date}/`, then routed |
+| `/ferrox:brainstorm [topic] [--research]` | Topic brainstorm in 3 silent stances (guided, generative, sounding board) with research and visual companion on tap, saved to `.planning/brainstorms/{slug}-{date}/`, then routed |
 | `/ferrox:debug "<symptom>"` | Persistent debug session, survives `/clear` |
 | `/ferrox:capture` | Save an idea, todo, note, seed, or backlog item |
 | `/ferrox:verify-work <N>` | Conversational UAT for a completed phase |

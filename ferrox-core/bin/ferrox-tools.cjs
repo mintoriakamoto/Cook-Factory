@@ -210,6 +210,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 // #2002 — self-healing runtime build. The compiled ./lib/*.cjs modules this
 // entrypoint require()s below are gitignored build artifacts (ADR-457), shipped
@@ -251,7 +252,26 @@ try {
       projectRoot: _skewRoot,
       projectLocalExists: fs.existsSync(_skewLocal),
     });
-    if (_skewWarn) process.stderr.write(_skewWarn + '\n');
+    if (_skewWarn) {
+      // Field report 2026-07-23: the warning fired on EVERY invocation, which
+      // reads as noise once the operator has made a deliberate choice. Throttle
+      // to once per 12 hours per (cli, project) pair; `doctor` always shows the
+      // full picture on demand.
+      const _crypto = require('crypto');
+      const _stampKey = _crypto.createHash('sha256')
+        .update(path.resolve(__filename) + '|' + _skewRoot).digest('hex').slice(0, 16);
+      const _stampDir = path.join(os.homedir(), '.cache', 'ferrox');
+      const _stampFile = path.join(_stampDir, 'skew-warned-' + _stampKey);
+      let _suppress = false;
+      try {
+        const _age = Date.now() - fs.statSync(_stampFile).mtimeMs;
+        _suppress = _age < 12 * 60 * 60 * 1000;
+      } catch { /* no stamp yet */ }
+      if (!_suppress) {
+        process.stderr.write(_skewWarn + ' Run "ferrox-tools doctor" to inspect both installs.\n');
+        try { fs.mkdirSync(_stampDir, { recursive: true }); fs.writeFileSync(_stampFile, String(Date.now())); } catch { /* advisory */ }
+      }
+    }
   }
 } catch { /* advisory — never block */ }
 
@@ -714,7 +734,7 @@ async function main() {
   const TOP_LEVEL_USAGE = 'Usage: ferrox-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, ' +
-    'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
+    'current-timestamp, detect-custom-files, docs-init, doctor, drift-guard, effort, extract-messages, find-phase, ' +
     'from-ferrox2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
@@ -1439,6 +1459,60 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         output: output,
       });
       if (!handled) config.cmdConfigSetModelProfile(cwd, args[1], raw);
+      break;
+    }
+
+    case 'doctor': {
+      // Field report 2026-07-23: dual installs (global shadowing project-local)
+      // had to be diagnosed by hand during the js-yaml outage. This verb reports
+      // both installs, versions, precedence, and dependency self-checks.
+      const lines = [];
+      const running = path.resolve(__filename);
+      const readVersion = (coreDir) => {
+        try { return fs.readFileSync(path.join(coreDir, 'VERSION'), 'utf8').trim(); } catch { /* fall through */ }
+        try { return JSON.parse(fs.readFileSync(path.join(coreDir, '..', 'package.json'), 'utf8')).version; } catch { return 'unknown'; }
+      };
+      const runningCore = path.resolve(__dirname, '..');
+      lines.push(`running cli: ${running}`);
+      lines.push(`running version: ${readVersion(runningCore)}`);
+      lines.push(`node: ${process.version}`);
+      const globalCore = path.join(os.homedir(), '.claude', 'ferrox-core');
+      const globalCli = path.join(globalCore, 'bin', 'ferrox-tools.cjs');
+      lines.push(fs.existsSync(globalCli)
+        ? `global install: ${globalCore} (version ${readVersion(globalCore)})`
+        : 'global install: none');
+      const docRoot = findProjectRoot(cwd || process.cwd());
+      if (docRoot) {
+        const localCore = path.join(docRoot, '.claude', 'ferrox-core');
+        const localCli = path.join(localCore, 'bin', 'ferrox-tools.cjs');
+        lines.push(fs.existsSync(localCli)
+          ? `project install: ${localCore} (version ${readVersion(localCore)})`
+          : 'project install: none');
+        if (fs.existsSync(localCli) && path.resolve(localCli) !== running) {
+          lines.push('shadowing: YES. The running cli is not the project-local copy.');
+          lines.push('fix: keep 1 install. Remove the unused copy:');
+          lines.push('  project copy: run in the project: node bin/install.js --claude --local --uninstall (or npx -y ferrox-factory --claude --local --uninstall)');
+          lines.push('  global copy: node bin/install.js --claude --global --uninstall (or the npx form with --global)');
+        } else {
+          lines.push('shadowing: no');
+        }
+      } else {
+        lines.push('project install: no project root found from cwd');
+      }
+      try {
+        require('./lib/gate-seal.cjs');
+        lines.push('dependency self-check: ok (sealed framework loads, vendored yaml resolves)');
+      } catch (e) {
+        lines.push(`dependency self-check: FAILED (${e && e.message ? e.message.split('\n')[0] : 'unknown error'})`);
+      }
+      const domainVal = (() => {
+        try {
+          const { loadConfig } = require('./lib/config-loader.cjs');
+          return loadConfig(docRoot || process.cwd()).domain ?? 'unset';
+        } catch { return 'unavailable'; }
+      })();
+      lines.push(`config domain: ${domainVal}`);
+      output(lines.join('\n'));
       break;
     }
 

@@ -133,7 +133,8 @@
     "model.audit_panel",
     "model.audit_panel.flux_models",
     "memory.fact_store",
-    "memory.recall_limit"
+    "memory.recall_limit",
+    "domain"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"

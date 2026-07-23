@@ -48,8 +48,9 @@ Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** 
 | Sketching, "mockup", "what would this look like", "prototype the UI", "design this", explore visual direction | `/ferrox:sketch` | Throwaway HTML mockups to explore design |
 | Wrapping up spikes, "package the spikes", "consolidate spike findings" | `/ferrox:spike --wrap-up` | Package spike findings into reusable skill |
 | Wrapping up sketches, "package the designs", "consolidate sketch findings" | `/ferrox:sketch --wrap-up` | Package sketch findings into reusable skill |
-| Exploring, researching, comparing, or "how does X work" | `/ferrox:explore` | Socratic ideation and idea routing |
-| Discussing vision, "how should X look", brainstorming | `/ferrox:discuss-phase` | Needs context gathering |
+| Exploring, researching, comparing, or "how does X work" against the existing codebase | `/ferrox:explore` | Codebase-grounded Socratic ideation and idea routing |
+| Brainstorming a topic, "help me think through", "I have an idea", "what if", a blank page | `/ferrox:brainstorm` | Topic ideation with stances, stance-keyed exits into the lifecycle |
+| Discussing vision for a specific phase, "how should phase N look" | `/ferrox:discuss-phase` | Needs phase context gathering |
 | A complex task: refactoring, migration, multi-file architecture, system redesign | `/ferrox:phase` | Needs a full phase with plan/build cycle |
 | Planning a specific phase or "plan phase N" | `/ferrox:plan-phase` | Direct planning request |
 | Executing a phase or "build phase N", "run phase N" | `/ferrox:execute-phase` | Direct execution request |

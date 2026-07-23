@@ -95,6 +95,22 @@ AskUserQuestion(
 - Selected seeds become additional context for requirement definition in step 9. Store them in an accumulator (e.g. `$SELECTED_SEEDS`) so step 9 can reference the ideas and their "Why This Matters" sections when defining requirements.
 - Unselected seeds remain untouched in `.planning/seeds/` — never delete or modify seed files during this workflow.
 
+## 2.6. Scan Brainstorm Artifacts
+
+Alongside seeds, check for brainstorm sessions that routed here (exit-as-intake):
+
+```bash
+ls -dt .planning/brainstorms/*/BRAINSTORM.md 2>/dev/null
+```
+
+**If none exist:** Skip silently.
+
+**If artifacts exist:** A brainstorm qualifies when its frontmatter `status:` is `captured`, or its Next Step section routes to `/ferrox:new-milestone` (the seed-milestone exit), or its topic matches the milestone goals from step 2. Read each qualifying artifact per the `ferrox-core/bin/lib/brainstorm-intake.cjs` contract (`parseBrainstormArtifact`): frontmatter (`template:`, `status:`) plus Decisions, Notes, and Open Questions; a Decisions entry counts ONLY with exit provenance `(stance: ..., confirmed at exit)`, and hedged or unconfirmed items are notes, never decisions.
+
+Acknowledge each in 1 line: `Found a brainstorm from {date} on {topic} with {N} locked decisions; using it as intake.` Multiple qualifying artifacts are presented most recent first; offer selection the same way as seeds (AskUserQuestion multiSelect, plain-text list in TEXT_MODE, auto-select ALL in `--auto` mode).
+
+Store the parsed results beside `$SELECTED_SEEDS` (e.g. `$BRAINSTORM_INTAKE`) as locked context for milestone definition and step 9 requirements. These decisions are OFF LIMITS: never re-ask a decided item unprompted; requirement questions build on top of them instead. OFF LIMITS is not immutable: the user reopening a decision by name always works. Brainstorm Notes and Open Questions sections are fair game and GOOD question seeds when probing milestone scope.
+
 ## 3. Determine Milestone Version
 
 - Parse last version from MILESTONES.md

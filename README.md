@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-912%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1001%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -253,8 +253,11 @@ self-checking generator that reads the raw results and refuses to draw on any mi
 ## The gate library
 
 The gates the climb runs against are a library, not a pile of scripts: 6 validated packs
-(39 checks, 31 sealed mutants) ship in [`gates/`](gates/README.md), each with a Gate Card
-declaring its checks, tools, validation status, and known gamed-modes.
+(39 checks, 36 sealed mutants) ship in [`gates/`](gates/README.md), each with a Gate Card
+declaring its checks, tools, validation status, and known gamed-modes. Since v1.12 the
+library is template-keyed: a pack can carry separate sealed validation blocks per artifact
+shape, and the first template-keyed pack gates both software and book brainstorm artifacts
+with per-template semantics.
 
 - **eval-harness-integrity**: trusts an eval harness only when it separates a gold stub, a
   random stub, and its own planted mutants in the declared order at the declared deltas.
@@ -264,8 +267,12 @@ declaring its checks, tools, validation status, and known gamed-modes.
   references, token budget, runnable examples, and contradictions.
 - **spreadsheets**: recalculates workbooks headless and perturbs inputs to catch hardcoded
   totals that read as formulas.
-- **brainstorm-artifact**: a hygiene floor on the brainstorm document's shape: required
-  sections in order, a definite recommendation, no placeholders, no dead references.
+- **brainstorm-artifact**: a hygiene floor on the brainstorm document's shape, keyed off
+  the artifact's `template:` frontmatter: required sections in order, a definite
+  recommendation, no placeholders, no dead references. The book template swaps in the
+  fiction skeleton (Premise, World, Cast, Tone, Threads) and waives the dash ban inside
+  prose, because dashes are correct craft in fiction; a declared template with no
+  shipped pack fails closed.
 - **web-ui**: the mechanical accessibility floor for frontend surfaces, computed statically
   from a self-contained HTML file: WCAG contrast ratios, 24x24 px tap targets, focus
   visibility, landmarks, heading order, alt and label decisions, reduced-motion fallbacks.
@@ -286,30 +293,59 @@ authoring guide live in [`gates/README.md`](gates/README.md).
 
 ## Brainstorm mode: think it through before the line runs
 
-`/ferrox-brainstorm` is the ideation on-ramp, and it holds a hard gate of its own: **no
-implementation, no code, no scaffolding until a design is approved**, no matter how simple
-the idea looks. The discipline is modeled on Superpowers' brainstorming (MIT, credited) and
-then pushed further in 4 ways:
+`/ferrox-brainstorm` is the ideation on-ramp, and since v1.12 it holds 3 interaction
+stances, chosen silently from your opening and never announced. The register just fits:
 
-- **Recommendation-first, always.** Every question and every option set leads with a
-  verified pick and the why. A bare option list is treated as a defect.
-- **Research on tap.** Hit a genuine unknown mid-session and the workflow fires 2 to 4
-  parallel researcher agents that return a comparison table INTO the conversation, saved
-  alongside the artifact. Start with `--research` to front-load the sweep.
-- **A visual companion that designs live.** The agent starts a local, zero-dependency web
-  server (`ferrox-tools visual.start`), writes real mockups into it, and you CLICK to
-  decide; selections flow back into the session as recorded events. Hardened for local
-  use: host allowlist, cross-origin WebSocket rejection. Available to any workflow, not
-  just brainstorming.
-- **3 honest exits.** A finished brainstorm promotes to a phase discussion, seeds a new
-  milestone, or parks to the backlog. The artifact itself must clear a structural gate
-  before you ever review it, including the anti-hedge check: a Recommendation section that
-  says "either option could work" fails.
+- **Guided**, for concrete decisions with real constraints: recommendation-first
+  questions (every option set leads with a verified pick and the why; a bare option list
+  is a defect), 2 to 3 genuinely different approaches, sectioned convergence.
+- **Generative**, for blank pages: 1 easy intake batch where "not sure is fine", then
+  the agent generates 4 to 6 concrete pre-checked options, each tied to your answers,
+  and converges to a recommendation with a runner-up in reserve. Ask it to widen and it
+  serves a fresh batch from a different axis AND discloses the class of options it
+  silently discarded, so the filter stays inspectable.
+- **Sounding board**, for creative thinking-out-loud: a collaborator, not a
+  questionnaire. Say "I have this novel I keep circling" and you get someone who builds
+  on the idea, follows your thread, and never serves an option list. Agreement is not
+  free: every capture checkpoint carries exactly 1 concrete pushback with a named stake,
+  so a long enthusiastic session still gets challenged. It recommends freely on craft
+  and never on your story, your world, or your product facts; those are yours.
+
+Steering is plain language: "just riff with me" or "what do you actually recommend"
+pulls the register immediately, and your steering always wins over the automatic read.
+
+The hard gate holds in every stance: **no implementation, no code, no scaffolding until
+a design is approved**, no matter how simple the idea looks. Research on tap (2 to 4
+parallel researchers returning comparison tables into the session) and the live visual
+companion ride along as before.
+
+**The exit is the intake.** Guided and generative sessions close on a GO gate; a
+sounding-board session closes on a recap you bless: "sounds decided" vs "still open",
+corrected in 1 move. Only exit-confirmed items become Decisions, each with provenance,
+and the receipt is machine-tested: decisions flow into `/ferrox-new-project` with 0
+re-asked questions. Parking is a successful exit, and every session leaves a resumable
+record.
+
+A real sounding-board session, mapping a cyberpunk novel from a thinking-out-loud
+opening to a gated book-template artifact, is archived in-repo as a demo:
+[`docs/demos/brainstorm-cyberpunk-novel/`](docs/demos/brainstorm-cyberpunk-novel/BRAINSTORM.md).
 
 ![A live visual companion screen comparing 2 design directions for a tide-planning app: Harbor Ledger, a warm editorial tide table marked Recommended, beside Tidal Glass, a deep-water immersive curve view, each with a choose button](assets/visual-companion-showcase.png)
 
 *A real companion screen: the agent presents 2 directions with its recommendation stated
 first, you click, the session continues with your choice on record.*
+
+## The ignition path
+
+The whole line lights from 1 conversation: brainstorm the idea in whatever register
+fits, say GO, and the artifact's exit-confirmed Decisions seed `/ferrox-new-project` as
+given facts; plan the first phase, cross-review the plan, execute. That is the golden
+path: brainstorm to GO to new-project to plan to cross-review to execute, with the
+ideation artifact clearing a validated machine gate before it ever routes. The seam
+carries a receipt: the intake test emits its counts in both interactive and auto modes,
+decisions ingested 3 and re-askable 0 in each, with the interactive run additionally
+skipping all 3 already-decided questions as off-limits, so "nothing gets asked twice"
+is a measured claim, not a promise.
 
 ## The design stack: contract, knowledge, eyes
 
@@ -365,6 +401,14 @@ all. Instruction-file and hook support are best-effort per runtime; Claude Code 
 
 Uninstall anytime: `node bin/install.js --claude --global --uninstall`.
 
+**Install precedence: keep 1 copy.** A global install (`~/.claude`) and a project-local
+install (`<project>/.claude`) can coexist, and when they do, the global copy's CLI
+shadows the project-local one, so the 2 copies can drift to different versions and
+configs while the local one sits unused. The CLI warns when it detects shadowing (at
+most once per 12 hours per project), and `ferrox-tools doctor` prints the full picture
+on demand: both install paths, both versions, which copy is actually running, a
+dependency self-check, and the exact uninstall command for whichever copy you drop.
+
 ---
 
 ## Quick start
@@ -385,6 +429,7 @@ run the matching skill):
 | `/ferrox-code-review` | changed-file review for bugs, security, quality |
 | `/ferrox-ship` | PR + merge-gate before landing, review when configured |
 | `/ferrox-help` | the full command guide |
+| `ferrox-tools doctor` | report both installs, versions, shadowing, and dependency health |
 
 ---
 
@@ -422,7 +467,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **912 tests** across the halting, coordination, strength, model-routing, memory,
+The suite is **1001 tests** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

@@ -321,6 +321,7 @@
       "audit.cjs",
       "authority-fence.cjs",
       "blocker-policy.cjs",
+      "brainstorm-intake.cjs",
       "capability-activation.cjs",
       "capability-consent.cjs",
       "capability-ledger.cjs",

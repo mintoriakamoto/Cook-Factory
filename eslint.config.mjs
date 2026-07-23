@@ -55,6 +55,9 @@ export default tseslint.config(
       '.claude/**',
       'coverage/**',
       '**/*.generated.cjs',
+      // Vendored third-party dist builds ship verbatim (license headers intact);
+      // lint would rewrite upstream code we deliberately do not touch.
+      'ferrox-core/bin/vendor/**',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'ferrox-core/bin/lib/claude-orchestration.cjs',
       'ferrox-core/bin/lib/claude-orchestration-command-router.cjs',
@@ -259,6 +262,8 @@ export default tseslint.config(
       'ferrox-core/bin/lib/package-legitimacy.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/git-base-branch.cts source.
       'ferrox-core/bin/lib/git-base-branch.cjs',
+      // ADR-457: tsc-generated runtime artifact — lint the src/brainstorm-intake.cts source.
+      'ferrox-core/bin/lib/brainstorm-intake.cjs',
       // ADR-1213: tsc-generated runtime artifact — lint the src/capability-writer.cts source.
       'ferrox-core/bin/lib/capability-writer.cjs',
       // issue #1754: tsc-generated runtime artifact — lint the src/cli-skew-check.cts source.

@@ -1,0 +1,35 @@
+{
+  "comment": "Candidate downstream questions for the seam receipt. Each entry says whether it re-asks an exit-confirmed decision (expected: off-limits) or probes unblessed material (expected: askable). The classifier must reproduce this split exactly; every off-limits entry names the decision it re-asks.",
+  "questions": [
+    {
+      "id": "q1",
+      "text": "Should the sync engine use a local-first CRDT store or a server-authoritative model?",
+      "expected": "off-limits",
+      "reasks": "Sync engine uses a local-first CRDT store"
+    },
+    {
+      "id": "q2",
+      "text": "When a conflict happens, should resolution surface to the user?",
+      "expected": "off-limits",
+      "reasks": "Conflict resolution surfaces to the user only on schema conflicts"
+    },
+    {
+      "id": "q3",
+      "text": "Is the first release desktop only or cross-platform?",
+      "expected": "off-limits",
+      "reasks": "The first release targets desktop only"
+    },
+    {
+      "id": "q4",
+      "text": "Which CRDT library should we benchmark first?",
+      "expected": "askable",
+      "reasks": null
+    },
+    {
+      "id": "q5",
+      "text": "What release cadence fits the team?",
+      "expected": "askable",
+      "reasks": null
+    }
+  ]
+}

@@ -26,6 +26,9 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskSecret } from './secrets.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import gateSelect = require('./gate-select.cjs');
+const { selectGate, listGateDomains } = gateSelect;
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 
@@ -793,6 +796,18 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   // plan_review.source_grounding_authority (#22) — enum
   const VALID_SOURCE_GROUNDING_AUTHORITIES = ['grep', 'intel', 'treesitter', 'lsp', 'scip'];
   if (kp === 'plan_review.source_grounding_authority') assertEnumValue(parsedValue, val, VALID_SOURCE_GROUNDING_AUTHORITIES, 'plan_review.source_grounding_authority');
+
+  // domain (v1.12 Wave 0.1) — the classified project domain fact. Accepts the
+  // 20 canonical gate-select registry keys PLUS their registered aliases;
+  // gate-select is the single source of truth (selectGate normalizes and
+  // resolves aliases on read, so anything it knows is storable as written).
+  // Everything else is rejected: `book`/`campaign`/`software` are artifact
+  // TEMPLATE values, never domains (ADR-ARTIFACT-TEMPLATE-FIELD.md).
+  if (kp === 'domain') {
+    if (typeof parsedValue !== 'string' || !selectGate(parsedValue).known) {
+      error(`Invalid domain '${val}'. Must be a canonical gate-select domain or a registered alias. Canonical domains: ${listGateDomains().join(', ')}. Clear with: config-set domain null`);
+    }
+  }
 
   // Generic capability-registry validation (#1628). Capability-owned keys declare
   // their type/values in the registry but most lack a hardcoded guard, so out-of-

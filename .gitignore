@@ -261,12 +261,18 @@ build/
 /ferrox-core/bin/lib/roadmap.cjs
 /ferrox-core/bin/lib/audit.cjs
 /ferrox-core/bin/lib/git-base-branch.cjs
+/ferrox-core/bin/lib/brainstorm-intake.cjs
 __pycache__/
 *.pyc
 .venv/
 venv/
 target/
 vendor/
+# Shipped vendored dist builds are TRACKED (the installed tree has no
+# node_modules; see the 1.11.1 js-yaml hotfix). Never let the vendor/
+# pattern above swallow them again.
+!ferrox-core/bin/vendor/
+!ferrox-core/bin/vendor/**
 *.log
 .cache/
 tmp/

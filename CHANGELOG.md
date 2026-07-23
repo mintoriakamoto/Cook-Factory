@@ -1,5 +1,105 @@
 # Changelog
 
+## 1.12.0 (2026-07-23): Brainstorm v3, the Sounding Board
+
+`/ferrox-brainstorm` learns to hold a real creative conversation. v3 gives the workflow
+3 interaction stances chosen silently from your opening, a capture discipline that makes
+agreement pay for itself with named-stake pushback, stance-keyed exits that promote only
+what you actually confirmed, and a seam that carries those confirmations into the build
+line so nothing gets asked twice. The gate library becomes template-keyed and grows its
+first non-software artifact shape. Proven by dogfood on both poles: a sounding-board
+session mapping a cyberpunk novel (archived in-repo as a demo asset) and a generative
+session opened from a blank page, both artifacts 6/6 on the first gate run. Library
+totals: 6 packs, 39 checks, 36 sealed mutants. Suite: 912 to 1001 tests, all green.
+
+### Brainstorm v3: 3 stances, 1 register that fits
+
+- **3 stances, chosen silently, never announced**: guided (concrete decisions, the v2
+  register kept: recommendation-first questions, 2 to 3 genuinely different approaches,
+  sectioned convergence), generative (blank pages: 1 intake batch where "not sure is
+  fine", then 4 to 6 concrete pre-checked options with why-each-fits-you, converging to
+  a recommendation plus a runner-up and a GO fork), and sounding board (creative
+  thinking-out-loud: a collaborator, not a questionnaire; no option lists, no
+  interrogation, recommendations on craft but never on the user's story, world, or
+  product facts).
+- **Steering is plain language.** There is no switch vocabulary: "just riff with me" or
+  "what do you actually recommend" pulls the register immediately, and overrides always
+  win over detection. Ambiguous openings route on 2 messages instead of a guess, and
+  autonomous drift moves only toward convergence, only in response to a convergent user
+  move.
+- **The capture tax.** In the sounding board, every capture checkpoint carries exactly
+  1 concrete pushback with a named stake, scaled to idea density rather than turn
+  count, so a long agreeable session still gets challenged. Captured points store a
+  short verbatim anchor beside the paraphrase so later drafts use the user's words, not
+  a drifted summary.
+- **Stance-keyed exits and Decision promotion.** Guided and generative close on the GO
+  gate; the sounding board closes on recap-confirm: the session recapped as 2 lists,
+  "sounds decided" and "still open", blessed or corrected in 1 move. Only
+  exit-confirmed items become Decisions, each carrying provenance (stance plus
+  confirmed at exit); everything unblessed stays freely askable downstream. Park is a
+  first-class successful exit, and `SESSION-NOTES.md` (append-only checkpoints with
+  stable ids) makes every session resumable.
+
+### The gate library goes template-keyed
+
+- **Sealed framework extension (GATE-CARD-SPEC section 9)**: gate cards now carry
+  per-template validation blocks, each with its own sealed reference, mutant pool (5
+  minimum), rotation, and last-validated stamp. Editing a gate script nulls validation
+  for every template until an operator re-seal, by design.
+- **brainstorm-artifact is the first template-keyed pack**, keyed off the artifact's
+  `template:` frontmatter: software (byte-identical to the v1.10 behavior and the
+  default for legacy artifacts) and book (Premise / World / Cast / Tone / Threads /
+  Open Questions / Next Step, with the editorial dash ban waived inside fiction prose
+  and held everywhere structural). A declared template with no shipped pack fails
+  closed.
+- **The book pool is 5 fluent mutants, sealed and caught**: premise-free worldbuilding
+  that reads rich and complete, a thread-free cast list, hedge-soup Decisions, a
+  skipped section with plausible flow, a renamed lore file.
+- Library totals move from 6 packs, 39 checks, 31 sealed mutants to 6 packs, 39
+  checks, 36 sealed mutants.
+
+### Exit-as-intake: the seam receipt
+
+- The brainstorm exit is now the intake for the build line: `new-project` (both
+  interactive and `--auto` synthesis), `discuss-phase`, `new-milestone`, and
+  `plan-phase` ingest exit-confirmed Decisions as given and never re-ask them
+  unprompted. OFF LIMITS is not immutable: the user reopening a decision by name
+  always works.
+- Promotion is fail-closed in the parser: unconfirmed bullets demote to notes, and
+  hedged items are never promoted.
+- **The receipt, emitted by the seam test**: decisions ingested: 3 and re-askable: 0 in
+  both modes; the interactive receipt additionally shows 3 questions skipped as
+  off-limits (auto mode asks no questions at all, so there is nothing to skip).
+
+### The domain fact, the doctor, and a quieter warning
+
+- `domain` is a registered config key, classified at most once per project and stored
+  via `config-set`; call sites read the fact and pass it into gate selection, and the
+  workflow holds domain vocabulary discipline: no tests, deploys, or CI applied to
+  someone's book, campaign, or brand.
+- **`ferrox-tools doctor`**: reports the running CLI, both installs (global and
+  project-local) with versions, the shadowing verdict with exact uninstall commands, a
+  dependency self-check, and the stored domain.
+- The dual-install skew warning now fires at most once per 12 hours per CLI-and-project
+  pair instead of on every invocation; `doctor` always shows the full picture on
+  demand.
+
+### Fixed
+
+- **Fresh installs from 1.9.0 through 1.11.0 shipped a dead CLI.** The installer
+  file-copies `ferrox-core/` into your `.claude` directory with no `node_modules`, and
+  the sealed-gate framework required `js-yaml` from `node_modules` at startup, so every
+  `ferrox-tools` invocation on a fresh install failed with `Cannot find module
+  'js-yaml'` before parsing arguments. In-repo development never hit it, which is how
+  it escaped. Thanks to the field report that caught it. The fix vendors a pinned copy
+  at `ferrox-core/bin/vendor/js-yaml-4.2.0.cjs` (MIT, header preserved), so the
+  installed tree is fully self-contained, and 2 regression guards now hold the line:
+  `tests/installed-layout-smoke.test.cjs` runs the real installer into a scratch
+  project and executes the installed CLI with no `node_modules` in reach, and a
+  tracked-vendor guard fails the suite if the vendored file ever drops out of git. If
+  you hit this on 1.11.0 or earlier, update with `npx -y ferrox-factory@latest
+  --claude` (add `--local` for a project install).
+
 ## 1.11.0 (2026-07-22): The Web UI Gate Pack
 
 The gate library grows its 6th pack, `gates/web-ui/`: a static, deterministic, sealed,

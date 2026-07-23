@@ -1,6 +1,6 @@
 # The Ferrox Gate Library
 
-6 validated gate packs, 39 machine checks, 31 sealed fluent-but-wrong mutants, every pack
+6 validated gate packs, 39 machine checks, 36 sealed fluent-but-wrong mutants, every pack
 proven to catch all of its mutants before it is allowed to gate anything. This directory
 is the public face of that library: the packs, their Gate Cards, and their fixture
 generators. The fixtures themselves are sealed and never committed.
@@ -96,23 +96,41 @@ skill must resolve against the workspace and manifest the file instructs over.
 | SK-05 | relation | no contradictory directives (declared mutually exclusive pattern pairs) |
 | SK-06 | value | editorial floor holds (no em dash, digits not spelled-out numbers) |
 
-### brainstorm-artifact (domain: `agent-ops`, tier 2)
+### brainstorm-artifact (domain: `agent-ops`, tier 2, template-keyed)
 
 Structural hygiene floor for the `BRAINSTORM.md` artifacts the `/ferrox-brainstorm`
 workflow emits. Ideation quality is gate-hostile by locked doctrine (see the final section),
 so this gate deliberately scores NO content quality: it asserts only what rots mechanically.
-The signature check is BA-02: a Recommendation section that reads polished but contains no
-actual pick ("either option could work, both have merits") fails, because a brainstorm
-without a pick is a brainstorm that dodged its job.
+
+This is the library's first TEMPLATE-KEYED pack: the artifact frontmatter declares its
+shape (`template: software` or `template: book`) and the card carries a per-template
+validation block for each, with its own sealed reference, its own 5-mutant fluent pool,
+and its own deterministic rotation seed. The check ids are shared; their semantics key
+per template. An artifact with no frontmatter gates as software (the only shape that
+existed before the field); a declared template with no shipped block (`campaign`, for
+now) fails closed on BA-01.
+
+Template `software` (unchanged from v1.10):
 
 | Check | Category | What it asserts |
 |---|---|---|
 | BA-01 | structure | all 6 required sections present as H2 headings in template order (Context, Options Considered, Recommendation, Decisions, Open Questions, Next Step) |
-| BA-02 | structure | Recommendation states a definite pick: prose over the length floor with no hedge-pattern match |
-| BA-03 | value | editorial floor holds (no em or en dash, digits not spelled-out numbers) |
+| BA-02 | structure | Recommendation states a definite pick: prose over the length floor with no hedge-pattern match ("either option could work, both have merits" fails) |
+| BA-03 | value | editorial floor holds across the whole document (no em or en dash, digits not spelled-out numbers) |
 | BA-04 | grounding | no dead file references: backticked relative paths resolve against the workspace |
 | BA-05 | structure | Open Questions and Next Step are non-empty (an honest brainstorm always has both) |
 | BA-06 | value | no placeholder markers (TBD, TODO, FIXME, XXX, lorem ipsum) |
+
+Template `book` (v1.12, per the locked check matrix):
+
+| Check | Category | What it asserts |
+|---|---|---|
+| BA-01 | structure | all 7 required sections present in order (Premise, World, Cast, Tone, Threads, Open Questions, Next Step) AND the 5 content sections carry prose: a heading with no body is not a section, so premise-free worldbuilding and thread-free cast lists fail here |
+| BA-02 | structure | Next Step states 1 concrete action: non-empty and hedge-free (a parked book passes with "keep it warm" phrasing and no pick); a Decisions section, when present, still requires definite wording |
+| BA-03 | value | editorial floor holds in the frontmatter block and heading lines; WAIVED inside prose blocks, where em dashes and spelled-out numbers are correct fiction craft |
+| BA-04 | grounding | no dead file references (the book pool exercises this with a plausibly renamed lore-bible path) |
+| BA-05 | structure | Open Questions and Next Step are non-empty |
+| BA-06 | value | no placeholder markers |
 
 ### web-ui (domain: `web-ui`, tier 1)
 
@@ -169,6 +187,13 @@ And validation rejects any fixture whose content hash collides with a repo blob
 (`E_FIXTURE_REPO_VISIBLE`): a fixture the builder could read is not a fixture, it is an
 answer key.
 
+Template-keyed packs extend the same model per shape: each declared template carries its
+own sealed reference, its own full pool, its own rotation seed (run id + gate id +
+template slug), and its own `last_validated`. The card records the gate script hash at
+seal time, and any change to the gate script voids `last_validated` for EVERY template on
+the card, because template-keyed logic lives in 1 script and no per-template verdict
+survives a script edit.
+
 ## Running a gate
 
 Every gate follows the same v2 output contract: 1 `FAIL <ID> <category>` line per failing
@@ -185,7 +210,8 @@ python3 gates/test-generation/gate.py bundle.json
 # skill-instruction-files: the instruction file, grounded against workspace + manifest
 node gates/skill-instruction-files/gate.cjs --workspace ./proj --manifest manifest.json SKILL.md
 
-# brainstorm-artifact: the brainstorm doc, grounded against the workspace it references
+# brainstorm-artifact: the brainstorm doc, grounded against the workspace it references;
+# the gate reads template: from the frontmatter, --template <slug> overrides
 node gates/brainstorm-artifact/gate.cjs --workspace . .planning/brainstorms/topic-2026-07-22/BRAINSTORM.md
 
 # spreadsheets: the workbook, with the card-declared ranges in config

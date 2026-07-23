@@ -12,6 +12,7 @@
   "phase_naming": "sequential",
   "project_code": null,
   "phase_id_convention": null,
+  "domain": null,
   "mode": "interactive",
   "claude_md_path": "./.claude/CLAUDE.md",
   "git": {

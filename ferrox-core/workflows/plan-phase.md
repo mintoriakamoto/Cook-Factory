@@ -277,6 +277,20 @@ If "Run discuss-phase first":
   ```
   **Exit the plan-phase workflow. Do not continue.**
 
+## 4.2. Ingest Brainstorm Decisions (exit-as-intake)
+
+Where phase context loads, brainstorm output loads with it. Check for artifacts:
+
+```bash
+ls -dt .planning/brainstorms/*/BRAINSTORM.md 2>/dev/null
+```
+
+**If none exist:** Continue to step 4.5.
+
+**If artifacts exist:** For each artifact relevant to this phase (same project; topic overlaps the phase goal or its CONTEXT.md), read frontmatter plus the Decisions, Notes, and Open Questions sections per the `ferrox-core/bin/lib/brainstorm-intake.cjs` contract (`parseBrainstormArtifact`): a Decisions entry counts ONLY with exit provenance `(stance: ..., confirmed at exit)`; hedged or unconfirmed items are notes, never decisions. Acknowledge in 1 line: `Found a brainstorm from {date} on {topic} with {N} locked decisions; using it as intake.`
+
+Store the qualifying artifact paths as `BRAINSTORM_PATHS` and surface the exit-confirmed Decisions to the planner (step 8 `<files_to_read>`) as locked constraints alongside CONTEXT.md decisions, provenance included. These decisions are OFF LIMITS: never re-ask a decided item unprompted, and the planner does not re-litigate them; plans build on top of them. OFF LIMITS is not immutable: the user reopening a decision by name always works, and a reopened decision is planned like any open question. Brainstorm Notes and Open Questions sections are fair game: treat them as research leads and risk flags, never as constraints.
+
 ## 4.5. Resolve AI-SPEC Artifact
 
 AI integration activation is owned by the `ai-integration` capability's `plan:pre` step hook. The plan-phase host only discovers existing artifacts here so the planner can consume them; it must not read the capability's config key directly.
@@ -750,6 +764,7 @@ Planner prompt:
 - {SPEC_PATH} (Phase SPEC — carries the ## Edge Coverage section to lift covered/backstop edges from, if exists)
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
+- {BRAINSTORM_PATHS} (Brainstorm artifacts from step 4.2 — exit-confirmed Decisions are locked constraints, OFF LIMITS to re-litigate; Notes and Open Questions are leads, not constraints; if any exist)
 - {API_SURFACE_PATH} (API Surface — HINT ONLY, when intel capability is active; see <intel_surface_hint> below)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
