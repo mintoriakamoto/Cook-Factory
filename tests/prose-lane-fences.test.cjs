@@ -72,7 +72,33 @@ function makeProject(domain) {
   };
   if (domain !== undefined) cfg.domain = domain;
   fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
+  // The waiver domain is read from the COMMITTED config on `main` (audit finding
+  // 1.3), so a legit non-code project commits its domain at init. Git-init the
+  // temp project and commit config.json on main to mirror that reality.
+  gitInitCommitConfig(dir);
   return dir;
+}
+
+/** git-init `dir` on `main` and commit the current `.planning/config.json`. */
+function gitInitCommitConfig(dir) {
+  const g = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  g('init', '-b', 'main');
+  g('config', 'user.email', 'test@ferrox.local');
+  g('config', 'user.name', 'ferrox-test');
+  g('add', '.planning/config.json');
+  g('commit', '--no-gpg-sign', '-q', '-m', 'seed config');
+}
+
+/**
+ * Overwrite the WORKING-TREE config domain WITHOUT committing — the exact
+ * finding-1.3 attack: an increment rewrites .planning/config.json mid-flight to
+ * self-certify a non-code waiver. The committed `main` domain is unchanged.
+ */
+function tamperWorkingTreeDomain(dir, domain) {
+  const cfgPath = path.join(dir, '.planning', 'config.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  cfg.domain = domain;
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
 }
 
 function seedManifest(dir, overrides) {
@@ -103,11 +129,19 @@ function seedCoverageBaseline(dir, covered) {
   fs.writeFileSync(path.join(dir, '.planning', 'strength', 'coverage-baseline.json'), JSON.stringify({ covered }, null, 2) + '\n');
 }
 
-function seedReceipt(dir, requirement) {
+/** Commit everything currently in the tree and return the real HEAD sha. */
+function gitCommitAll(dir) {
+  const g = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  g('add', '-A');
+  g('commit', '--no-gpg-sign', '-q', '-m', 'seed evidence');
+  return (g('rev-parse', 'HEAD').stdout || '').trim();
+}
+
+function seedReceipt(dir, requirement, commit) {
   const res = spawnSync(
     process.execPath,
     [FERROX_TOOLS, '--cwd', dir, 'query', 'strength.receipt', '--requirement', requirement,
-      '--test', 'strong-01.test.cjs', '--exit-code', '1', '--log-digest', 'abc123', '--commit', 'deadbeef', '--raw'],
+      '--test', 'strong-01.test.cjs', '--exit-code', '1', '--log-digest', 'abc123', '--commit', commit || 'deadbeef', '--raw'],
     { encoding: 'utf8' },
   );
   assert.equal(res.status, 0, `seedReceipt failed: ${res.stderr}`);
@@ -122,9 +156,10 @@ function runHook(cwd) {
 function seedCodeInstrumentFailure(domain, { coverageFails = true, mutationFails = false } = {}) {
   const dir = makeProject(domain);
   seedManifest(dir, mutationFails ? { mutation_flipped: false } : {});
-  seedReceipt(dir, 'STRONG-01');
   seedRequirements(dir, 1, 2);
   seedCoverageBaseline(dir, coverageFails ? 1 : 0); // covered 1 vs baseline 1 → no advance
+  const sha = gitCommitAll(dir); // commit the evidence so the receipt names a real commit
+  seedReceipt(dir, 'STRONG-01', sha);
   return dir;
 }
 
@@ -132,9 +167,10 @@ function seedCodeInstrumentFailure(domain, { coverageFails = true, mutationFails
 function seedPassFixture(domain) {
   const dir = makeProject(domain);
   seedManifest(dir);
-  seedReceipt(dir, 'STRONG-01');
   seedRequirements(dir, 1, 2);
   seedCoverageBaseline(dir, 0);
+  const sha = gitCommitAll(dir);
+  seedReceipt(dir, 'STRONG-01', sha);
   return dir;
 }
 
@@ -176,6 +212,35 @@ test('B1 waiver: writing domain, coverage-only failure → ALLOWED with a loud 1
   assert.match(lines[0], /'writing' -> 'writing'/);
   assert.match(lines[0], /coverage-not-landed/);
   assert.match(lines[0], /code-suite instruments/);
+});
+
+test('B1 finding-1.3: a working-tree domain tampered to writing does NOT waive (committed=code blocks)', () => {
+  const event = seedCodeInstrumentFailure('code'); // committed domain = code
+  tamperWorkingTreeDomain(event, 'writing'); // agent overwrites the working tree
+  const r = runHook(event);
+  assert.equal(r.status, 2, `a tampered working-tree domain must NOT waive: ${r.stdout} ${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /WAIVER/, 'the self-certified waiver must be refused');
+});
+
+test('B1 finding-1.3: committed writing domain still waives even if working tree is tampered to code', () => {
+  const event = seedCodeInstrumentFailure('writing'); // committed domain = writing (legit)
+  tamperWorkingTreeDomain(event, 'code'); // working tree says code; committed truth wins
+  const r = runHook(event);
+  assert.equal(r.status, 0, `committed non-code domain must waive regardless of working tree: ${r.stdout} ${r.stderr}`);
+  assert.match(r.stdout, /NON-CODE DOMAIN WAIVER/);
+});
+
+test('B1 finding-1.3: no trusted committed ref (non-git tree) fails closed, never waives', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ferrox-plf-nogit-'));
+  fs.mkdirSync(path.join(dir, '.planning', 'strength'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, '.planning', 'config.json'),
+    JSON.stringify({ strength: { receipt_store: '.planning/strength/receipts.json', coverage_store: '.planning/strength/coverage-baseline.json', requirements_path: '.planning/REQUIREMENTS.md', security_categories: ['security'], medium_cluster_threshold: 3, security_age_limit_days: 7 }, coordination: { hot_seams: [], migration_store: '.planning/coord/migration-seq.json' }, domain: 'writing' }, null, 2) + '\n',
+  );
+  seedManifest(dir);
+  const r = runHook(dir);
+  assert.equal(r.status, 2, `no trusted committed domain must fail closed: ${r.stdout} ${r.stderr}`);
+  assert.doesNotMatch(r.stdout, /WAIVER/);
 });
 
 test('B1 waiver: coverage AND mutation both waived together, both named in the line', () => {

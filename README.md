@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/ferrox-factory?style=for-the-badge&logo=npm&color=cb3837)](https://www.npmjs.com/package/ferrox-factory)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1241%20passing-2f7d54?style=for-the-badge)](#testing)
+[![Tests](https://img.shields.io/badge/tests-1247%20passing-2f7d54?style=for-the-badge)](#testing)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/hXwAcR4MyU)
 
 </div>
@@ -614,7 +614,7 @@ Run `/ferrox-config` for a guided walkthrough.
 npm run build:lib && npm test
 ```
 
-The suite is **1248 tests (1241 passing, 7 environment skips)** across the halting, coordination, strength, model-routing, memory,
+The suite is **1254 tests (1247 passing, 7 environment skips)** across the halting, coordination, strength, model-routing, memory,
 Flux-backbone, and gate-first executor layers. Cores are developed test-first, with RED captures
 and mutation receipts backing the merge gate's evidence.
 

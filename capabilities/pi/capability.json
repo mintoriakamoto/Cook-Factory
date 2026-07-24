@@ -1,7 +1,7 @@
 {
   "id": "pi",
   "role": "runtime",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "title": "pi",
   "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/ferrox.cjs; no shared-settings hook surface; tier-2 support.",
   "tier": "core",

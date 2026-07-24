@@ -180,6 +180,56 @@ test('merge/ship/release commands are all recognized and blocked when evidence i
   }
 });
 
+// ─── global-flag / release-branch bypass vectors (audit 2026-07-24, findings 1.1, 1.2) ──
+
+test('git global flags between binary and subcommand do NOT bypass the gate (finding 1.1)', () => {
+  const cwd = makeProject();
+  seedManifest(cwd); // manifest present, no receipt/REQUIREMENTS → verb blocks a real merge op
+  const vectors = [
+    'git -C . merge feature',
+    'git -C /some/path merge --no-ff feature',
+    'git --no-pager pull',
+    'git -c core.editor=vim rebase main',
+    'git --git-dir=.git merge feature',
+    'git --work-tree . pull origin main',
+    'git -p merge feature',
+    'gh --repo o/r pr merge 123',
+    'gh -R o/r pr merge 123 --squash',
+  ];
+  for (const command of vectors) {
+    const r = runHook(bashEvent(command, cwd));
+    assert.equal(r.status, 2, `bypass vector '${command}' must be gated + blocked, got exit ${r.status} / ${r.stdout}`);
+    assert.equal(r.json && r.json.decision, 'block', `'${command}' must emit a block decision`);
+  }
+});
+
+test('a push naming a release/* branch is gated (finding 1.2)', () => {
+  const cwd = makeProject();
+  seedManifest(cwd);
+  for (const command of ['git push origin release/1.0', 'git push origin HEAD:release/1.0', 'git -C . push origin release/2.3']) {
+    const r = runHook(bashEvent(command, cwd));
+    assert.equal(r.status, 2, `'${command}' must be gated + blocked, got exit ${r.status} / ${r.stdout}`);
+    assert.equal(r.json && r.json.decision, 'block', `'${command}' must emit a block decision`);
+  }
+});
+
+test('legit control ops still pass through untouched after the 1.1/1.2 hardening', () => {
+  const cwd = makeProject();
+  for (const command of [
+    'git merge-base main feature',
+    'git -C . merge-base main feature',
+    'git rebase --abort',
+    'git -c x=y rebase --continue',
+    'git commit -m wip',
+    'git status',
+    'git push origin feature/foo',
+    'git -C . push origin feature/bar',
+  ]) {
+    const r = runHook(bashEvent(command, cwd));
+    assert.equal(r.status, 0, `'${command}' must pass through, got exit ${r.status} / ${r.stdout}`);
+  }
+});
+
 // ─── BOTH directions against the REAL verb ───────────────────────────────────
 
 test('a git merge with NO evidence manifest is BLOCKED (exit 2 — fail closed)', () => {

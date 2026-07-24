@@ -120,17 +120,44 @@ function normalizeDomain(domain) {
  * for this hook). Best-effort and never throws: a missing/unreadable config or
  * absent `domain` key yields nonCode:false, which means NO waiver (fail strict).
  */
-function projectDomain(cwd) {
-  let raw = '';
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
-    if (cfg && typeof cfg.domain === 'string') raw = cfg.domain;
-  } catch {
-    /* no/invalid config: no domain, never waive */
+// The waiver domain MUST come from a source the gated increment cannot rewrite
+// mid-flight. The working-tree `.planning/config.json` is agent-writable, so
+// reading it lets an increment self-certify `domain: writing` to waive its own
+// coverage/mutation block (audit 2026-07-24, finding 1.3). Instead read the
+// COMMITTED config on the merge target: a protected ref whose only mutation path
+// is a push/merge that itself clears this gate. Preference order puts the remote
+// (origin/*) first (mutable only via a gated push) ahead of local branches.
+const TRUSTED_DOMAIN_REFS = ['origin/main', 'origin/master', 'main', 'master'];
+
+/**
+ * The domain committed on the merge target, or null when no trusted ref resolves
+ * (brand-new repo, detached, no protected branch). Best-effort; never throws.
+ */
+function committedDomain(cwd) {
+  for (const ref of TRUSTED_DOMAIN_REFS) {
+    try {
+      const r = spawnSync('git', ['-C', cwd || '.', 'show', `${ref}:.planning/config.json`], {
+        encoding: 'utf8', timeout: 3000, windowsHide: true,
+      });
+      if (r.status !== 0 || typeof r.stdout !== 'string' || r.stdout === '') continue;
+      const cfg = JSON.parse(r.stdout);
+      if (cfg && typeof cfg.domain === 'string') return cfg.domain;
+      return ''; // config exists on the trusted ref but declares no domain
+    } catch {
+      /* unresolvable ref / invalid committed JSON: try the next candidate */
+    }
   }
-  const key = normalizeDomain(raw);
+  return null; // no trusted source resolved -> caller must fail closed (no waiver)
+}
+
+function projectDomain(cwd) {
+  const committed = committedDomain(cwd);
+  // Fail closed: a domain that cannot be read from a trusted committed ref is
+  // never waivable, even if the working-tree config claims a non-code domain.
+  if (committed === null) return { raw: '', canonical: '', nonCode: false, trusted: false };
+  const key = normalizeDomain(committed);
   const canonical = NON_CODE_ALIASES[key] || key;
-  return { raw, canonical, nonCode: NON_CODE_CANONICAL.indexOf(canonical) !== -1 };
+  return { raw: committed, canonical, nonCode: NON_CODE_CANONICAL.indexOf(canonical) !== -1, trusted: true };
 }
 
 // GitHub MCP tools that can merge/write to a protected branch WITHOUT a shell.
@@ -208,31 +235,56 @@ function extractShellCommand(data) {
  * Biased toward BLOCK for KNOWN vectors. `cwd` is used to resolve the current branch
  * for a bare/HEAD push. NOT exhaustive against arbitrary scripts (see HONEST SCOPE).
  */
+// Global option tokens that may sit between `git` and its subcommand. Without
+// this, adjacency patterns like /\bgit\s+merge\b/ are bypassed by any global
+// flag: `git -C . merge`, `git --no-pager pull`, `git -c k=v rebase` (audit
+// 2026-07-24, finding 1.1). Covers the value-taking globals (`-C <path>`,
+// `-c <name=value>`, `--git-dir`/`--work-tree`/`--namespace`/`--config-env`/
+// `--exec-path` in both `=val` and ` val` forms) and the boolean globals.
+const GIT_GLOBAL_OPT =
+  '(?:' +
+  '-C\\s+\\S+' +
+  '|-c\\s+\\S+' +
+  '|--(?:git-dir|work-tree|namespace|config-env|exec-path)(?:=\\S+|\\s+\\S+)' +
+  '|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|icase-pathspecs|noglob-pathspecs|no-optional-locks)' +
+  '|-p' +
+  ')\\s+';
+
+/** Does `c` invoke `git <globals>* <subPattern>`? subPattern is a raw regex tail. */
+function gitSub(c, subPattern) {
+  return new RegExp('\\bgit\\s+(?:' + GIT_GLOBAL_OPT + ')*' + subPattern).test(c);
+}
+
 function isMergeOp(command, cwd) {
   if (typeof command !== 'string' || command.trim() === '') return false;
   const c = command.toLowerCase();
 
   // `git merge <ref>` — but not the read-only `git merge-base`.
-  if (/\bgit\s+merge\b/.test(c) && !/\bgit\s+merge-base\b/.test(c)) return true;
+  if (gitSub(c, 'merge\\b') && !gitSub(c, 'merge-base\\b')) return true;
 
-  // `gh pr merge ...`
-  if (/\bgh\s+pr\s+merge\b/.test(c)) return true;
+  // `gh pr merge ...` — allow gh global/subcommand option tokens between `gh`,
+  // `pr`, and `merge` (audit 2026-07-24, finding 1.1: `gh --repo o/r pr merge`).
+  if (/\bgh\s+(?:--?[\w-]+(?:=\S+|\s+\S+)?\s+)*pr\s+(?:--?[\w-]+(?:=\S+|\s+\S+)?\s+)*merge\b/.test(c)) return true;
 
   // `git pull ...` — fetch + merge is a merge vector.
-  if (/\bgit\s+pull\b/.test(c)) return true;
+  if (gitSub(c, 'pull\\b')) return true;
 
   // `git rebase ...` — integrates/rewrites history. Control-only ops are not a merge.
-  if (/\bgit\s+rebase\b/.test(c)) {
+  if (gitSub(c, 'rebase\\b')) {
     if (/--(abort|continue|skip|quit|edit-todo|show-current-patch)\b/.test(c)) return false;
     return true;
   }
 
   // `git push` to a protected branch or a release tag.
-  if (/\bgit\s+push\b/.test(c)) {
+  if (gitSub(c, 'push\\b')) {
     if (/--tags\b/.test(c)) return true; // release: push all tags
     if (/\brefs\/tags\//.test(c)) return true; // release: explicit tag ref
     if (/:\s*(refs\/heads\/)?(main|master)\b/.test(c)) return true; // HEAD:main refspec
     if (/\b(main|master)\b/.test(c)) return true; // push targeting main/master
+    // release/* is a protected branch (isProtectedBranch), so a push naming it
+    // by refspec or target must clear the gate too (audit 2026-07-24, finding 1.2).
+    if (/:\s*(refs\/heads\/)?release\//.test(c)) return true; // HEAD:release/x refspec
+    if (/\brelease\/\S+/.test(c)) return true; // push targeting release/*
     if (isCurrentBranchPush(c) && currentBranchIsProtected(cwd)) return true; // bare/HEAD on protected
   }
 
@@ -400,7 +452,7 @@ process.stdin.on('end', () => {
     if (failing.length > 0 && failing.every((r) => WAIVABLE_NON_CODE_REASONS.indexOf(r) !== -1)) {
       const dom = projectDomain(cwd);
       if (dom.nonCode) {
-        process.stdout.write(`Merge-gate guard: NON-CODE DOMAIN WAIVER (domain '${dom.raw}' -> '${dom.canonical}'): waived ${failing.join(' + ')} because coverage and mutation are code-suite instruments that do not exist for prose deliverables; every other merge-gate requirement was enforced and passed.\n`);
+        process.stdout.write(`Merge-gate guard: NON-CODE DOMAIN WAIVER (committed domain '${dom.raw}' -> '${dom.canonical}'): waived ${failing.join(' + ')} because coverage and mutation are code-suite instruments that do not exist for prose deliverables; every other merge-gate requirement was enforced and passed. Domain read from the merge target's committed config, not the agent-writable working tree.\n`);
         process.exit(0);
       }
     }

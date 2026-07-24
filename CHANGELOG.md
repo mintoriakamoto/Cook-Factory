@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.13.1 (2026-07-24): Merge-gate hardening
+
+A security pass on the merge gate, the fail-closed hook that no increment is meant to
+talk its way past. An external cross-audit found 3 ways past it; all 3 are closed, each
+with regression tests for every bypass vector.
+
+- **Global flags no longer bypass the matchers.** The gate keyed on adjacency
+  (`git merge`, `git push`), so any global option slipped through: `git -C . merge`,
+  `git --no-pager pull`, `git -c k=v rebase`, and `gh --repo o/r pr merge` all evaded
+  it. The matchers now skip git and gh option tokens between the binary and the
+  subcommand.
+- **A push to a release branch is gated.** `release/*` is a protected branch, but the
+  push detector only fired on `main`/`master` and tags; `git push origin release/1.0`
+  slipped by. It is now gated by refspec and by target, matching the protected-branch
+  definition.
+- **The non-code waiver can no longer be self-certified.** The coverage and mutation
+  waiver for prose lanes read its domain from the working-tree config, which a gated
+  increment can write; setting `domain: writing` waived its own failures. The domain is
+  now read from the merge target's committed config, whose only mutation path is a push
+  that clears this same gate. No trusted committed source resolves to no waiver.
+
+Suite: 1254 tests, 1247 passing, 7 skipped, 0 failing. Library totals unchanged from
+1.13.0 (8 packs, 54 checks, 47 sealed mutants).
+
 ## 1.13.0 (2026-07-23): The Dynamic Team
 
 The factory now staffs itself. Finish a brainstorm, say GO, and v1.13 derives the team

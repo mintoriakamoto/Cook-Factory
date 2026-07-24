@@ -9,7 +9,7 @@
     {
       "name": "ferrox-core",
       "description": "Ferrox Factory is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
-      "version": "1.13.0",
+      "version": "1.13.1",
       "source": "./",
       "author": {
         "name": "ferroxfactory",
