@@ -180,7 +180,19 @@ collect_files() {
   case "$mode" in
     --diff)
       local base="${1:-origin/main}"
-      git diff --name-only --diff-filter=ACMR "$base"...HEAD 2>/dev/null \
+      # An unresolvable base (unfetched ref, shallow clone) must be a loud
+      # error, not an empty diff: swallowing it downgrades the gate to
+      # "no files to scan → clean" and an encoded payload ships undetected.
+      if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+        echo "Error: diff base '$base' does not resolve — fetch it or pass an explicit base" >&2
+        exit 2
+      fi
+      local diff_out
+      diff_out=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD) || {
+        echo "Error: git diff against '$base' failed" >&2
+        exit 2
+      }
+      printf '%s\n' "$diff_out" \
         | grep -vE '\.(png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot|otf|zip|tar|gz|pdf)$' || true
       ;;
     --file)

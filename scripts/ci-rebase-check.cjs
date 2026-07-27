@@ -59,10 +59,10 @@ function main() {
     if (attempt === 3) {
       throw new ExitError(1, `::error::git fetch origin ${baseBranch} failed after 3 attempts.`);
     }
-    // Wait before retry: attempt * 4 seconds.
+    // Wait before retry: attempt * 4 seconds. Atomics.wait yields the thread
+    // (no 100%-CPU spin pegging a runner core for up to 12s of backoff).
     const waitMs = attempt * 4000;
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) { /* busy wait, acceptable in CI */ }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
   }
 
   // Attempt merge.

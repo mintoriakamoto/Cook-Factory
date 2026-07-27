@@ -1,6 +1,6 @@
 ---
 name: ferrox-progress
-description: "Check progress, advance workflow, or dispatch freeform intent — the unified Ferrox situational command"
+description: "Check progress, advance workflow, or dispatch freeform intent — the Ferrox situational command"
 argument-hint: "[--forensic | --next [--auto] [--converge] | --do \\\"task description\\\"]"
 effort: low
 allowed-tools:
