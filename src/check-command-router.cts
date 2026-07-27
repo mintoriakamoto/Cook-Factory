@@ -908,14 +908,17 @@ interface RouteCheckCommandOptions {
  */
 function buildPredicateDeps() {
   return {
-    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): {
+    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env?: Record<string, string> }): {
       exitCode: number | null;
       stdout: string;
       stderr: string;
       signal: NodeJS.Signals | null;
       timedOut: boolean;
     } {
-      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs });
+      // ${PHASE_*} context reaches the command as ENVIRONMENT variables (sh
+      // expands them itself) — never spliced into the command string, so a
+      // hostile flag value cannot break out of its token (ADR-2008 hardening).
+      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs, env: opts.env });
       return {
         exitCode: r.exitCode,
         stdout: r.stdout,
