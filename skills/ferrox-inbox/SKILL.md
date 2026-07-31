@@ -1,6 +1,6 @@
 ---
 name: ferrox-inbox
-description: "Triage and review open GitHub issues and PRs against project templates and contribution guidelines."
+description: "You want open GitHub issues and PRs triaged against your templates and contributing rules"
 argument-hint: "[--issues] [--prs] [--label] [--close-incomplete] [--repo owner/repo]"
 allowed-tools:
   - Read

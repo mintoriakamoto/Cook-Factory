@@ -33,10 +33,73 @@ INIT=$(ferrox_run query state.load 2>/dev/null)
 Track whether `.planning/` exists — some routes require it, others don't.
 </step>
 
+<step name="compound">
+**Before routing: is this ONE request or a SEQUENCE?**
+
+This step exists because the table below resolves to exactly 1 command, and real requests are
+often not 1 command. "I want to brainstorm a game and then build it autonomously" is 2 intents
+joined by an ordering word, and a dispatcher that takes the first match runs the brainstorm and
+silently drops "and then build it". The user gets half of what they asked for and no statement
+that half was discarded.
+
+**Detect a sequence.** Treat the text as compound when it joins 2 or more intents with an
+ordering word or an explicit dependency:
+
+- `then`, `and then`, `after that`, `next`, `once that is done`, `followed by`
+- `first ... then ...`, `before ...`, `but I need X first`, `starting with`
+- a numbered or bulleted list of things to do
+
+**Do NOT treat as compound:** a single intent that merely mentions 2 nouns ("refactor the auth
+and billing modules" is 1 refactor), or a sequence the routing table already covers as one
+command (`/ferrox:new-project` already means questioning then research then requirements then
+roadmap; do not decompose what 1 command already chains).
+
+**Resolve the sequence to a CHAIN.** Route each intent through the table below independently,
+in the order the user stated, then collapse:
+
+- Drop any step already implied by an earlier step's own workflow. `brainstorm` then
+  `new-project` is legal, because brainstorm ends by routing into the lifecycle.
+- Where the tail of the chain is "build it", "build it all", "build the rest", "autonomously",
+  "all the way", "without stopping" or "just do it", the tail is
+  `/ferrox:progress --next --auto`. That is the carrier: it advances step by step and stops only
+  on a real decision, an error, or a completed milestone. Do NOT substitute
+  `/ferrox:execute-phase` (it builds 1 step and stops) and do NOT substitute
+  `/ferrox:autonomous` unless the user named a phase range, because `--next --auto` owns the
+  gates and the resume invariant.
+
+**Confirm the chain before running any of it**, via AskUserQuestion. A chain runs unattended, so
+the user sees it once, in full, before it starts:
+
+```
+header:   "Plan"
+question: "Here is the sequence I read. Run it?"
+options:
+  - label: "Run all 3 (Recommended)"
+    description: "brainstorm the game, set up the project, then build every step"
+  - label: "Just the first step"
+    description: "brainstorm only, then stop and let me decide"
+```
+
+The recommendation is ALWAYS the full chain the user asked for. They already said "and then".
+
+**Then dispatch the chain HEAD only, and state the rest.** Print the full chain so the tail is a
+promise on the record, dispatch step 1, and let each step's own terminus carry the next. A
+dispatcher must not sit in a loop awaiting steps it did not run.
+
+```
+Chain: /ferrox:brainstorm → /ferrox:new-project → /ferrox:progress --next --auto
+Starting with step 1 of 3.
+```
+
+**If the chain cannot be resolved**, say which part could not be routed and route the part that
+could. Never discard a stated intent in silence: an unroutable tail is reported, not dropped.
+</step>
+
 <step name="route">
 **Match intent to command.**
 
-Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** rule:
+For a single intent, or for each intent of a chain from the previous step, evaluate the text
+against these routing rules. Apply the **first matching** rule:
 
 | If the text describes... | Route to | Why |
 |--------------------------|----------|-----|
@@ -55,7 +118,8 @@ Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** 
 | A complex task: refactoring, migration, multi-file architecture, system redesign | `/ferrox:phase` | Needs a full phase with plan/build cycle |
 | Planning a specific phase or "plan phase N" | `/ferrox:plan-phase` | Direct planning request |
 | Executing a phase or "build phase N", "run phase N" | `/ferrox:execute-phase` | Direct execution request |
-| Running all remaining phases automatically | `/ferrox:autonomous` | Full autonomous execution |
+| "Build it", "build it all", "build the rest", "autonomously", "all the way", "just do it", "without stopping" | `/ferrox:progress --next --auto` | The carrier. Advances step by step, pausing only on a real decision |
+| Running a NAMED RANGE of phases automatically ("phases 3 to 7") | `/ferrox:autonomous` | Takes `--from`/`--to`/`--only`; use only when a range was named |
 | A review or quality concern about existing work | `/ferrox:verify-work` | Needs verification |
 | Checking progress, status, "where am I" | `/ferrox:progress` | Status check |
 | Resuming work, "pick up where I left off" | `/ferrox:resume-work` | Session restoration |
@@ -105,7 +169,15 @@ After invoking the command, stop. The dispatched command handles everything from
 
 <success_criteria>
 - [ ] Input validated (not empty)
-- [ ] Intent matched to exactly one Ferrox command
+- [ ] Compound intent detected: text joined by `then`/`after that`/`first ... then` is read as a
+      SEQUENCE, not resolved to its first match
+- [ ] A compound request produced a CHAIN of 2 or more commands, displayed in full before any of
+      it ran. A chain of 1 from a request that stated 2 intents is a FAILURE
+- [ ] "build it all" / "autonomously" / "without stopping" resolved to
+      `/ferrox:progress --next --auto`, never to `/ferrox:execute-phase` (which builds 1 step)
+- [ ] Every stated intent was either routed or REPORTED as unroutable. Dropping one in silence
+      is a failure even when the part that ran succeeded
+- [ ] Single intent matched to exactly one Ferrox command
 - [ ] Ambiguity resolved via user question (if needed)
 - [ ] Project existence checked for routes that require it
 - [ ] Routing decision displayed before dispatch

@@ -354,38 +354,31 @@ function buildStateMd(phaseMap: PhaseMapEntry[]): string {
   const bar = `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}]`;
   const today = realClock.localToday();
 
+  // Phase 14.1 D3d: the composed document carries the RETAINED sections only.
+  // An importer that wrote a document the structural guard rejects would make a
+  // fresh import fail CI on its first commit, which is a live regression rather
+  // than a theoretical one.
+  //
+  // The phase line uses the SDK first-time template (the phase number followed
+  // by an optional parenthesised name), NOT this module's former
+  // `N of M (slug)` shape. The whitelist was deliberately NOT widened to accept
+  // it: the whole design is one closed set derived from the SDK writers, and
+  // admitting a second authoring path's private shapes for a one-shot migration
+  // command is a place prose returns. The denominator that value carried is a
+  // progress claim, and progress belongs to the frontmatter counters that are
+  // derived from disk, so restating it here is the duplicate-claim pattern D3c
+  // exists to break. The overall completion is still reported, once, by the
+  // Progress bar line below.
   return [
     '# Project State',
     '',
-    '## Project Reference',
-    '',
-    'See: .planning/PROJECT.md',
-    '',
-    `**Current focus:** Phase ${currentPhaseNum} (${currentSlug})`,
-    '',
     '## Current Position',
     '',
-    `Phase: ${currentPhaseNum} of ${zeroPad(totalPhases)} (${currentSlug})`,
+    `Phase: ${currentPhaseNum} (${currentSlug})`,
     `Status: ${status}`,
     `Last activity: ${today} — Migrated from Ferrox-2`,
     '',
     `Progress: ${bar} ${pct}%`,
-    '',
-    '## Accumulated Context',
-    '',
-    '### Decisions',
-    '',
-    'Migrated from Ferrox-2. Review PROJECT.md for key decisions.',
-    '',
-    '### Blockers/Concerns',
-    '',
-    'None.',
-    '',
-    '## Session Continuity',
-    '',
-    `Last session: ${today}`,
-    'Stopped at: Migration from Ferrox-2 completed',
-    'Resume file: None',
     '',
   ].join('\n');
 }

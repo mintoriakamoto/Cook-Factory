@@ -1,6 +1,6 @@
 ---
 name: ferrox-audit-fix
-description: "Autonomous audit-to-fix pipeline — find issues, classify, fix, test, commit"
+description: "You want issues found, classified, fixed, tested and committed without steering each one"
 argument-hint: "--source <audit-uat> [--severity <medium|high|all>] [--max N] [--dry-run]"
 allowed-tools:
   - Read

@@ -60,7 +60,7 @@ interface MergeFederatedConfigResult {
 
 // ─── Allowed slice types (mirrors gen-capability-registry.cjs VALID_CONFIG_SLICE_TYPES) ──
 
-const VALID_SLICE_TYPES = new Set<string>(['boolean', 'string', 'number', 'enum']);
+const VALID_SLICE_TYPES = new Set<string>(['boolean', 'string', 'number', 'enum', 'array']);
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -86,6 +86,12 @@ function _typeMatches(value: unknown, slice: ConfigSliceEntry): boolean {
     case 'boolean': return typeof value === 'boolean';
     case 'string':  return typeof value === 'string';
     case 'number':  return typeof value === 'number';
+    // Phase 20 plan 04: `fleet.adapters` is a roster, so a list is its natural
+    // shape. Membership is NOT checked here: the roster's own verdict for an
+    // adapter identity the engine cannot dispatch to is `not-dispatchable`, and
+    // moving that judgement into a config type check would hide it behind a
+    // parse error instead of reporting it as a probe verdict.
+    case 'array':   return Array.isArray(value);
     case 'enum':
       // Must be a string AND, if values list is present, must be in it
       if (typeof value !== 'string') return false;

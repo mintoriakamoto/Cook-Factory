@@ -10,6 +10,29 @@ Read all files referenced by the invoking prompt's `execution_context` before st
 
 <process>
 
+<step name="freeform">
+**If the user typed WORDS, route them. Only show the menu when they typed nothing.**
+
+`$ARGUMENTS` that is empty, or contains only recognised flags (`--text`, `--json`), means "I do
+not know what to do", which is what the menu below answers.
+
+`$ARGUMENTS` carrying anything else is a REQUEST, not a flag. Hand it to the natural language
+router: read `workflows/do.md` and follow it with `$ARGUMENTS` as its input, including its
+compound step, so "brainstorm a game and then build it autonomously" resolves to a chain rather
+than to its first match. Then stop. Do not also render the menu.
+
+This exists because `do.md` was reachable only from inside `/ferrox:progress`, so nothing a user
+would think to type led to it. This command is already the front door and already reads project
+state, which makes it the door that should accept a sentence. It also settles a naming trap worth
+naming: `/ferrox:next` is a MENU and the advancement engine is `/ferrox:progress --next`, so the
+command called next was the one that did not run next. Accepting words makes the short name do
+the obvious thing.
+
+Do NOT re-derive forward routing here. If the request resolves to forward motion, the answer is
+`/ferrox:progress --next` (add `--auto` when the user asked for the whole thing), for the same
+reason the menu's recommendation delegates there: that engine owns Route 0 and Gates 1 to 3.
+</step>
+
 <step name="text_mode">
 **TEXT_MODE handling (non-Claude runtimes).**
 
@@ -110,6 +133,10 @@ After invoking the command, **stop**. The dispatched command owns everything fro
 </process>
 
 <success_criteria>
+- [ ] `$ARGUMENTS` carrying words (not only flags) routed through `workflows/do.md` and the menu
+      was NOT rendered. Showing the menu to someone who already stated their request is a failure
+- [ ] A compound request reached `do.md`'s compound step, so "X and then Y" became a chain
+- [ ] Empty or flag-only `$ARGUMENTS` still reaches the menu below, unchanged
 - [ ] Situation detected via `ferrox_run smart-entry --json`
 - [ ] Summary shown to orient the user
 - [ ] Menu offered (AskUserQuestion, or numbered list under TEXT_MODE)

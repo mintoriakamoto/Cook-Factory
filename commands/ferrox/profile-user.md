@@ -1,6 +1,6 @@
 ---
 name: ferrox:profile-user
-description: Generate developer behavioral profile and create Claude-discoverable artifacts
+description: "You want Ferrox to learn how you work and adapt its questions and defaults to you"
 argument-hint: "[--questionnaire] [--refresh]"
 allowed-tools:
   - Read

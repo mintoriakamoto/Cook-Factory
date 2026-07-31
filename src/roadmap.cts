@@ -8,7 +8,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -22,7 +21,8 @@ const { findPhaseInternal } = phaseLocatorMod;
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
-import { updateTableCell } from './markdown-table.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-index-scan.cjs is an export= CommonJS module
+import roadmapIndexScan = require('./roadmap-index-scan.cjs');
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -471,41 +471,20 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
 
 // ─── cmdRoadmapUpdatePlanProgress ─────────────────────────────────────────────
 
+const { rebuildRoadmapRegions, rebuildFailureMessage } = roadmapIndexScan;
+
 /**
- * Scope a ROADMAP.md content string down to its "Progress table" writable
- * slice, run `edit` against just that slice, then splice the result back into
- * the original content (ADR-2143 §7). Layered scoping:
- *   1. Milestone scope — everything after the LAST `</details>` close tag
- *      (mirrors `replaceInCurrentMilestone`), so a same-numbered phase row in
- *      an archived milestone is never touched.
- *   2. Heading scope — within that milestone slice, the `## Progress` heading
- *      section (up to the next `#`/`##` heading) when present, else the whole
- *      milestone slice (mirrors phase-lifecycle.cjs's `deriveProgressFromRoadmap`
- *      read-side scoping, #2012 decoy avoidance — a differently-headed table
- *      sharing the same column names must not be picked up instead).
- * `edit` always returns a string and never fails — a no-op edit (table/row not
- * found within the scoped slice) simply returns its input unchanged, mirroring
- * the prior regex `.replace()`'s no-match-is-a-no-op semantics.
+ * Rebuild the 2 GENERATED regions of ROADMAP.md, or fail loud.
+ *
+ * Phase 14.1 D3a. The same shared derivation `scripts/gen-roadmap-index.cjs`
+ * and `phase complete` consume, so this command and the drift check cannot
+ * disagree about what the file should say. A malformed region is a refusal with
+ * a named repair, never an overwrite.
  */
-function editProgressTableSlice(content: string, edit: (scoped: string) => string): string {
-  const lastDetailsClose = content.lastIndexOf('</details>');
-  const milestoneOffset = lastDetailsClose === -1 ? 0 : lastDetailsClose + '</details>'.length;
-  const before = content.slice(0, milestoneOffset);
-  const milestoneSlice = content.slice(milestoneOffset);
-
-  const progressMatch = milestoneSlice.match(/^##[ \t]+Progress\b/im);
-  if (!progressMatch || progressMatch.index === undefined) {
-    return before + edit(milestoneSlice);
-  }
-
-  const headingOffset = progressMatch.index;
-  const beforeHeading = milestoneSlice.slice(0, headingOffset);
-  const fromHeading = milestoneSlice.slice(headingOffset);
-  const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
-  const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
-  const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
-
-  return before + beforeHeading + edit(scoped) + after;
+function rebuildRegionsOrFail(cwd: string, roadmapContent: string): string {
+  const rebuilt = rebuildRoadmapRegions(cwd, roadmapContent);
+  if (!rebuilt.ok) error(rebuildFailureMessage(rebuilt.errors));
+  return rebuilt.text;
 }
 
 function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
@@ -538,8 +517,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   const phaseDir = path.join(cwd, phaseInfo!.directory);
   const verificationPassed = readVerificationStatus(phaseDir).status === 'passed';
   const isComplete = summaryCount >= planCount && verificationPassed;
+  // The 3 value vocabulary survives ONLY as this command's own JSON result
+  // field, which is a shipped surface with its own consumers. It no longer
+  // reaches ROADMAP.md: the Status column renders from the 6 value derivation.
   const status = isComplete ? 'Complete' : summaryCount > 0 ? 'In Progress' : 'Planned';
-  const today = realClock.localToday();
 
   if (!fs.existsSync(roadmapPath)) {
     output({ updated: false, reason: 'ROADMAP.md not found', plan_count: planCount, summary_count: summaryCount }, raw, 'no roadmap');
@@ -551,49 +532,21 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     let roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
     const phasePattern = phaseMarkdownRegexSource(phaseNum);
 
-    // Progress table row: update Plans Complete/Status/Completed columns BY
-    // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables regardless of
-    // Milestone-column presence) via the markdown-table seam (ADR-2143 §7) —
-    // supersedes the prior ordinal cells[]-index regex. Scoped to the current
-    // milestone's `## Progress` table (editProgressTableSlice above).
-    // #2245 Blocker 4: optional dot must be followed by whitespace-or-end, not
-    // dot-OR-whitespace-OR-end as alternatives — the prior form let a bare "."
-    // satisfy the whole lookahead, so completing phase "2" over-matched a
-    // decimal sub-phase row like "2.5 Extra". Matches "2", "2.", "2 Alpha";
-    // rejects "2.5 Extra" (replicates OLD's `\.?\s` intent on the now-TRIMMED
-    // cell value, where end-of-string is the trimmed equivalent of "no more
-    // characters after the optional dot").
-    const phaseCellRe = new RegExp(`^${phasePattern}\\.?(?:\\s|$)`, 'i');
-    const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
-    const dateShape = /^\d{4}-\d{2}-\d{2}$/;
-
-    roadmapContent = editProgressTableSlice(roadmapContent, (scoped) => {
-      let text = scoped;
-
-      const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
-      if (plansResult.ok) text = plansResult.value;
-
-      const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${status.padEnd(11)}`);
-      if (statusResult.ok) text = statusResult.value;
-
-      // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage).
-      // Ragged-tolerant (#2245 Blocker 2): probe the CURRENT Completed cell via
-      // a no-op updateTableCell write (its own tolerant row scan) rather than
-      // findTableWithColumns (which requires the WHOLE table to parse — a
-      // ragged SIBLING row elsewhere used to silently no-op this row's date
-      // stamp/clear too). The decision (write vs no-op) is folded into the
-      // newValue callback so a single updateTableCell call both reads and
-      // writes.
-      const completedResult = updateTableCell(text, rowMatch, 'Completed', (current) => {
-        if (isComplete) {
-          return dateShape.test(current.trim()) ? current : ` ${today} `;
-        }
-        return '  ';
-      });
-      if (completedResult.ok) text = completedResult.value;
-
-      return text;
-    });
+    // Phase 14.1 D3a: the 3 Progress-table cell writes that used to live here
+    // are GONE, and so is the `## Progress` slice helper that existed only for
+    // them. They edited a GENERATED region, which is rebuilt from the phase
+    // directories at the end of this function by the same shared derivation
+    // `scripts/gen-roadmap-index.cjs` and `phase complete` consume.
+    //
+    // The narrower status vocabulary went with them. This command used to emit
+    // 3 values (Complete, In Progress, Planned) while `determinePhaseStatus`
+    // emits 6, including the executed and needs-review states that separate a
+    // phase whose plans are all summarised from one whose verification actually
+    // passed. The 6 value derivation wins, because it is the one the init
+    // projection already reports, and 2 vocabularies for 1 column is exactly the
+    // fork this phase exists to remove. The `status` value computed above is
+    // still reported in this command's OWN JSON result, which is a separate
+    // surface and keeps its shipped shape.
 
     // Update plan count in phase detail section.
     // Three recognised forms (all tolerated; canonical template uses the first):
@@ -609,14 +562,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       : `${summaryCount}/${planCount} plans executed`;
     roadmapContent = replaceInCurrentMilestone(roadmapContent, planCountPattern, `$1${planCountText}`);
 
-    // If complete: check checkbox
-    if (isComplete) {
-      const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-        'i'
-      );
-      roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
-    }
+    // Phase 14.1 D3a: the phase-checkbox flip is GONE. The box is rendered from
+    // the derived status, so flipping it here would only be overwritten by the
+    // next render. The per-plan checkbox flips directly below live inside phase
+    // N's own detail section, which D3a keeps hand-written, and they stay.
 
     // Mark completed plan checkboxes (e.g. "- [ ] 50-01-PLAN.md", "- [ ] 50-01:", or "- [ ] **50-01**")
     for (const summaryFile of phaseInfo!.summaries) {
@@ -716,7 +665,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       }
     }
 
-    platformWriteSync(roadmapPath, roadmapContent);
+    platformWriteSync(roadmapPath, rebuildRegionsOrFail(cwd, roadmapContent));
   });
   output({
     updated: true,

@@ -1,6 +1,6 @@
 ---
 name: ferrox-autonomous
-description: "Run all remaining phases autonomously — discuss→plan→execute per phase"
+description: "Build every remaining step by itself, discuss then plan then execute, pausing on decisions"
 argument-hint: "[--from N] [--to N] [--only N] [--interactive] [--converge]"
 effort: max
 allowed-tools:

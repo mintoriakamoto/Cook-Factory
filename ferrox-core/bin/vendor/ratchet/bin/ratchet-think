@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+"""ratchet-think — the council engine. Multi-model brainstorm/plan/review/judge, schema-validated.
+
+THE BOUNDARY: this companion PROPOSES; the kernel DISPOSES. Council output that fails its schema
+is retried once then ABORTED — never "interpreted". Verdicts are advisory unless a kernel gate is
+configured to require them. The JSON artifact is the source of truth; prose is a rendering.
+
+Verbs:
+  brainstorm <topic>  [--context <file>]      ranked options + assumptions + conflicts + confidence
+  plan       <topic>  [--context <file>] [--repo <r>]   card DAG → `ratchet take --bulk <artifact>`
+  review     [--diff <file>] [--card <id>]    adversarial findings + GO/FIX-FIRST/NO-GO
+  judge      [--diff <file>] [--card <id>]    verdict + severity-ranked blocking findings
+  calibrate  [--n <probes>]                   roster accuracy vs corpus-derived KNOWN answers
+  selftest                                    mock-provider proofs (no network, no models)
+
+Routing (§7 v2, council-ratified): the cheap roster runs first. Escalation to the judge roster
+happens on (a) DETERMINISTIC RISK TRIGGERS — regardless of agreement — or (b) STRUCTURAL
+disagreement between canonicalized outputs. Cheap agreement alone is NEVER treated as proof
+(the correlated-error trap). premium_policy gates every escalation.
+"""
+import importlib.machinery
+import importlib.util
+import hashlib, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+K = _kernel()
+
+# deterministic risk triggers (§7 v2.1): these surfaces escalate REGARDLESS of cheap agreement
+RISK_PATH_RE = re.compile(r"(auth|secret|token|credential|billing|payment|migrat|bin/ratchet|\.github/workflows|protect)", re.I)
+
+def team_resolve(domain, risk, cfg):
+    """E5 §8.8: the TEAM RESOLVER — a deterministic function (domain, risk) → (roster, judge).
+    Profiles are DATA at $RATCHET_HOME/teams/<domain>.json; the kernel never learns what a
+    domain is, and a model never chooses a model. No profile = config rosters (code default)."""
+    if domain and not re.fullmatch(r"[a-z0-9-]{1,32}", str(domain)):
+        # a manifest-supplied domain is ATTACKER-SHAPED input to a path join (final-audit MAJOR)
+        print(f"[think] WARNING: domain '{domain}' is not [a-z0-9-] — ignoring profile lookup")
+        domain = None
+    prof_path = os.path.join(K.WL_HOME, "teams", f"{domain}.json")
+    roster = list(cfg["rosters"]["default"])
+    judge = list(cfg["rosters"].get("judge", []))
+    source = "config-default"
+    if domain and os.path.exists(prof_path):
+        try:
+            prof = json.load(open(prof_path))
+            if isinstance(prof.get("roster"), list) and prof["roster"]:
+                roster = list(prof["roster"])
+                judge = list(prof.get("judge", judge))
+                source = f"teams/{domain}.json"
+        except (OSError, json.JSONDecodeError):
+            print(f"[think] WARNING: team profile {prof_path} unreadable — using config defaults")
+    if risk == "high":  # high risk WIDENS the roster from config defaults, never narrows it
+        for extra in cfg["rosters"]["default"]:
+            if extra not in roster:
+                roster.append(extra)
+    deny = set(cfg.get("deny_list", []))
+    return [r for r in roster if r not in deny], [j for j in judge if j not in deny], source
+
+SCHEMAS = {
+    "brainstorm": {"options": list, "assumptions": list, "conflicts": list, "confidence": (int, float)},
+    "plan":       {"cards": list, "notes": str},
+    "review":     {"findings": list, "verdict": str},
+    "judge":      {"verdict": str, "blocking": list},
+}
+
+PROMPTS = {
+    "brainstorm": "Return ONLY JSON: {\"options\":[{\"title\",\"rationale\",\"risks\":[]}] ranked best-first, \"assumptions\":[], \"conflicts\":[], \"confidence\":0..1}.",
+    "plan":       "Return ONLY JSON: {\"cards\":[{\"slug\":kebab-case,\"repo\",\"title\",\"acceptance\",\"verify_cmd\",\"deps\":[]}], \"notes\":\"\"}. Cards must be independently landable.",
+    "review":     "Adversarial review. Return ONLY JSON: {\"findings\":[{\"severity\":\"BLOCKER|MAJOR|MINOR\",\"file\",\"claim\",\"evidence\"}], \"verdict\":\"GO|FIX-FIRST|NO-GO\"}. Evidence = exact lines. No style nits.",
+    "judge":      "Final judge. Return ONLY JSON: {\"verdict\":\"GO|FIX-FIRST|NO-GO\", \"blocking\":[{\"severity\",\"file\",\"claim\",\"evidence\"}]}. Block only on real, demonstrated defects.",
+}
+
+def validate(mode, obj):
+    """Hand-rolled schema check, stdlib-only. Returns error string or None."""
+    if not isinstance(obj, dict):
+        return "not an object"
+    for k, t in SCHEMAS[mode].items():
+        if k not in obj:
+            return f"missing key '{k}'"
+        if not isinstance(obj[k], t):
+            return f"key '{k}' wrong type"
+    if mode in ("review", "judge"):
+        v = str(obj["verdict"]).upper().replace("_", "-")
+        if v not in ("GO", "FIX-FIRST", "NO-GO"):
+            return f"verdict '{obj['verdict']}' not in enum"
+    if mode == "plan":
+        for i, c in enumerate(obj["cards"]):
+            if not isinstance(c, dict) or not all(c.get(k) for k in ("slug", "repo", "title")):
+                return f"cards[{i}] missing slug/repo/title"
+    return None
+
+def parse_json_block(text):
+    """Models wrap JSON in prose/fences/preambles; extract deterministically. The greedy
+    first-{-to-last-} regex lost 3/5 live members in the E0-E5 dogfood review (prose after
+    the object broke it) — this version tries, in order: fenced blocks, then every balanced
+    top-level object scanned left to right."""
+    for fence in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text):
+        try:
+            obj = json.loads(fence.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    depth, start = 0, None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    obj = json.loads(text[start:i + 1])
+                    if isinstance(obj, dict):
+                        return obj
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return None
+
+# ---------- provider adapters ----------
+
+def call_flux(alias, packet, cfg):
+    key = os.environ.get("FLUX_DEV_KEY") or os.environ.get("FLUX_TEST_KEY")
+    if not key:
+        return None, "no FLUX key in env (set FLUX_DEV_KEY)", 0.0
+    body = json.dumps({"model": alias, "stream": True, "temperature": 0,
+                       "max_tokens": int(cfg["council"].get("max_tokens", 12000)),
+                       "messages": [{"role": "user", "content": packet}]}).encode()
+    req = urllib.request.Request("https://api.fluxrouter.ai/v1/chat/completions", data=body,
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                                          "Accept": "text/event-stream"})
+    chunks, cost = [], 0.0
+    try:
+        for raw in urllib.request.urlopen(req, timeout=int(cfg["council"].get("max_latency_s", 120)) + 60):
+            ln = raw.decode("utf-8", "replace").strip()
+            if not ln.startswith("data:"):
+                continue
+            d = ln[5:].strip()
+            if d == "[DONE]":
+                break
+            try:
+                j = json.loads(d)
+            except json.JSONDecodeError:
+                continue
+            u = j.get("usage") or {}
+            cost = u.get("cost_usd") or cost  # server-side oracle when present (§8.3)
+            dl = (j.get("choices") or [{}])[0].get("delta") or {}
+            if dl.get("content"):
+                chunks.append(dl["content"])
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        return None, f"{type(e).__name__}", 0.0
+    return "".join(chunks).strip() or None, None, cost
+
+def call_cli(tool, packet, cfg):
+    argv = {"codex": ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", packet],
+            "gemini": ["gemini", "--skip-trust", "-p", packet]}.get(tool)
+    if not argv:
+        return None, f"unknown cli '{tool}'", 0.0
+    try:
+        r = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=int(cfg["council"].get("max_latency_s", 120)) + 120)
+        return (r.stdout.strip() or None), (None if r.returncode == 0 else f"rc {r.returncode}"), 0.0
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return None, type(e).__name__, 0.0
+
+def call_model(name, packet, cfg):
+    """Route a roster name through its configured provider. Returns (text, err, cost_usd)."""
+    mock = os.environ.get("RATCHET_MOCK_THINK")
+    if mock:  # selftest adapter: {"<name>": {...}|"raw text", "*": {...}}
+        table = json.loads(mock)
+        v = table.get(name, table.get("*"))
+        if v is None:
+            return None, "mock: no entry", 0.0
+        return (v if isinstance(v, str) else json.dumps(v)), None, 0.001
+    alias = cfg["models"].get(name)
+    if not alias:
+        return None, f"no model alias configured for '{name}'", 0.0
+    if alias.startswith("flux:"):
+        return call_flux(alias[5:], packet, cfg)
+    if alias.startswith("cli:"):
+        return call_cli(alias[4:], packet, cfg)
+    return None, f"unroutable alias '{alias}'", 0.0
+
+def ask_validated(name, mode, packet, cfg, ledger):
+    """One roster member: call → parse → validate → ONE retry on schema failure → give up.
+    Never 'interpreted' (the council's exact ruling)."""
+    for attempt in (1, 2):
+        t0 = time.time()
+        text, err, cost = call_model(name, packet if attempt == 1 else
+                                     packet + "\n\nYOUR LAST REPLY FAILED SCHEMA VALIDATION. Return ONLY the JSON object.", cfg)
+        ledger.append({"model": name, "mode": mode, "attempt": attempt, "cost_usd": cost,
+                       "latency_s": round(time.time() - t0, 1), "err": err})
+        if text is None:
+            continue
+        obj = parse_json_block(text)
+        verr = validate(mode, obj) if obj is not None else "no JSON object found"
+        if verr is None:
+            return obj
+    return None
+
+# ---------- council run ----------
+
+def council(mode, subject, context, cfg, card_id, risk_escalate, domain=None):
+    packet = (f"MODE: {mode}. {PROMPTS[mode]}\n\nSUBJECT: {subject}\n\n"
+              f"CONTEXT:\n{context[:int(cfg['council'].get('brief_max_tokens', 8000)) * 4]}")
+    phash = hashlib.sha1(packet.encode()).hexdigest()[:12]
+    roster, judge_roster, team_src = team_resolve(domain, "high" if risk_escalate else "normal", cfg)
+    if team_src != "config-default":
+        print(f"[think] team: {team_src} → {','.join(roster)}")
+    ck = f"think-{mode}-{phash}-{hashlib.sha1(','.join(roster).encode()).hexdigest()[:8]}"
+    cached = K.cache_get(ck, 86400)  # diff-hash caching: an unchanged packet re-runs FREE
+    if cached is not None:
+        print(f"[think] cache hit {ck} — this council already ran on identical input")
+        return cached, []
+    ledger = []
+    outs = {}
+    for n in roster:
+        obj = ask_validated(n, mode, packet, cfg, ledger)
+        if obj is not None:
+            outs[n] = obj
+        print(f"[think] {n}: {'ok' if obj is not None else 'FAILED (schema/provider)'}")
+    if not outs:
+        return None, ledger
+
+    escalated, reason = False, None
+    if mode in ("review", "judge"):
+        canon = {n: K.canonicalize_verdict(o) for n, o in outs.items()}
+        names = list(canon)
+        pairs_disagree = any(K.verdicts_disagree(canon[a], canon[b])
+                             for i, a in enumerate(names) for b in names[i + 1:])
+        if risk_escalate:
+            escalated, reason = True, "deterministic-risk-trigger"
+        elif pairs_disagree:
+            escalated, reason = True, "structural-disagreement"
+        if escalated:
+            policy = cfg.get("premium_policy", "never")
+            if policy == "never":
+                print(f"[think] ESCALATION WANTED ({reason}) but premium_policy=never — recorded, not spent")
+            else:
+                for j in judge_roster:
+                    jo = ask_validated(j, "judge", packet, cfg, ledger)
+                    if jo is not None:
+                        outs[f"judge:{j}"] = jo
+                        break
+
+    # merge: majority verdict (judge outranks); union of canonicalized claims
+    result = {"schema_version": 1, "mode": mode, "packet_hash": phash, "roster": roster,
+              "team": team_src, "escalated": escalated, "escalation_reason": reason,
+              "members": {n: o for n, o in outs.items()},
+              "cost_basis": "oracle" if any(l["cost_usd"] for l in ledger) else "ADVISORY"}
+    if mode in ("review", "judge"):
+        judged = [n for n in outs if n.startswith("judge:")]
+        if judged:
+            result["verdict"] = K.canonicalize_verdict(outs[judged[0]])["verdict"]
+        else:
+            vs = [K.canonicalize_verdict(o)["verdict"] for o in outs.values()]
+            result["verdict"] = max(set(vs), key=vs.count)
+    if mode == "plan":  # first valid plan wins; all members recorded for the human to compare
+        result["cards"] = next(iter(outs.values()))["cards"]
+    K.cache_put(ck, result)
+    return result, ledger
+
+def run_mode(mode, args):
+    pos = [a for a in args if not a.startswith("-")]
+    subject = pos[0] if pos else ""
+    ctxf = args[args.index("--context") + 1] if "--context" in args else None
+    difff = args[args.index("--diff") + 1] if "--diff" in args else None
+    card_id = args[args.index("--card") + 1] if "--card" in args else None
+    if card_id is not None and K.safe_ref(card_id) is None:
+        # --card flows into os.path.join(recordings, ref) — a traversal id would write outside
+        # the state tree (security-council HIGH). Reject before it touches the filesystem.
+        print(f"think: --card '{card_id}' is not a valid card id"); return 1
+    repo = args[args.index("--repo") + 1] if "--repo" in args else None
+    domain = None
+    if repo:  # E5: the repo's declared domain picks the team (a book repo gets a book council)
+        try:
+            domain = (K.load_manifest()["repos"].get(repo) or {}).get("domain")
+        except SystemExit:
+            domain = None
+    cfg, _, _ = K.config_load()
+    context = ""
+    if ctxf:
+        context = open(K.expand(ctxf)).read()
+    if difff:
+        context = open(K.expand(difff)).read()
+    if not subject and not context:
+        print(f"usage: ratchet-think {mode} <subject> [--context f] [--diff f] [--card id]"); return 1
+    risk = bool(difff and RISK_PATH_RE.search(context)) or bool(card_id and _card_risk(card_id) == "high")
+    result, ledger = council(mode, subject or f"{mode} of provided diff", context, cfg, card_id, risk, domain)
+    ref = card_id or re.sub(r"[^a-z0-9-]+", "-", (subject or mode).lower())[:40]
+    d = os.path.join(K.WL_HOME, "state", "recordings", ref)
+    os.makedirs(d, exist_ok=True)
+    apath = os.path.join(d, f"think-{mode}-{int(time.time())}.json")
+    json.dump(K.redact({"result": result, "ledger": ledger}), open(apath, "w"), indent=1)
+    if result is None:
+        print(f"[think] COUNCIL FAILED — no member produced schema-valid output; artifact {apath}")
+        return 2
+    K.record(ref, {"event": "think", "mode": mode, "verdict": result.get("verdict"),
+                   "escalated": result["escalated"], "artifact": apath})
+    spend = sum(l["cost_usd"] for l in ledger)
+    print(f"[think] {mode} done · members {len(result['members'])} · "
+          f"verdict {result.get('verdict', '—')} · escalated {result['escalated']}"
+          f" · spend ${spend:.4f} ({result['cost_basis']})")
+    print(f"  artifact: {apath}")
+    if mode == "plan":
+        print(f"  next: ratchet take --bulk {apath}  (imports {len(result['cards'])} cards — kernel validates whole)")
+    return 0
+
+def _card_risk(card_id):
+    c = next((c for c in K.state_load(K.CARDS, {"cards": []})["cards"] if c["work_id"] == card_id), None)
+    return c["risk"] if c else "normal"
+
+def calibrate(args):
+    """§8.7: measure the cheap roster against corpus-derived KNOWN answers. Probes are
+    selection-bias-corrected (all corpus cards, not escalation-triggered ones)."""
+    cfg, _, _ = K.config_load()
+    n = int(args[args.index("--n") + 1]) if "--n" in args else 10
+    corpus = K.state_load(K.CORPUS, {"cards": []})["cards"][:n]
+    if not corpus:
+        print("calibrate: corpus is empty — ground truth accrues as bugs are added"); return 1
+    roster = [x for x in cfg["rosters"]["default"] if x not in cfg.get("deny_list", [])]
+    curve = {m: {"right": 0, "wrong": 0, "silent": 0} for m in roster}
+    ledger = []
+    for c in corpus:
+        # known-answer probe: this repro is a REAL past bug; ground truth = it was a genuine defect
+        packet = (f"MODE: judge. {PROMPTS['judge']}\n\nSUBJECT: was this a real defect worth blocking?\n"
+                  f"CONTEXT: repo {c['repo']} · bug: {c['title']} · repro: {c['repro_cmd']}\n"
+                  f"(This entered the regression corpus — judge as if reviewing the original diff.)")
+        for m in roster:
+            obj = ask_validated(m, "judge", packet, cfg, ledger)
+            if obj is None:
+                curve[m]["silent"] += 1
+            elif K.canonicalize_verdict(obj)["verdict"] in ("FIX-FIRST", "NO-GO"):
+                curve[m]["right"] += 1  # ground truth: it WAS a real bug
+            else:
+                curve[m]["wrong"] += 1
+    def upd(cur):
+        cur.setdefault("curves", []).append({"ts": K.now_iso(), "probes": len(corpus), "curve": curve})
+    K.state_mutate("calibration.json", {"schema_version": 1, "curves": []}, upd)
+    print(f"calibrate: {len(corpus)} known-answer probes × {len(roster)} models")
+    for m, s in curve.items():
+        tot = s["right"] + s["wrong"] + s["silent"]
+        print(f"  {m:10} {s['right']}/{tot} right · {s['wrong']} wrong · {s['silent']} silent")
+    return 0
+
+def selftest(args):
+    """Mock-provider proofs — the routing/validation machinery is the target, not any model."""
+    import tempfile
+    results = []
+    with tempfile.TemporaryDirectory(prefix="rthink-st-") as tmp:
+        home = os.path.join(tmp, "home")
+        os.makedirs(os.path.join(home, "state"), exist_ok=True)
+        json.dump({"schema_version": 1, "min_wl_plane": "0", "repos": {}}, open(os.path.join(tmp, "m.json"), "w"))
+        env = dict(os.environ, WL_HOME=home, WL_MANIFEST=os.path.join(tmp, "m.json"))
+        me = os.path.abspath(__file__)
+        def sh(*a, mock=None, extra=None):
+            e = {**env, **(extra or {})}
+            if mock is not None:
+                e["RATCHET_MOCK_THINK"] = json.dumps(mock)
+            return subprocess.run([sys.executable, me, *a], env=e, capture_output=True, text=True, timeout=120)
+        good = {"verdict": "GO", "findings": []}
+        bad_then_never_valid = "this is not json at all"
+        # 1. schema-valid output accepted; artifact written
+        r1 = sh("review", "test subject", mock={"*": good})
+        results.append(("THINK valid output accepted", r1.returncode == 0 and "verdict GO" in r1.stdout, r1.stdout[-80:]))
+        # 2. schema-invalid output: retried then ABORTED, never interpreted
+        r2 = sh("review", "garbage subject", mock={"*": bad_then_never_valid})
+        results.append(("THINK invalid output aborts (never interpreted)",
+                        r2.returncode == 2 and "COUNCIL FAILED" in r2.stdout, r2.stdout[-80:]))
+        # 3. structural disagreement escalates; premium_policy=never records instead of spends
+        split = {"glm": {"verdict": "GO", "findings": []},
+                 "deepseek": {"verdict": "NO-GO", "findings": [{"severity": "BLOCKER", "file": "x", "claim": "c", "evidence": "e"}]},
+                 "*": {"verdict": "GO", "findings": []}}
+        r3 = sh("review", "split subject", mock=split)
+        results.append(("THINK disagreement escalates; premium=never records-not-spends",
+                        r3.returncode == 0 and "escalated True" in r3.stdout and "not spent" in r3.stdout, r3.stdout[-120:]))
+        # 4. premium allowed → judge consulted and outranks
+        json.dump({"schema_version": 1, "premium_policy": "judge-only"},
+                  open(os.path.join(home, "state", "config.json"), "w"))
+        split2 = dict(split, codex={"verdict": "NO-GO", "blocking": [{"severity": "BLOCKER", "file": "x", "claim": "c", "evidence": "e"}]})
+        r4 = sh("review", "split subject two", mock=split2)
+        results.append(("THINK judge escalation runs under policy and outranks",
+                        r4.returncode == 0 and "verdict NO-GO" in r4.stdout, r4.stdout[-100:]))
+        os.remove(os.path.join(home, "state", "config.json"))
+        # 5. plan mode emits an artifact whose cards a kernel would import
+        planv = {"*": {"cards": [{"slug": "p-one", "repo": "sb", "title": "t", "acceptance": "a",
+                                  "verify_cmd": "true", "deps": []}], "notes": ""}}
+        r5 = sh("plan", "feature x", mock=planv)
+        results.append(("THINK plan emits take --bulk-ready artifact",
+                        r5.returncode == 0 and "take --bulk" in r5.stdout, r5.stdout[-100:]))
+        # 6. identical packet → cache hit (the second run is free)
+        r6 = sh("review", "test subject", mock={"*": good})
+        results.append(("THINK diff-hash cache makes re-runs free",
+                        r6.returncode == 0 and "cache hit" in r6.stdout, r6.stdout[-80:]))
+        # 6c. security: --card traversal refused before it touches the filesystem
+        r_ct = sh("review", "x", "--card", "../../evil", mock={"*": good})
+        results.append(("THINK --card refuses path traversal (security-council HIGH)",
+                        r_ct.returncode == 1 and "not a valid card id" in r_ct.stdout, r_ct.stdout[-70:]))
+        # 6b. parser robustness (live-fire catch): prose AFTER the object, fenced blocks,
+        # and a preamble object before the real one must all still parse
+        hard = ('Here is my analysis {"note": "prelim"} and the answer:\n```json\n'
+                '{"verdict": "GO", "findings": []}\n```\nHope that helps! {unbalanced')
+        p1 = parse_json_block(hard)
+        p2 = parse_json_block('{"verdict": "NO-GO", "findings": []}\nTrailing prose with } brace')
+        results.append(("THINK parser survives prose/fences/trailing braces (live-fire catch)",
+                        p1 is not None and p1.get("verdict") == "GO"
+                        and p2 is not None and p2.get("verdict") == "NO-GO",
+                        f"p1={p1} p2={p2}"))
+        # 7. E5 teams-as-data: a domain profile swaps the roster; the kernel never learns why
+        os.makedirs(os.path.join(home, "teams"), exist_ok=True)
+        json.dump({"domain": "book", "roster": ["kimi"], "judge": ["gemini"],
+                   "notes": "continuity + prose lenses"}, open(os.path.join(home, "teams", "book.json"), "w"))
+        json.dump({"schema_version": 1, "min_wl_plane": "0",
+                   "repos": {"novel": {"path": tmp, "mainline": "main", "fetch_remote": "origin",
+                                       "push_remote": "origin", "gh_login": "t", "forbidden_push": [],
+                                       "remotes": {"origin": tmp}, "worktree_root": tmp, "domain": "book"}}},
+                  open(os.path.join(tmp, "m.json"), "w"))
+        r7 = sh("review", "chapter three pacing", "--repo", "novel", mock={"kimi": good, "*": good})
+        art_dirs = os.path.join(home, "state", "recordings")
+        found_team = None
+        for dd in os.listdir(art_dirs):
+            for f in os.listdir(os.path.join(art_dirs, dd)):
+                if f.startswith("think-"):
+                    aj = json.load(open(os.path.join(art_dirs, dd, f)))
+                    if (aj.get("result") or {}).get("team") == "teams/book.json":
+                        found_team = aj["result"]["roster"]
+        results.append(("THINK team resolver: domain profile swaps the roster (E5)",
+                        r7.returncode == 0 and "teams/book.json" in r7.stdout and found_team == ["kimi"],
+                        f"roster={found_team}"))
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        print(f"  {'OK  ' if okv else 'FAIL'}  {label}" + ("" if okv else f" — {detail}"))
+    print(f"\n  ratchet-think selftest: {passed}/{len(results)}")
+    return 0 if passed == len(results) else 2
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    if args[0] in ("brainstorm", "plan", "review", "judge"):
+        return run_mode(args[0], args[1:])
+    if args[0] == "calibrate":
+        return calibrate(args[1:])
+    if args[0] == "selftest":
+        return selftest(args[1:])
+    print(f"ratchet-think: unknown verb '{args[0]}'", file=sys.stderr); return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

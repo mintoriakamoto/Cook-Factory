@@ -1,6 +1,6 @@
 ---
 name: ferrox-mempalace-recall
-description: "Recall decisions, patterns, and surprises from MemPalace before planning"
+description: "Before planning, recall what was decided, what worked and what surprised you last time"
 argument-hint: "[phase-slug]"
 allowed-tools:
   - Read

@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+import importlib.machinery, importlib.util
+import json, os, re, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+K = _kernel()
+
+import fnmatch
+
+EXIT_CODES = {"allow": 0, "approval": 3, "deny": 1}
+
+# HARD-DENY tokens. Tuple = (category, token). Match is case-insensitive
+# substring on three haystacks: tool name, flattened args, and their
+# concatenation. The concatenation catches the case where a generic shell
+# is invoked with subcommand tokens as args (e.g. tool=`git` args=`["push"]`
+# => `git push`).
+HARD_DENY_TOKENS = [
+    ("self-land",            "ratchet land"),
+    ("push",                 "git push"),
+    ("pr merge",             "gh pr merge"),
+    ("merge",                "git merge"),
+    ("agent spawn",          "ratchet-exec"),
+    ("agent spawn",          "spawn_agent"),
+    ("agent spawn",          "create_agent"),
+    ("agent spawn",          "wayland-core"),
+    ("agent spawn",          "wayland core"),
+    ("gate disable",         "ratchet_break_glass"),
+    ("gate disable",         "RATCHET_BREAK_GLASS"),
+    ("gate disable",         "--no-verify"),
+    ("gate disable",         ".git/hooks"),
+    ("gate disable",         "git commit --no-verify"),
+    ("gate disable",         "hookspath"),          # core.hooksPath hook bypass
+    # Real MCP/host tool NAMES for the forbidden actions. Agents rarely shell
+    # out to `git push` / `gh pr merge`; they call the named tool. Substring
+    # match also covers the `mcp__<server>__<tool>` prefix form.
+    ("pr merge",             "merge_pull_request"),
+    ("push",                 "push_files"),
+    ("merge",                "merge_branch"),
+    ("pr update",            "update_pull_request_branch"),
+]
+
+# Regex catch for "<prefix>-exec run" or "<prefix>-exec swarm" tokens regardless
+# of concrete prefix. Matches both `-exec run` and `-exec swarm` patterns.
+EXEC_RUN_SWARM_RE = re.compile(
+    r"\b\w+-exec[\s_-]+(?:run|swarm)\b", re.IGNORECASE
+)
+
+# Unordered verb rules. A contiguous-phrase matcher is defeated by token
+# interposition (`git -C /repo push`, `gh -R x pr merge`). So for these
+# executables we require only that the executable token AND a forbidden verb
+# token BOTH appear anywhere (any order) in the normalized call. Safety-biased:
+# a benign `git log --merge` also trips, which for a deny-gate is acceptable.
+_VERB_RULES = [
+    ("git", ("push", "merge")),
+    ("gh",  ("merge",)),
+]
+
+# Arbitrary-command executors. Their command line cannot be statically vetted
+# by substring scan (quote-splitting `g""it`, `$(...)`, base64). When one of
+# these is invoked WITH an obfuscation marker, we cannot clear it, so we deny.
+_SHELL_EXES = ("shell", "bash", "sh", "zsh", "cmd", "powershell", "pwsh", "eval")
+_OBFUSCATION_MARKERS = ("$(", "`", "${", "base64", '""', "''", "\\x")
+
+# Normalization: collapse separators to a single space so that tool names like
+# "ratchet-land" / "ratchet_land" / "ratchet land" all match the phrase
+# "ratchet land". Used only for the phrase-style tokens above.
+_SEPARATOR_RE = re.compile(r"[-_\s]+")
+
+
+def _normalize(text):
+    if not text:
+        return ""
+    return _SEPARATOR_RE.sub(" ", text.lower()).strip()
+
+
+def _load_policy(path):
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def _pats(value):
+    """Coerce a policy pattern field to a list of string patterns.
+
+    A JSON string (e.g. "allow": "read_*") must NOT be exploded char-by-char
+    by list() — that turns a stray '*' into a universal-match pattern and
+    silently opens the whole policy (fail-OPEN). A lone string becomes a
+    one-element list; anything non-string in a list is dropped (fail-closed).
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [p for p in value if isinstance(p, str)]
+    return []
+
+
+def _effective_policy(pol):
+    if not isinstance(pol, dict):
+        pol = {}
+    default = pol.get("default", "deny")
+    if default not in ("allow", "approval", "deny"):
+        default = "deny"
+    return {
+        "allow":    _pats(pol.get("allow")),
+        "deny":     _pats(pol.get("deny")),
+        "approval": _pats(pol.get("approval")),
+        "default":  default,
+    }
+
+
+def _flatten_args(value):
+    """Recursively flatten a JSON-decoded value into a space-separated string."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        parts = []
+        for k in sorted(value.keys(), key=str):
+            parts.append(_flatten_args(k))
+            parts.append(_flatten_args(value[k]))
+        return " ".join(p for p in parts if p)
+    if isinstance(value, (list, tuple)):
+        return " ".join(p for p in (_flatten_args(v) for v in value) if p)
+    return str(value)
+
+
+def _flatten_args_json(args_json):
+    """Take a raw --args-json string (already a JSON value) and flatten it."""
+    if args_json is None or args_json == "":
+        return ""
+    try:
+        parsed = json.loads(args_json)
+    except Exception:
+        # Treat as a literal string fragment.
+        return str(args_json)
+    return _flatten_args(parsed)
+
+
+def _hard_deny(tool, args_flat):
+    """Return a reason string if any hard-deny rule trips, else None.
+
+    Scans three haystacks: tool name, flattened args, and their concatenation.
+    Both raw case-insensitive substring and separator-normalized phrase
+    matching are used, so "ratchet-land" / "ratchet land" / "ratchet_land"
+    all trip the same rule.
+    """
+    name = tool or ""
+    args = args_flat or ""
+    combined = (name + " " + args).strip()
+    haystacks = [name, args, combined]
+    for category, token in HARD_DENY_TOKENS:
+        low_tok = token.lower()
+        for hay in haystacks:
+            if not hay:
+                continue
+            # Raw case-insensitive substring match (covers single tokens like
+            # ".git/hooks", "RATCHET_BREAK_GLASS", "--no-verify", "spawn_agent",
+            # "ratchet-exec", "wayland-core").
+            if low_tok in hay.lower():
+                return "HARD-DENY (%s): %s" % (category, token)
+            # Normalized phrase match (covers "ratchet land", "git push",
+            # "gh pr merge", "git merge" across separator variants).
+            hay_norm = _normalize(hay)
+            tok_norm = _normalize(token)
+            if tok_norm and tok_norm in hay_norm:
+                return "HARD-DENY (%s): %s" % (category, token)
+    # Regex catch: any "<prefix>-exec run|swarm" token in either haystack.
+    for hay in haystacks:
+        if not hay:
+            continue
+        m = EXEC_RUN_SWARM_RE.search(hay)
+        if m:
+            return "HARD-DENY (agent spawn): %s" % m.group(0)
+    # Unordered verb rules: defeat token interposition (git -C /repo push).
+    toks = set(_normalize(combined).split())
+    for exe, verbs in _VERB_RULES:
+        if exe in toks:
+            for v in verbs:
+                if v in toks:
+                    return "HARD-DENY (interposed %s+%s)" % (exe, v)
+    # Arbitrary-shell obfuscation: a known executor carrying an obfuscation
+    # marker cannot be statically cleared, so deny.
+    if toks & set(_SHELL_EXES):
+        for mark in _OBFUSCATION_MARKERS:
+            if mark in combined:
+                return "HARD-DENY (obfuscated shell): marker %r" % mark
+    return None
+
+
+def _matches(name, patterns):
+    for pat in patterns or []:
+        try:
+            if fnmatch.fnmatchcase(name, pat):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _decide(tool, args_flat, policy):
+    # 1. HARD-DENY: absolute, non-overridable. Checked FIRST so that an
+    #    allowlist pattern like '*' cannot bypass it.
+    hd = _hard_deny(tool, args_flat)
+    if hd is not None:
+        return "deny", hd
+
+    # 2. explicit deny
+    if _matches(tool, policy.get("deny", [])):
+        return "deny", "policy denylist match"
+
+    # 3. explicit approval
+    if _matches(tool, policy.get("approval", [])):
+        return "approval", "policy approval-list match"
+
+    # 4. allowlist
+    if _matches(tool, policy.get("allow", [])):
+        return "allow", "policy allowlist match"
+
+    # 5. default (fail-closed)
+    default = policy.get("default", "deny")
+    if default not in ("allow", "approval", "deny"):
+        default = "deny"
+    return default, "no policy match; default=%s" % default
+
+
+def _parse_flags(argv):
+    """Hand-rolled flag parser for the small, fixed CLI surface."""
+    flags = {"policy": None, "args-json": None, "quiet": False}
+    pos = []
+    i = 0
+    n = len(argv)
+    while i < n:
+        a = argv[i]
+        if a == "--policy":
+            if i + 1 >= n:
+                raise SystemExit("missing value for --policy")
+            flags["policy"] = argv[i + 1]
+            i += 2
+        elif a == "--args-json":
+            if i + 1 >= n:
+                raise SystemExit("missing value for --args-json")
+            flags["args-json"] = argv[i + 1]
+            i += 2
+        elif a == "--quiet":
+            flags["quiet"] = True
+            i += 1
+        elif a in ("-h", "--help"):
+            sys.stdout.write(
+                "usage: ratchet-mcp check <tool_name> "
+                "[--args-json '<json>'] [--policy <path>] [--quiet]\n"
+            )
+            sys.exit(0)
+        elif a.startswith("--"):
+            raise SystemExit("unknown flag: %r" % a)
+        else:
+            pos.append(a)
+            i += 1
+    return flags, pos
+
+
+def _do_check(argv):
+    flags, pos = _parse_flags(argv)
+    if not pos:
+        raise SystemExit(
+            "usage: ratchet-mcp check <tool_name> "
+            "[--args-json '<json>'] [--policy <path>] [--quiet]"
+        )
+    tool = pos[0]
+    args_json = flags["args-json"]
+    policy_path = flags["policy"]
+    quiet = flags["quiet"]
+
+    args_flat = _flatten_args_json(args_json)
+    policy = _effective_policy(_load_policy(policy_path))
+    decision, reason = _decide(tool, args_flat, policy)
+    code = EXIT_CODES.get(decision, 1)
+
+    # Telemetry: redact args before logging.
+    try:
+        redacted = ""
+        if args_flat:
+            redactor = getattr(K, "redact", None)
+            if redactor is not None:
+                try:
+                    redacted = redactor(args_flat)
+                except Exception:
+                    redacted = "<unloggable>"
+            else:
+                redacted = args_flat
+        log_entry = {
+            "event": "mcp_decision",
+            "tool": tool,
+            "decision": decision,
+            "reason": reason,
+        }
+        if args_flat:
+            log_entry["args"] = redacted
+        telemetry = getattr(K, "telemetry_log", None)
+        if telemetry is not None:
+            telemetry(log_entry)
+    except Exception:
+        pass
+
+    if not quiet:
+        sys.stdout.write("decision=%s reason=%s\n" % (decision, reason))
+    return code
+
+
+def _do_policy(argv):
+    flags, _ = _parse_flags(argv)
+    policy = _effective_policy(_load_policy(flags["policy"]))
+    sys.stdout.write(json.dumps(policy) + "\n")
+    return 0
+
+
+def _do_selftest(argv):
+    # TRUSTED, INDEPENDENT selftest. Authored by the orchestrator (not the
+    # builder), drives ONLY the public `check`/`policy` CLI of THIS file, and
+    # asserts DECISION EXIT CODES (0 allow / 3 approval / 1 deny). Every check
+    # reproduces a real failure mode; the security core is that HARD-DENY and
+    # the fail-closed default can never be opened by a policy. Includes explicit
+    # regression guards for the council-found bypasses (token interposition,
+    # real MCP tool names, obfuscated shell, string-policy fail-open).
+    import json as _json, os as _os, shutil as _sh, subprocess as _sp
+    import sys as _sys, tempfile as _tf
+    RP = _os.path.abspath(__file__)
+    results = []
+    def check(label, ok, detail=""):
+        results.append((label, bool(ok), str(detail)[:200]))
+    tmp = _tf.mkdtemp(prefix="mcp-st-")
+    def run(av, timeout=30):
+        return _sp.run([_sys.executable, RP] + av, capture_output=True,
+                       text=True, timeout=timeout)
+    def wpol(name, obj):
+        p = _os.path.join(tmp, name)
+        with open(p, "w") as f:
+            _json.dump(obj, f)
+        return p
+    def aj(obj):
+        return _json.dumps(obj)
+    try:
+        pol = wpol("p.json", {"allow": ["read_*", "list_files"], "deny": ["delete_all"],
+                              "approval": ["shell", "write_file"], "default": "deny"})
+        allowall = wpol("all.json", {"allow": ["*"], "default": "allow"})
+
+        # 1. core decision semantics (the independent contract)
+        check("allowlisted -> allow (0)", run(["check", "read_file", "--policy", pol, "--quiet"]).returncode == 0)
+        check("denylisted -> deny (1)", run(["check", "delete_all", "--policy", pol, "--quiet"]).returncode == 1)
+        check("approval-listed -> approval (3)", run(["check", "write_file", "--policy", pol, "--quiet"]).returncode == 3)
+        check("unknown under default=deny -> deny (1)", run(["check", "unknown_tool", "--policy", pol, "--quiet"]).returncode == 1)
+        check("glob allow read_* matches read_config -> allow", run(["check", "read_config", "--policy", pol, "--quiet"]).returncode == 0)
+        check("empty/absent policy -> default deny (1)", run(["check", "anything", "--quiet"]).returncode == 1)
+
+        # 2. HARD-DENY tool NAMES, absolute under allow:* / default:allow
+        for name in ("git push", "gh pr merge", "git merge", "ratchet land", "ratchet-land",
+                     "ratchet_land", "spawn_agent", "create_agent", "wayland-core", "ratchet-exec",
+                     "RATCHET_BREAK_GLASS", "merge_pull_request", "push_files", "merge_branch",
+                     "update_pull_request_branch"):
+            check("HARD-DENY name %r under allow:* -> deny" % name,
+                  run(["check", name, "--policy", allowall, "--quiet"]).returncode == 1)
+        # 3. real MCP tools reach via the mcp__server__tool prefix form
+        for name in ("mcp__github__merge_pull_request", "mcp__github__push_files"):
+            check("HARD-DENY prefixed %r -> deny" % name,
+                  run(["check", name, "--policy", allowall, "--args-json", aj({"n": 1}), "--quiet"]).returncode == 1)
+        # 4. forbidden actions smuggled through an allowlisted shell's ARGS
+        for payload in (aj({"cmd": "git push origin main"}), aj(["-c", "ratchet land ."]),
+                        aj({"cmd": "git commit --no-verify -m x"}), aj({"path": ".git/hooks/pre-commit"}),
+                        aj({"env": "RATCHET_BREAK_GLASS=1"}), aj({"cmd": "claude-exec run foo"}),
+                        aj({"cmd": "alpha-exec swarm work"})):
+            check("HARD-DENY args %s -> deny" % payload[:38],
+                  run(["check", "shell", "--policy", allowall, "--args-json", payload, "--quiet"]).returncode == 1)
+        # 5. concatenation rule: tool=git args=[push]
+        check("HARD-DENY tool=git args=[push] concat -> deny",
+              run(["check", "git", "--policy", allowall, "--args-json", aj(["push"]), "--quiet"]).returncode == 1)
+
+        # 6. token INTERPOSITION guards (council finding 2) - the phrase is broken up
+        check("interposed git -C /repo push -> deny",
+              run(["check", "git", "--policy", allowall, "--args-json", aj(["-C", "/repo", "push"]), "--quiet"]).returncode == 1)
+        check("interposed git -c k=v push -> deny",
+              run(["check", "git", "--policy", allowall, "--args-json", aj(["-c", "http.x=y", "push"]), "--quiet"]).returncode == 1)
+        check("interposed gh -R x pr merge -> deny",
+              run(["check", "gh -R owner/repo pr merge 1", "--policy", allowall, "--quiet"]).returncode == 1)
+        check("interposed git -C x merge -> deny",
+              run(["check", "git", "--policy", allowall, "--args-json", aj(["-C", "/r", "merge", "feat"]), "--quiet"]).returncode == 1)
+        check("core.hooksPath hook bypass -> deny",
+              run(["check", "git", "--policy", allowall, "--args-json", aj(["-c", "core.hooksPath=/dev/null", "commit"]), "--quiet"]).returncode == 1)
+
+        # 7. obfuscated-shell escalation (council finding 3)
+        check("obfuscated shell quote-split g\"\"it push -> deny",
+              run(["check", "shell", "--policy", allowall, "--args-json", aj({"cmd": 'g""it push'}), "--quiet"]).returncode == 1)
+        check("obfuscated shell base64 $() -> deny",
+              run(["check", "shell", "--policy", allowall, "--args-json", aj({"cmd": 'bash -c "$(echo Z2l0IHB1c2g= | base64 -d)"'}), "--quiet"]).returncode == 1)
+
+        # 8. benign must NOT be over-blocked (false-positive guard)
+        check("benign shell ls -la -> allow (0)",
+              run(["check", "shell", "--policy", allowall, "--args-json", aj({"cmd": "ls -la"}), "--quiet"]).returncode == 0)
+        check("benign read_file under allow policy -> allow (0)",
+              run(["check", "read_file", "--policy", pol, "--quiet"]).returncode == 0)
+
+        # 9. FAIL-OPEN regression (council finding 1): a STRING policy field must
+        #    not be exploded char-by-char into a universal-match '*' pattern.
+        strpol = wpol("str.json", {"allow": "read_*", "default": "deny"})
+        check("string allow field: unrelated tool still DENIED (no char-explode)",
+              run(["check", "delete_everything", "--policy", strpol, "--quiet"]).returncode == 1)
+        check("string allow field: the declared pattern still allows",
+              run(["check", "read_file", "--policy", strpol, "--quiet"]).returncode == 0)
+
+        # 10. policy verb prints valid JSON; fail-closed default
+        rp = run(["policy", "--policy", pol]); okj = rp.returncode == 0
+        try:
+            _json.loads(rp.stdout)
+        except Exception:
+            okj = False
+        check("policy verb prints valid JSON (0)", okj, rp.stdout[:60])
+        rpd = run(["policy"]); okd = rpd.returncode == 0
+        try:
+            okd = okd and _json.loads(rpd.stdout).get("default") == "deny"
+        except Exception:
+            okd = False
+        check("policy verb no --policy => default deny", okd)
+
+        # 11. malformed / hostile policy files fail CLOSED (deny), never open
+        for i, bad in enumerate(("{not json", '{"allow": 123}', '{"default": 99}', "[]", "null")):
+            bp = _os.path.join(tmp, "bad%d.json" % i)
+            with open(bp, "w") as f:
+                f.write(bad)
+            check("malformed policy %r fails closed -> deny" % bad[:14],
+                  run(["check", "some_tool", "--policy", bp, "--quiet"]).returncode == 1)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    passed = sum(1 for _, ok, _ in results if ok)
+    for label, ok, detail in results:
+        _sys.stdout.write(("  OK    " if ok else "  FAIL  ") + label +
+                          ("" if ok else "  -- " + detail) + "\n")
+    _sys.stdout.write("\n  ratchet-mcp selftest: %d/%d\n" % (passed, len(results)))
+    return 0 if passed == len(results) else 2
+
+
+_USAGE = (
+    "usage:\n"
+    "  ratchet-mcp check <tool_name> [--args-json '<json>'] [--policy <path>] [--quiet]\n"
+    "  ratchet-mcp policy [--policy <path>]\n"
+    "  ratchet-mcp selftest\n"
+)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        sys.stdout.write(_USAGE)
+        return 2
+    verb = argv[0]
+    rest = argv[1:]
+    if verb == "check":
+        return _do_check(rest)
+    if verb == "policy":
+        return _do_policy(rest)
+    if verb == "selftest":
+        return _do_selftest(rest)
+    if verb in ("-h", "--help"):
+        sys.stdout.write(_USAGE)
+        return 0
+    sys.stderr.write("ratchet-mcp: unknown verb %r\n" % verb)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

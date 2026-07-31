@@ -53,6 +53,13 @@ export default tseslint.config(
       '**/dist/**',
       '.worktrees/**',
       '.claude/**',
+      // The fleet's execution control plane. `ratchet take` creates a full git
+      // worktree per workgraph node under here, so every file in this repository
+      // appears again inside each one. Linting them lints the repository N times,
+      // and the copies inherit eslint-disable comments naming rules that the
+      // nested config does not load, which surfaces as "rule not found" errors
+      // against paths nobody edited. Gitignored at `.gitignore:49`.
+      '.ferrox/**',
       'coverage/**',
       '**/*.generated.cjs',
       // Vendored third-party dist builds ship verbatim (license headers intact);
@@ -140,6 +147,7 @@ export default tseslint.config(
       'ferrox-core/bin/lib/audit-command-router.cjs',
       'ferrox-core/bin/lib/intel-command-router.cjs',
       'ferrox-core/bin/lib/install-profiles.cjs',
+      'ferrox-core/bin/lib/offer-registry.cjs',
       'ferrox-core/bin/lib/intel.cjs',
       'ferrox-core/bin/lib/installer-migrations.cjs',
       'ferrox-core/bin/lib/worktree-safety.cjs',
@@ -216,9 +224,43 @@ export default tseslint.config(
       'ferrox-core/bin/lib/gate-seal.cjs',
       'ferrox-core/bin/lib/canon-facts.cjs',
       'ferrox-core/bin/lib/team-manifest.cjs',
+      'ferrox-core/bin/lib/milestone-manifest.cjs',
+      'ferrox-core/bin/lib/governance-manifest.cjs',
+      'ferrox-core/bin/lib/antiloop-log.cjs',
+      'ferrox-core/bin/lib/antiloop-gate.cjs',
+      'ferrox-core/bin/lib/antiloop-command-router.cjs',
+      'ferrox-core/bin/lib/antiloop-config-guard.cjs',
+      'ferrox-core/bin/lib/antiloop-config-resolve.cjs',
+      'ferrox-core/bin/lib/roadmap-index.cjs',
+      'ferrox-core/bin/lib/roadmap-index-scan.cjs',
+      'ferrox-core/bin/lib/workgraph.cjs',
+      'ferrox-core/bin/lib/workgraph-scan.cjs',
       'ferrox-core/bin/lib/manuscript-assemble.cjs',
       'ferrox-core/bin/lib/mutant-rotation.cjs',
       'ferrox-core/bin/lib/crucible-route.cjs',
+      'ferrox-core/bin/lib/fleet-capability.cjs',
+      // Phase 19 fleet libs. This ignore list is a PHASE WIDE write surface, so
+      // plan 01 (the phase's seam node) pays all 5 lines once and no later plan
+      // in the phase touches this file. That is what lets plans 03 and 04 share
+      // a wave without sharing a written file. The last 3 name artifacts that do
+      // not exist yet on purpose: an ignore pattern naming an absent path is
+      // inert, and paying it here costs nothing while a merge conflict on this
+      // file mid wave would cost a lane.
+      'ferrox-core/bin/lib/fleet-runlog.cjs',
+      'ferrox-core/bin/lib/fleet-runfold.cjs',
+      'ferrox-core/bin/lib/fleet-board.cjs',
+      'ferrox-core/bin/lib/fleet-landqueue.cjs',
+      'ferrox-core/bin/lib/fleet-manager.cjs',
+      // Phase 20 pre-pays BOTH of its new libs here, in plan 20-03. `fleet-probe.cjs`
+      // is plan 20-04's artifact and does not exist yet ON PURPOSE: an ignore
+      // pattern naming an absent path is inert, and paying it in 1 plan keeps this
+      // file out of the other plan's write lane, so the 2 share 1 file rather than
+      // 2. Do not delete the second entry as dead; it is deliberate.
+      'ferrox-core/bin/lib/fleet-park.cjs',
+      'ferrox-core/bin/lib/fleet-probe.cjs',
+      // Phase 21: the dispatch manifest consumer's decision half, compiled from
+      // src/fleet-dispatch-plan.cts.
+      'ferrox-core/bin/lib/fleet-dispatch-plan.cjs',
       'ferrox-core/bin/lib/memory-fact.cjs',
       'ferrox-core/bin/lib/memory-recall-capture.cjs',
       'ferrox-core/bin/lib/memory-command-router.cjs',
@@ -288,6 +330,13 @@ export default tseslint.config(
       'ferrox-core/bin/lib/state-io.cjs',
       'ferrox-core/bin/lib/external-descriptor-trust.cjs',
       'ferrox-core/bin/lib/mcp-server.cjs',
+      // Phase 22 (Proof): tsc-generated runtime artifact. Lint the src/bench-corpus.cts source.
+      // APPENDED at the tail on purpose. FF-B119: every plan that adds a tracked
+      // built lib contends on this file and on docs/INVENTORY-MANIFEST.json, so an
+      // append conflicts cleanly while a reorder does not.
+      'ferrox-core/bin/lib/bench-corpus.cjs',
+      'ferrox-core/bin/lib/proof-fold.cjs',
+      'ferrox-core/bin/lib/backend-intent.cjs',
     ],
   },
 

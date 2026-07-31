@@ -1,6 +1,6 @@
 ---
 name: ferrox-ui-phase
-description: "Generate UI design contract (UI-SPEC.md) for frontend phases"
+description: "A step involves frontend work and you want the design pinned down before it is built"
 argument-hint: "[phase]"
 allowed-tools:
   - Read

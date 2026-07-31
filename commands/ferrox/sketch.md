@@ -1,6 +1,6 @@
 ---
 name: ferrox:sketch
-description: Sketch UI/design ideas with throwaway HTML mockups, or propose what to sketch next (frontier mode)
+description: "You want to see what it could look like before building it. Throwaway HTML mockups"
 argument-hint: "[design idea to explore] [--quick] [--text] [--wrap-up] or [frontier]"
 allowed-tools:
   - Read

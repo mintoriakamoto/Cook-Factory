@@ -1,0 +1,2439 @@
+#!/usr/bin/env python3
+"""ratchet-glass — mission control for the ratchet control plane (glass v4).
+
+The glass RENDERS state and NEVER mutates it (§9): GET only, localhost only,
+no fetches on page view, no cache writes from a page view, no os.replace /
+sys.exit in any read path. Every "action" on a page is a copyable CLI verb —
+the write happens in your terminal, where the gate applies.
+
+This is a companion in the ratchet-kanban mold: it loads the kernel read-only
+(SourceFileLoader) for its state paths and derivations, and holds no verb that
+mutates anything. The read-only guarantee is proved, not promised: the selftest
+renders against a populated home and asserts it stays byte-identical.
+
+Stage 1 (glass-serve-shell): the SPA shell — bridge, sidebar, hash router,
+Overview (needs-you · tiles · today feed) from kernel state files. Pages that
+ship in later cards render an honest "not built yet" state that teaches the
+CLI verb answering the same question today.
+
+Verbs:
+  serve [--port N] [--bind-all]   serve the glass (default 127.0.0.1:8721)
+  selftest                        hermetic proofs: GET-only, POST 501, exact
+                                  404s, read-only-ness, corrupt-state 500,
+                                  hostile-title escaping, slow-loris survival
+"""
+import importlib.machinery, importlib.util
+import json, os, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel",
+        importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+K = _kernel()
+
+DAY_S = 86400.0
+GLASS_EXPOSED = False  # set True by serve() when bind != 127.0.0.1: the keys page then refuses
+# even presence booleans over the network (systems R2-8 — a name-set can hint at what to attack)
+STALE_S = 24 * 3600  # bridge badges: a green older than this renders amber (stale-green is amber)
+
+
+# ---------- read-only loaders (§9: a page view writes NOTHING, not even a cursor) ----------
+
+def _age_str(secs):
+    if secs is None:
+        return ""
+    secs = max(0, int(secs))
+    if secs < 3600:
+        return "%dm" % (secs // 60)
+    if secs < DAY_S:
+        return "%dh" % (secs // 3600)
+    return "%dd" % (secs // DAY_S)
+
+
+def _ts_age_s(ts):
+    try:
+        return time.time() - time.mktime(time.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def spend_today_ro():
+    """Today's metered spend WITHOUT advancing the kernel's spend cursor: read the cursor
+    cache, scan only the bytes appended since, sum in memory, persist nothing. The kernel's
+    spend_today() writes the cursor back — that is a CLI-side optimization; a page view gets
+    the same number by leaving the tail bytes for the CLI to absorb later."""
+    p = K.state_path("telemetry.jsonl")
+    today = K.now_iso()[:10]
+    offset, day_sum = 0, 0.0
+    saved, _age = K.cache_get_stale("spend-cursor")
+    if isinstance(saved, dict) and isinstance(saved.get("offset"), int) and saved["offset"] >= 0:
+        offset = saved["offset"]
+        if saved.get("day") == today:
+            try:
+                day_sum = float(saved.get("day_sum") or 0.0)
+            except (TypeError, ValueError):
+                day_sum = 0.0
+    try:
+        size = os.path.getsize(p)
+    except OSError:
+        return 0.0  # no telemetry yet — nothing spent
+    if offset > size:  # cursor past EOF: file truncated/rotated — the cursor is a lie, rescan
+        offset, day_sum = 0, 0.0
+    import math
+    with open(p, "rb") as fh:
+        fh.seek(offset)
+        for ln in fh:
+            if not ln.endswith(b"\n"):
+                break  # torn tail line — the CLI's next pass counts it; never half-count here
+            try:
+                e = json.loads(ln)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(e, dict) or not str(e.get("ts", "")).startswith(today):
+                continue
+            try:
+                v = float(e.get("cost_usd") or 0)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(v) and v >= 0:  # a nan/inf/negative cost is NO price, never summed
+                day_sum += v
+    return day_sum
+
+
+# telemetry events the Overview feed shows (R2-10: telemetry is the feed's source of truth,
+# whitelisted — journals only contribute interrupted-run items, which needs-you already carries).
+FEED_EVENTS = {
+    "take": "ember", "take_bulk": "ember", "land_gate_pass": "ok", "land_suite_fail": "red",
+    "land_fuse_claimed": "unk", "land_no_card": "warn", "cut": "blue", "train": "blue",
+    "promote": "blue", "rollback": "red", "adopt": "unk", "approve": "ok", "reject": "red",
+    "closeout": "blue",
+}
+_FEED_DETAIL_KEYS = ("slug", "work_id", "name", "repos", "repo", "ref", "snapshot", "green")
+
+
+def feed_tail(limit=8, tail_bytes=131072):
+    """Newest whitelisted telemetry events — reads only the file TAIL (the ledger is multi-MB
+    and grows daily; a page view never scans it from byte 0)."""
+    p = K.state_path("telemetry.jsonl")
+    try:
+        size = os.path.getsize(p)
+        with open(p, "rb") as fh:
+            if size > tail_bytes:
+                fh.seek(size - tail_bytes)
+                fh.readline()  # drop the partial first line
+            raw = fh.read()
+    except OSError:
+        return []
+    rows = []
+    for ln in raw.splitlines():
+        try:
+            e = json.loads(ln)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(e, dict):  # a non-dict telemetry line must not reach a .get()
+            continue
+        ev = e.get("event")
+        if ev not in FEED_EVENTS:
+            continue
+        bits = []
+        for k in _FEED_DETAIL_KEYS:
+            v = e.get(k)
+            if v not in (None, "", []):
+                bits.append("%s %s" % (k, ",".join(v) if isinstance(v, list) else v))
+        ts = str(e.get("ts", ""))
+        rows.append({"ts": ts[11:16] if len(ts) >= 16 else ts, "ev": str(ev),
+                     "pill": FEED_EVENTS[ev], "msg": " · ".join(bits) or str(ev),
+                     "age": _age_str(_ts_age_s(ts))})
+    rows.reverse()
+    return rows[:limit]
+
+
+STATIONS = ("rebase", "suite", "review", "push")
+_ABORT_STATION = {"fetch": "rebase", "rebase": "rebase", "suite": "suite", "corpus": "suite",
+                  "review": "review", "push": "push", "pr-create": "push"}
+
+
+def _gate_from_run(run):
+    """Stepper states derived from a land journal run. Honest by construction: a station
+    renders 'done' only if its step was journaled; a skip renders as a skip (never 'done');
+    a completed run from before step-journaling renders 'unrecorded', never a claimed pass;
+    an aborted run marks the station it died at with the recorded reason."""
+    steps = run.get("steps")
+    labels = [str(st.get("label", "")) for st in steps
+              if isinstance(st, dict)] if isinstance(steps, list) else []
+    outcome = str(run.get("outcome") or "")
+    ok = bool(run.get("done")) and outcome == "ok"
+    aborted = bool(run.get("done")) and not ok
+    why = outcome[len("aborted:"):] if outcome.startswith("aborted:") else (outcome or None)
+    fail_at = _ABORT_STATION.get(why) if aborted else None
+    if run.get("done"):
+        interrupted = False
+    else:
+        # journals are agent-writable: a garbage pid must degrade to "claimant unverifiable"
+        # (= interrupted), never crash the whole dashboard
+        try:
+            claimant = K.pid_is_claimant(int(run.get("pid") or 0), str(run.get("pid_start") or ""))
+        except (TypeError, ValueError, OverflowError):
+            claimant = False
+        interrupted = not claimant
+    running = (not run.get("done")) and not interrupted
+    gate, live_marked = [], False
+    for st in STATIONS:
+        if ("pushed" if st == "push" else st) in labels:
+            state = "done"
+        elif (st + ":skipped") in labels:
+            state = "skipped"
+        elif ok:
+            state = "unrecorded"  # pre-journaling kernel: the run passed, the step wasn't recorded
+        elif not aborted and not live_marked:
+            state = "stalled" if interrupted else "running"
+            live_marked = True
+        else:
+            state = "pending"
+        gate.append({"st": st, "state": state})
+    if aborted:
+        # mark the recorded station if it is still unclaimed; else the first pending one — a
+        # corpus abort happens AFTER suite passed, and "no red anywhere" would evaporate the
+        # failure (review catch: the reason text alone must never carry a gate abort)
+        idx = next((i for i, g in enumerate(gate)
+                    if g["st"] == fail_at and g["state"] == "pending"), None)
+        if idx is None:
+            idx = next((i for i, g in enumerate(gate) if g["state"] == "pending"), None)
+        if idx is not None:
+            gate[idx]["state"] = "failed"
+    step = sum(1 for g in gate if g["state"] in ("done", "skipped", "unrecorded"))
+    return {"gate": gate, "step": step, "ok": ok, "aborted": aborted, "why": why,
+            "interrupted": interrupted, "running": running}
+
+
+def _read_recording(wid, max_events=40):
+    """Timeline + derived facts from state/recordings/<wid>/ — read-only, capped, tolerant.
+    wid comes from agent-writable workcards.json: safe_ref() confines it to the recordings
+    tree (a work_id of "../../<x>" or "/etc/<x>" must never read outside it — review catch)."""
+    if K.safe_ref(str(wid)) is None:
+        return {"tl": [], "n_events": 0, "diff": None, "result": None,
+                "result_ts": None, "last_ts": None, "suite_tail": None}
+    rdir = os.path.join(K.WL_HOME, "state", "recordings", str(wid))
+    tl, diff, result, result_ts, last_ts = [], None, None, None, None
+    try:
+        lines = open(os.path.join(rdir, "events.jsonl"), "rb").read().splitlines()
+    except OSError:
+        lines = []
+    for ln in lines:
+        try:
+            e = json.loads(ln)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        rest = {k: v for k, v in e.items() if k not in ("ts", "agent", "event")}
+        ts = str(e.get("ts", ""))
+        last_ts = ts or last_ts
+        tl.append([ts, str(e.get("event", "?")), str(e.get("agent", "")),
+                   json.dumps(rest, default=str)[:160]])
+        if e.get("event") == "diff_facts":
+            if "error" in e:
+                diff = {"error": str(e["error"])[:200]}
+            else:
+                diff = {"n_files": e.get("n_files"), "plus": e.get("plus"), "minus": e.get("minus"),
+                        "files": [str(f) for f in (e.get("files") or [])[:30]],
+                        "subjects": [str(x)[:100] for x in (e.get("subjects") or [])[:10]]}
+        elif e.get("event") == "land_pass":
+            result = "landed %s -> %s" % (e.get("branch", ""), e.get("repo", ""))
+            result_ts = ts
+    tail = None
+    try:
+        tail = open(os.path.join(rdir, "suite-tail.txt"), errors="replace").read()[-4096:]
+    except OSError:
+        pass
+    return {"tl": tl[-max_events:], "n_events": len(tl), "diff": diff, "result": result,
+            "result_ts": result_ts, "last_ts": last_ts, "suite_tail": tail}
+
+
+def build_cards():
+    """Board rows + per-card detail from workcards + land journals + flight recordings."""
+    sl = K.state_load(K.CARDS, {"cards": []})
+    raw = sl.get("cards") if isinstance(sl, dict) else None
+    if not isinstance(raw, list):
+        raw = []  # a list/keyless workcards.json degrades to an empty board, never a 500
+    jl = K.state_load("journals.json", {"schema_version": 1, "runs": []})
+    jruns = jl.get("runs") if isinstance(jl, dict) else None
+    runs = [r for r in (jruns if isinstance(jruns, list) else [])
+            if isinstance(r, dict) and r.get("verb") == "land"]
+    run_by_ref = {}
+    for r in runs:
+        run_by_ref[str(r.get("ref"))] = r  # append-ordered: last one per worktree wins
+    today = K.now_iso()[:10]
+    board, details, agents = [], {}, {}
+    abandoned = 0
+    # bound the per-view work: recordings are opened only for ACTIVE cards and the most
+    # recent landed ones (7 days, max 30) — landed cards accumulate forever and an
+    # every-card read would grow the page and the IO without bound (review catch).
+    # Older landed cards stay on the board and get a light "archived" detail.
+    week_ago = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 7 * 86400))
+    cands = [c for c in raw if isinstance(c, dict)]
+    recent_landed = sorted((c for c in cands if c.get("status") == "landed"),
+                           key=lambda c: str(c.get("land_ts") or c.get("created") or ""),
+                           reverse=True)
+    covered = {id(c) for c in cands if c.get("status") in ("pending", "open", "landing")}
+    n_rec = 0
+    for c in recent_landed:
+        if n_rec >= 30 or str(c.get("land_ts") or c.get("created") or "") < week_ago:
+            break
+        covered.add(id(c))
+        n_rec += 1
+    empty_rec = {"tl": [], "n_events": 0, "diff": None, "result": None,
+                 "result_ts": None, "last_ts": None, "suite_tail": None}
+    for c in cands:
+        status = c.get("status")
+        if status == "abandoned":
+            abandoned += 1
+            continue
+        if status not in ("pending", "open", "landing", "landed"):
+            continue
+        wid = str(c.get("work_id") or "?")
+        wt = K.expand(str(c.get("worktree") or ""))
+        run = run_by_ref.get(os.path.realpath(wt) if wt else "")
+        g = _gate_from_run(run) if run else None
+        archived = id(c) not in covered
+        rec = empty_rec if archived else _read_recording(wid)
+        wt_gone = bool(wt) and status in ("open", "landing") and not os.path.exists(wt)
+        stuck_why = ("worktree gone" if wt_gone
+                     else "land interrupted" if (g and g["interrupted"] and status == "landing")
+                     else "gate failed: %s" % g["why"] if (g and g["aborted"] and status in ("open", "landing"))
+                     else None)
+        land_ts = None
+        if status == "landed":
+            for ts_c in (rec["result_ts"], c.get("land_ts"), c.get("created")):
+                if ts_c:
+                    land_ts = str(ts_c)
+                    break
+        step = 4 if status == "landed" and g is None else (g["step"] if g else 0)
+        ag = str(c.get("agent") or "").strip() or "unattributed"
+        last_ev_s = _ts_age_s(rec["last_ts"]) if rec["last_ts"] else None
+        active = status in ("open", "landing")
+        lane_quiet = bool(active and last_ev_s is not None and last_ev_s > 90 * 60 and not stuck_why)
+        board.append({
+            "wid": wid, "slug": str(c.get("slug") or wid), "title": str(c.get("title") or ""),
+            "repo": str(c.get("repo") or ""), "status": status, "risk": str(c.get("risk") or ""),
+            "agent": ag, "age": _age_str(_ts_age_s(c.get("created"))), "step": step,
+            "stuck": bool(stuck_why), "stuck_why": stuck_why, "quiet": lane_quiet,
+            "last_ev_age": _age_str(last_ev_s) if last_ev_s is not None else None,
+            "landed_day": (land_ts or "")[:10] if status == "landed" else None,
+            "issue": str(c.get("issue") or "")})
+        # per-agent aggregate (Agents page). Counts are per LANE (multi-repo work is one card per
+        # repo, sharing a work_id — two real lanes, counted as two, by design). model/CLI and
+        # reliable per-lane spend are NOT in kernel state (friction #11); the page says so.
+        a = agents.setdefault(ag, {"agent": ag, "lands": 0, "active": 0, "stuck": 0,
+                                   "active_ev_s": None, "unattributed": ag == "unattributed"})
+        if status == "landed":
+            a["lands"] += 1
+        elif active:
+            a["active"] += 1
+            # liveness is measured over ACTIVE lanes ONLY — a card that landed minutes ago must
+            # never mask an open lane that has been silent for hours (review MAJOR)
+            if last_ev_s is not None and (a["active_ev_s"] is None or last_ev_s < a["active_ev_s"]):
+                a["active_ev_s"] = last_ev_s
+        if stuck_why:
+            a["stuck"] += 1
+        if wid not in details:
+            details[wid] = {
+                "archived": archived,
+                "slug": str(c.get("slug") or wid), "title": str(c.get("title") or ""),
+                "repo": str(c.get("repo") or ""), "branch": K.branch_for(str(c.get("slug") or wid)),
+                "issue": str(c.get("issue") or ""), "status": status,
+                "agent": str(c.get("agent") or ""), "age": _age_str(_ts_age_s(c.get("created"))),
+                "worktree": str(c.get("worktree") or ""), "wt_gone": wt_gone,
+                "gate": g["gate"] if g else None, "gate_why": g["why"] if (g and g["aborted"]) else None,
+                "interrupted": bool(g and g["interrupted"]), "stuck_why": stuck_why,
+                "tl": rec["tl"], "n_events": rec["n_events"], "diff": rec["diff"],
+                "result": rec["result"], "suite_tail": rec["suite_tail"]}
+    trains = [{"name": str(t.get("name") or ""), "status": str(t.get("status") or ""),
+               "snapshot": str(t.get("snapshot") or "")[:10], "ts": str(t.get("ts") or "")[:10]}
+              for t in (lambda x: x.get("trains") if isinstance(x, dict) and
+                        isinstance(x.get("trains"), list) else [])(
+                            K.state_load(K.TRAINS, {"trains": []}))
+              if isinstance(t, dict)]
+    LIVENESS_QUIET_S = 90 * 60  # an active lane silent this long is "quiet" before it's called dead
+    agents_list = []
+    for a in agents.values():
+        active = a["active"]
+        quiet = active > 0 and a["active_ev_s"] is not None and a["active_ev_s"] > LIVENESS_QUIET_S
+        state = ("stuck" if a["stuck"] else "quiet" if quiet
+                 else "on-shift" if active else "idle")
+        agents_list.append({
+            "agent": a["agent"], "lands": a["lands"], "active": active, "stuck": a["stuck"],
+            "unattributed": a["unattributed"], "state": state,
+            "last_ev_age": _age_str(a["active_ev_s"]) if a["active_ev_s"] is not None else None})
+    # sort: on-shift/stuck first (most active), then most lands — the working agents on top
+    order = {"stuck": 0, "quiet": 1, "on-shift": 2, "idle": 3}
+    agents_list.sort(key=lambda x: (order.get(x["state"], 9), -x["active"], -x["lands"]))
+    return {"board": board, "cards": details, "trains": trains, "abandoned": abandoned,
+            "agents": agents_list, "today": today}
+
+
+GOV_ALTS = {
+    "SECURITY.md": ("SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"),
+    "CODEOWNERS": ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"),
+    "PULL_REQUEST_TEMPLATE.md": (".github/PULL_REQUEST_TEMPLATE.md", "PULL_REQUEST_TEMPLATE.md",
+                                 "docs/PULL_REQUEST_TEMPLATE.md"),
+    "CONTRIBUTING.md": ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"),
+}
+ISSUE_COLS = ["triage", "active", "blocked", "stale"]
+PR_COLS = ["review", "ready", "checks-fail", "draft", "stale"]
+
+
+def _manifest_ro():
+    """The manifest, read-only + defensive — never K.load_manifest() (it sys.exits on any hiccup,
+    which under the threaded server dies silently). A page view degrades to an empty estate."""
+    try:
+        m = json.load(open(K.MANIFEST_PATH))
+    except (OSError, ValueError):
+        return {}
+    repos = m.get("repos") if isinstance(m, dict) else None
+    return repos if isinstance(repos, dict) else {}
+
+
+def _slug_from_remote(r):
+    """owner/repo for external GitHub links, parsed from the manifest remote — never a network call."""
+    remotes = r.get("remotes") if isinstance(r, dict) else None
+    url = ""
+    if isinstance(remotes, dict) and remotes:
+        url = str(remotes.get(r.get("push_remote") or "origin") or next(iter(remotes.values()), ""))
+    return url.split("github.com/")[-1].removesuffix(".git") if "github.com/" in url else ""
+
+
+# Config & Keys: a FIXED integration allowlist — env is NEVER enumerated (R1-5). Presence is a
+# BOOLEAN computed server-side; a value/last-4 is NEVER rendered or indexed (R2-8). WORKS is a
+# last-success signal from telemetry, not a live probe.
+KEYS_ALLOWLIST = [
+    {"name": "Flux Router (FLUX_TEST_KEY)", "kind": "env", "env": ["FLUX_TEST_KEY"],
+     "breaks": "council metering + wl-fuse", "works": "flux",
+     "add": "security add-generic-password -s FLUX_TEST_KEY -a ratchet -w"},
+    {"name": "Flux Router (FLUX_DEV_KEY)", "kind": "env", "env": ["FLUX_DEV_KEY"],
+     "breaks": "dev-lane routing", "works": "flux",
+     "add": "security add-generic-password -s FLUX_DEV_KEY -a ratchet -w"},
+    {"name": "Anthropic (council direct)", "kind": "env", "env": ["ANTHROPIC_API_KEY"],
+     "breaks": "direct-Anthropic council lane", "add": "export ANTHROPIC_API_KEY=<key>"},
+    {"name": "GitHub (gh keychain)", "kind": "gh", "env": ["GH_TOKEN", "GITHUB_TOKEN"],
+     "breaks": "land / push / PR", "works": "github", "add": "gh auth login"},
+    {"name": "codex CLI (judge roster)", "kind": "cli", "bin": "codex", "breaks": "judge roster"},
+    {"name": "gemini CLI (council)", "kind": "cli", "bin": "gemini", "breaks": "gemini council lane"},
+    {"name": "claude CLI (flat lanes)", "kind": "cli", "bin": "claude", "breaks": "flat sub-CLI lanes"},
+]
+
+
+def build_keys(ctx=None):
+    """Presence-only capability matrix. When the glass is network-exposed, refuse to render even
+    the NAME set (a would-be attacker learns nothing from the page). Never touches a value."""
+    if GLASS_EXPOSED:
+        return {"exposed": True, "keys": []}
+    import shutil
+    evs, _ = (ctx or _read_ctx())["tev"]
+    worked = set()
+    for e in evs:
+        ev = e.get("event")
+        if ev in ("land_gate_pass", "adopt", "land_pr_fail"):
+            worked.add("github")
+        if _classify(e) == "metered":
+            worked.add("flux")
+    rows = []
+    for k in KEYS_ALLOWLIST:
+        if k["kind"] == "cli":
+            present = shutil.which(k["bin"]) is not None  # PATH stat — pure, no value
+        else:
+            present = any(bool(os.environ.get(e)) for e in k.get("env", []))
+        sig = k.get("works")
+        if present and sig and sig in worked:
+            state, note = "works", "last successful use seen in telemetry"
+        elif k["kind"] == "gh" and not present:
+            state, note = "unknown", "managed by the gh keychain (not an env var) — verify below"
+        elif present:
+            state, note = "present", "present — not yet verified this session"
+        else:
+            state, note = "missing", "without it: " + k["breaks"]
+        rows.append({"name": k["name"], "state": state, "note": note,
+                     "add": k["add"] if (state == "missing" and k.get("add")) else
+                            ("gh auth status" if k["kind"] == "gh" and state == "unknown" else None)})
+    return {"exposed": False, "keys": rows}
+
+
+def build_config(ctx=None):
+    """Effective config + where each value came from (default/file). Policy values only — no
+    secrets live here; the SECRET_RE selftest scans the whole payload to keep it that way."""
+    cfg, src, digest = (ctx or _read_ctx())["cfg"]  # GLASS_RO: no witnessing write
+    rows = []
+    for k in sorted(cfg):
+        if k == "schema_version":
+            continue
+        rows.append({"key": k, "value": K.redact(json.dumps(cfg[k]))[:90], "source": str(src.get(k, "default")),
+                     "verb": ("ratchet config set %s <value>" % k) if not isinstance(cfg[k], (dict, list)) else None})
+    return {"rows": rows, "digest": (digest or "")[:12], "sourced": bool(digest)}
+
+
+def what_is_working(ctx=None):
+    """The machine's green systems — DERIVED and honest (never the mock's hardcoded '107/107').
+    Only rows we can actually stand up from persisted state; the rest are simply omitted."""
+    ctx = ctx or _read_ctx()
+    rows = []
+    cv, cv_age = ctx["chain"]
+    if isinstance(cv, dict) and "ok" in cv:
+        rows.append({"name": "telemetry chain", "ok": bool(cv["ok"]),
+                     "note": ("intact" if cv["ok"] else "BROKEN") + (" \u00b7 %s ago" % _age_str(cv_age) if cv_age is not None else "")})
+    dr = ctx["doctor"]
+    if isinstance(dr, dict) and dr.get("repos"):
+        sm = dr.get("summary", {}) if isinstance(dr.get("summary"), dict) else {}
+        def _n(key):  # a poisoned (non-int) summary count must degrade, never 500 the dashboard
+            v = sm.get(key, 0)
+            return v if isinstance(v, int) else 0
+        rows.append({"name": "topology (doctor)", "ok": not _n(K.RED),
+                     "note": "%d OK \u00b7 %d warn \u00b7 %d red" % (_n(K.OK), _n(K.WARN), _n(K.RED))})
+    try:
+        reps = sorted(f for f in os.listdir(os.path.join(K.WL_HOME, "reports")) if f.endswith(".md"))
+    except OSError:
+        reps = []
+    if reps:
+        rows.append({"name": "daily sweep", "ok": True, "note": "last report %s" % (reps[-1][:-3])})
+    prot = sum(1 for f in ctx["cache_ls"] if f.startswith("checknames-"))
+    if prot:
+        rows.append({"name": "branch protection", "ok": True, "note": "%d repo(s) with cached required-checks" % prot})
+    return rows
+
+
+_CALL_KEYS = ("model", "tokens", "usage", "prompt_tokens", "completion_tokens")
+
+
+def _tail_events(tail_bytes=524288):
+    """Parsed telemetry events from the last tail_bytes ONLY — the ledger is multi-MB and grows
+    daily; a page view never scans it from byte 0 (systems R2-4). Returns (events, scanned_all)."""
+    pth = K.state_path("telemetry.jsonl")
+    try:
+        size = os.path.getsize(pth)
+        with open(pth, "rb") as fh:
+            scanned_all = size <= tail_bytes
+            if not scanned_all:
+                fh.seek(size - tail_bytes)
+                fh.readline()  # drop the partial first line
+            raw = fh.read()
+    except OSError:
+        return [], True
+    evs = []
+    for ln in raw.splitlines():
+        try:
+            e = json.loads(ln)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(e, dict):  # a non-dict line (null/5/"x"/[..]) must not reach a later .get()
+            evs.append(e)
+    return evs, scanned_all
+
+
+def _cost_val(e):
+    """Mirror of ratchet-budget._cost_val — a finite, non-negative price or None (never $0 for a
+    missing/nan/negative value, so it can't silently escape the meter). Kept in sync deliberately;
+    the budget oracle owns the canonical version."""
+    import math
+    if not isinstance(e, dict):
+        return None
+    for src in (e, e.get("usage") if isinstance(e.get("usage"), dict) else {}):
+        if isinstance(src, dict) and "cost_usd" in src:
+            try:
+                v = float(src["cost_usd"])
+            except (TypeError, ValueError):
+                return None
+            return v if (math.isfinite(v) and v >= 0) else None
+    return None
+
+
+def _classify(e):
+    """Mirror of ratchet-budget.classify: metered | unpriced | flat. unpriced = a model call with
+    no resolvable price (the fail-closed surface); flat = a sub-CLI lane or bookkeeping event."""
+    if not isinstance(e, dict):
+        return "flat"
+    if _cost_val(e) is not None:
+        return "metered"
+    is_call = any(k in e for k in _CALL_KEYS) or e.get("cost_basis") == "oracle"
+    flat_cli = e.get("cli") in ("claude", "codex", "gemini")
+    return "unpriced" if (is_call and not flat_cli) else "flat"
+
+
+def build_budget(ctx=None):
+    """Metered spend TODAY is exact (the kernel's byte-offset cursor, read-only). The
+    metered/unpriced/flat breakdown + per-card split come from a BOUNDED ledger tail — honestly
+    scoped, never a full re-scan; the authoritative figure is `ratchet-budget report`."""
+    ctx = ctx or _read_ctx()
+    cfg, _src, _dig = ctx["cfg"]  # GLASS_RO: witnessing is skipped, so this stays read-only
+    b = cfg.get("budgets", {}) if isinstance(cfg.get("budgets"), dict) else {}
+    cap = float(b.get("per_day_usd", 5.0) or 0.0)
+    metered_today = ctx["spend"]
+    evs, scanned_all = ctx["tev"]
+    today = K.now_iso()[:10]
+    n_m = n_u = n_f = 0
+    by_card = {}
+    for e in evs:
+        ts = str(e.get("ts", ""))
+        if ts and not ts.startswith(today):
+            continue  # a dated event from another day is out; a NO-ts event stays (oracle parity)
+        kind = _classify(e)
+        if kind == "metered":
+            n_m += 1
+            wid = str(e.get("work_id") or e.get("card") or "\u2014")
+            by_card[wid] = by_card.get(wid, 0.0) + (_cost_val(e) or 0.0)
+        elif kind == "unpriced":
+            n_u += 1
+        else:
+            n_f += 1
+    cv, _age = ctx["chain"]
+    chain_ok = bool(cv.get("ok")) if isinstance(cv, dict) else None
+    cards = sorted(by_card.items(), key=lambda kv: -kv[1])[:12]
+    return {"metered_today": "%.4f" % metered_today, "cap": "%.2f" % cap,
+            "pct": min(100, round(metered_today / cap * 100)) if cap > 0 else 100,
+            "per_card": "%.2f" % float(b.get("per_card_reserve_usd", 0.5) or 0),
+            "per_lane": "%.2f" % float(b.get("per_lane_ceiling_usd", 2.0) or 0),
+            "premium": str(cfg.get("premium_policy", "never")),
+            "chain_ok": chain_ok,
+            "tail": {"n_metered": n_m, "n_unpriced": n_u, "n_flat": n_f, "scanned_all": scanned_all,
+                     "by_card": [{"card": c, "usd": "%.4f" % u} for c, u in cards]}}
+
+
+_HIST_EVENTS = {
+    "take": "ember", "take_bulk": "ember", "land_gate_pass": "ok", "land_suite_fail": "red",
+    "land_corpus_fail": "red", "land_fuse_claimed": "unk", "land_pr_fail": "red",
+    "land_no_card": "warn", "cut": "blue", "train": "blue", "promote": "blue", "rollback": "red",
+    "adopt": "unk", "approve": "ok", "reject": "red", "closeout": "blue", "state_migrated": "warn",
+}
+_HIST_DETAIL = ("name", "slug", "work_id", "repos", "repo", "branch", "snapshot", "ref", "green")
+
+
+def build_history(limit=30, ctx=None):
+    """The ledger stream (bounded tail, whitelisted events, newest first) + regression corpus.
+    Chain verdict + release trains ride the shared payload blocks the client already has."""
+    evs, scanned_all = (ctx or _read_ctx())["tev"]
+    rows = []
+    for e in evs:
+        ev = e.get("event")
+        if ev not in _HIST_EVENTS:
+            continue
+        bits = []
+        for k in _HIST_DETAIL:
+            v = e.get(k)
+            if v not in (None, "", []):
+                bits.append("%s %s" % (k, ",".join(str(x) for x in v) if isinstance(v, list) else v))
+        ts = str(e.get("ts", ""))
+        rows.append({"ts": ts[5:16].replace("T", " ") if len(ts) >= 16 else ts, "ev": str(ev),
+                     "pill": _HIST_EVENTS[ev], "msg": " \u00b7 ".join(bits) or str(ev)})
+    rows.reverse()
+    corpus = K.state_load(K.CORPUS, {"cards": []})
+    ccards = corpus.get("cards") if isinstance(corpus, dict) and isinstance(corpus.get("cards"), list) else []
+    return {"stream": rows[:limit], "scanned_all": scanned_all,
+            "corpus_n": len(ccards),
+            "corpus": [{"id": str(c.get("id") or ""), "repo": str(c.get("repo") or ""),
+                        "title": str(c.get("title") or "")} for c in ccards[:12] if isinstance(c, dict)]}
+
+
+def build_github(ctx=None):
+    """GitHub boards from the maintain snapshots (state/.cache/triage-<repo>.json) + the .prev
+    rotation for deltas. NEVER a live gh call on a page view (slow + rate-limited = disqualified)."""
+    ctx = ctx or _read_ctx()
+    names = sorted({f[len("triage-"):-len(".json")] for f in ctx["cache_ls"]
+                    if f.startswith("triage-") and f.endswith(".json") and ".prev." not in f})
+    man = ctx["manifest"]
+    out = []
+    for name in names:
+        snap, age = K.cache_get_stale("triage-" + name)
+        if not isinstance(snap, dict):
+            continue
+        prev, _ = K.cache_get_stale("triage-" + name + ".prev")
+        prev = prev if isinstance(prev, dict) else {}
+
+        def board(key, cols):
+            b = snap.get(key) if isinstance(snap.get(key), dict) else {}
+            pb = prev.get(key) if isinstance(prev.get(key), dict) else {}
+            counts = b.get("counts") if isinstance(b.get("counts"), dict) else {}
+            top = b.get("top") if isinstance(b.get("top"), dict) else {}
+            rows = []
+            for col in cols:
+                for it in (top.get(col) or []):
+                    if isinstance(it, dict):
+                        rows.append({"col": col, "number": it.get("number"),
+                                     "title": str(it.get("title") or ""), "age_days": it.get("age_days")})
+            total, ptotal = b.get("total"), pb.get("total")
+            delta = (total - ptotal) if isinstance(total, int) and isinstance(ptotal, int) else None
+            return {"total": total, "counts": {c: counts.get(c, 0) for c in cols},
+                    "delta": delta, "top": rows[:8]}
+
+        out.append({"repo": name, "gh": _slug_from_remote(man.get(name, {})),
+                    "age": _age_str(age) if age is not None else None,
+                    "issues": board("issues", ISSUE_COLS), "prs": board("prs", PR_COLS)})
+    return out
+
+
+def build_repos(ctx=None):
+    """Repos topology from the manifest + doctor-report.json (persisted health, never live git)
+    + checknames cache (required checks, never a gh call) + governance file presence (local stat)."""
+    ctx = ctx or _read_ctx()
+    man = ctx["manifest"]
+    dr = ctx["doctor"]
+    dr_repos = dr.get("repos", {}) if isinstance(dr, dict) else {}
+    dr_ts = dr.get("ts") if isinstance(dr, dict) else None
+    WORST = {"RED": 0, "UNKNOWN": 1, "WARN": 2, "SKIP": 3, "OK": 4}
+    rows = []
+    for name, r in man.items():
+        if not isinstance(r, dict):
+            continue
+        craw = dr_repos.get(name) if isinstance(dr_repos.get(name), dict) else {}
+        checks = [{"name": k, "status": str(v.get("status") or "UNKNOWN"), "msg": str(v.get("msg") or "")}
+                  for k, v in craw.items() if isinstance(v, dict)]
+        health = min((c["status"] for c in checks), key=lambda x: WORST.get(x, -1)) if checks else "unrun"
+        slug = _slug_from_remote(r)
+        prot = []
+        if slug:
+            pc, _ = K.cache_get_stale("checknames-" + slug.replace("/", "_"))
+            if isinstance(pc, list):
+                prot = [str(x) for x in pc][:40]
+        path = K.expand(str(r.get("path") or "")) if r.get("path") else ""
+        gov_missing, gov_known = [], bool(path) and os.path.isdir(path)
+        if gov_known:  # only stat a tree that is actually checked out — a missing tree is
+            for f, alts in GOV_ALTS.items():  # "unknown", not "all four missing" (review MINOR)
+                if not any(os.path.exists(os.path.join(path, a)) for a in alts):
+                    gov_missing.append(f)
+        rows.append({"name": name, "gh": slug, "branch": str(r.get("mainline") or ""),
+                     "remote": str((r.get("remotes") or {}).get(r.get("push_remote") or "origin", "")),
+                     "health": health, "checks": checks, "protect": prot,
+                     "gov_missing": gov_missing, "gov_total": len(GOV_ALTS), "gov_known": gov_known})
+    return {"repos": rows, "doctor_age": _age_str(_ts_age_s(dr_ts)) if dr_ts else None,
+            "doctor_run": bool(dr_repos)}
+
+
+_NEEDS_SEV = {"interrupted": "red", "ready-to-land": "ember", "stale-card": "warn",
+              "green-uncut": "warn", "promote-decision": "ember", "closeout-due": "warn"}
+
+# attention-first ordering for the fleet board (intelligence lens: what NEEDS you, first). SILENT
+# and an open NEEDS-OVERWATCH ask are handled by explicit branches in the sort key below (rank 0/1);
+# a 'blocked' team is BY DEFINITION an open ask (its liveness requires open_ask), so it also takes
+# the open-ask branch. This map therefore only ranks the remaining, non-attention states.
+_OW_LIVE_RANK = {"unknown": 4, "idle-empty": 5, "ok": 6}
+_OW_STALE_AFTER = 900  # mirror the kernel sweep default; a heartbeat older than this is SILENT
+
+
+def build_overwatch():
+    """The Overwatch fleet board — per-team liveness bound to the SAME read-only contract the
+    kernel's `overwatch sweep` computes. §9: we CALL the kernel's own read-only classifiers
+    (K._ow_liveness / _ow_teams / _ow_load_flag / _ow_sha) in-process — no writes (the only
+    subprocess any of them can reach is the kernel's read-only `ps` pid-liveness check, and only
+    when an awaiting.pid is a live process), single source of truth (zero drift). Honest by
+    construction: a team that never emitted a
+    heartbeat is 'unknown', never faked 'live'; one poisoned .waker degrades its row, never 500s
+    the board. Reads <home>/overwatch/<team>/{BRIEF.md,STATUS.md,.waker/*} only."""
+    teams = []
+    try:
+        names = K._ow_teams()
+    except (OSError, AttributeError):
+        names = []
+    for team in names:
+        try:
+            flag = K._ow_load_flag(team)
+            cur = K._ow_sha(os.path.join(K._ow_team_dir(team), "BRIEF.md"))
+            if not flag:
+                fstate, ask, created = "clear", None, None
+            elif flag.get("brief_sha") == cur:
+                fstate, ask, created = "open", flag.get("question"), flag.get("created")
+            else:
+                fstate, ask, created = "answered", flag.get("question"), flag.get("created")
+            latest = ""
+            try:
+                for ln in open(os.path.join(K._ow_team_dir(team), "STATUS.md")).read().splitlines():
+                    if ln.startswith("## "):
+                        latest = ln[3:].strip()  # STATUS is newest-at-top: first '## ' is the latest
+                        break
+            except OSError:
+                pass
+            live = K._ow_liveness(team, _OW_STALE_AFTER)
+            age = live.get("age")
+            teams.append({
+                "team": str(team), "flag_state": fstate,
+                "ask": (str(ask)[:280] if ask else None),
+                "ask_age": _age_str(_ts_age_s(created)) if created else None,
+                "latest": str(latest)[:200],
+                "liveness": str(live.get("liveness") or "unknown"),
+                "why": str(live.get("why") or ""),
+                "beat_age": (_age_str(int(age)) if isinstance(age, (int, float)) else None)})
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            # a single team's hostile/unreadable .waker must never take down the board
+            teams.append({"team": str(team), "flag_state": "clear", "ask": None, "ask_age": None,
+                          "latest": "", "liveness": "unknown", "why": "team state unreadable",
+                          "beat_age": None})
+    teams.sort(key=lambda t: (0 if t["liveness"] == "SILENT" else 1 if t["flag_state"] == "open"
+                              else _OW_LIVE_RANK.get(t["liveness"], 7), t["team"]))
+    summary = {
+        "total": len(teams),
+        "live": sum(1 for t in teams if t["liveness"] == "ok"),
+        "silent": sum(1 for t in teams if t["liveness"] == "SILENT"),
+        "needs": sum(1 for t in teams if t["flag_state"] == "open"),
+        "blocked": sum(1 for t in teams if t["liveness"] == "blocked")}
+    return {"teams": teams, "summary": summary, "stale_after": _OW_STALE_AFTER}
+
+
+def _read_ctx():
+    """Read each SHARED source exactly ONCE per page view so the sub-builders don't each re-open
+    the multi-MB telemetry ledger / re-load config / re-stat the cache dir (perf card
+    glass-perf-readonce). Output-identical by construction: every value here is the SAME one each
+    consumer would have read for itself — computed once and injected. build_data is the only
+    production caller and always passes ctx; a builder invoked standalone (ctx=None) falls back to
+    this full read (over-reads sources it may not use, but yields identical output on valid state —
+    keeps each builder self-contained for tests/reuse). Before this,
+    per page view: _tail_events 3×, config_load 3×, spend_today_ro 2×, chain-verdict 3×,
+    _manifest_ro 2×, doctor-report 3×, listdir(CACHE_DIR) 3×. The telemetry tail is shared at the
+    DEFAULT bound (every consumer called _tail_events() with no arg), so one scan serves all."""
+    try:
+        cache_ls = sorted(os.listdir(K.CACHE_DIR))
+    except OSError:
+        cache_ls = []
+    return {
+        "cfg": K.config_load(),                       # (cfg, src, digest)
+        "tev": _tail_events(),                        # (events, scanned_all) — default 512K tail
+        "spend": spend_today_ro(),
+        "chain": K.cache_get_stale("chain-verdict"),  # (val, age)
+        "manifest": _manifest_ro(),
+        "doctor": K.state_load("doctor-report.json", {}),
+        "cache_ls": cache_ls,
+    }
+
+
+def build_data():
+    """Assemble the page payload from kernel state files. Read-only by construction: every
+    source is a state_load (GLASS_RO raises on corrupt — the handler renders a 500), a stale
+    cache read, or a tail scan. Nothing here writes, fetches, or exits."""
+    ctx = _read_ctx()  # every shared source read ONCE here; injected into the sub-builders below
+    # bridge: ground (doctor's last persisted run), chain (last recorded verdict), landing, spend
+    dr = ctx["doctor"]
+    if dr.get("repos"):
+        s = dr.get("summary", {})
+        age = _ts_age_s(dr.get("ts"))
+        if s.get(K.RED):
+            ground = {"state": "red", "label": "ground RED", "detail": "%d red check(s)" % s[K.RED]}
+        elif s.get(K.WARN) or s.get(K.UNKNOWN):
+            ground = {"state": "warn", "label": "ground amber",
+                      "detail": "%d warn · %d unknown" % (s.get(K.WARN, 0), s.get(K.UNKNOWN, 0))}
+        else:
+            ground = {"state": "ok", "label": "ground green", "detail": "all checks OK"}
+        if age is not None and age > STALE_S and ground["state"] == "ok":
+            ground = {"state": "warn", "label": "ground green (stale)",
+                      "detail": "last doctor run %s ago" % _age_str(age)}
+        ground["age"] = _age_str(age)
+    else:
+        ground = {"state": "unknown", "label": "ground unknown", "detail": "doctor has never run",
+                  "age": "", "verb": "ratchet doctor"}
+    cv, cv_age = ctx["chain"]
+    if isinstance(cv, dict) and "ok" in cv:
+        if not cv["ok"]:
+            chain = {"state": "red", "label": "chain " + str(cv.get("verdict", "BROKEN"))}
+        elif cv_age is not None and cv_age > STALE_S:
+            chain = {"state": "warn", "label": "chain ok (stale)"}
+        else:
+            chain = {"state": "ok", "label": "chain intact"}
+        chain["detail"] = str(cv.get("detail", ""))[:120]
+        chain["age"] = _age_str(cv_age)
+    else:
+        chain = {"state": "unknown", "label": "chain unverified", "detail": "no recorded verdict",
+                 "age": "", "verb": "ratchet chain"}
+    lanes = K._lanes(None)  # kernel derivation reads cards+recordings only; no manifest needed
+    landing = sum(1 for l in lanes if l["status"] == "landing")
+    cfg, _src, _digest = ctx["cfg"]
+    cap = float(cfg.get("budgets", {}).get("per_day_usd", 5.0))
+    spend = ctx["spend"]
+
+    needs = []
+    for i in K._needs_you(None):
+        needs.append({"kind": i["kind"], "sev": _NEEDS_SEV.get(i["kind"], "unk"),
+                      "msg": i["msg"], "verb": i["verb"], "age": _age_str(_ts_age_s(i["ts"]))})
+
+    issues_total, issues_bits, snap_age = None, [], None
+    snaps = sorted(f for f in ctx["cache_ls"]
+                   if f.startswith("triage-") and f.endswith(".json") and ".prev." not in f)
+    for f in snaps:
+        snap, s_age = K.cache_get_stale(f[:-len(".json")])
+        if not isinstance(snap, dict):
+            continue
+        total = snap.get("issues", {}).get("total")
+        if isinstance(total, int):
+            issues_total = (issues_total or 0) + total
+            issues_bits.append("%s %d" % (f[len("triage-"):-len(".json")], total))
+            snap_age = s_age if snap_age is None else max(snap_age, s_age)
+
+    cardsblock = build_cards()
+    return {
+        "asof": time.strftime("%H:%M:%S"),
+        "board": cardsblock["board"], "cards": cardsblock["cards"],
+        "trains": cardsblock["trains"], "abandoned": cardsblock["abandoned"],
+        "agents": cardsblock["agents"], "today": cardsblock["today"],
+        "github": build_github(ctx), "repos_est": build_repos(ctx),
+        "budget": build_budget(ctx), "history": build_history(ctx=ctx),
+        "config": build_config(ctx), "keys": build_keys(ctx), "working": what_is_working(ctx),
+        "overwatch": build_overwatch(),
+        "ground": ground, "chain": chain, "landing": landing,
+        "spend": {"day": "%.4f" % spend, "cap": "%.2f" % cap},
+        "lanes": {"open": sum(1 for l in lanes if l["status"] in ("open", "pending")),
+                  "landing": landing},
+        "needs": needs,
+        "feed": feed_tail(),
+        "issues": {"total": issues_total, "sub": " · ".join(issues_bits) or "no snapshot yet",
+                   "age": _age_str(snap_age) if snap_age is not None else None},
+    }
+
+
+# ---------- the shell (design carried from the approved v3.2 mock) ----------
+
+GLASS_CSS = """
+:root{--void:#0a0c0e;--steel:#12161b;--steel2:#171c22;--seam:#232c35;--seam2:#2d3843;
+--bone:#e9edf1;--dim:#7f8d99;--faint:#7a8792;--ember:#ff7a29;--ember-dim:rgba(255,122,41,.14);
+--ok:#38d387;--ok-bg:rgba(56,211,135,.11);--warn:#f0b83e;--warn-bg:rgba(240,184,62,.12);
+--red:#ff5d5d;--red-bg:rgba(255,93,93,.13);--blue:#8fb8ff;--blue-bg:rgba(143,184,255,.12);
+--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box;margin:0}
+html{background:var(--void)}
+body{font-family:var(--sans);color:var(--bone);min-height:100vh;background:
+radial-gradient(1100px 500px at 85% -10%, rgba(255,122,41,.05), transparent 60%),
+repeating-linear-gradient(0deg, transparent 0 39px, rgba(255,255,255,.013) 39px 40px),
+repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,.013) 39px 40px),
+var(--void)}
+a{color:var(--ember);text-decoration:none} a:hover{text-decoration:underline}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+/* keyboard focus must be visible on the near-black theme (a11y: was UA-default/invisible) */
+:focus-visible{outline:2px solid var(--ember);outline-offset:2px;border-radius:3px}
+.skip{position:fixed;top:-60px;left:.6rem;z-index:60;background:var(--steel);border:1px solid var(--ember);
+color:var(--ember);padding:.4rem .8rem;border-radius:8px;font-size:.8rem;transition:top .12s}
+.skip:focus{top:.5rem;text-decoration:none}
+.bridge{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;align-items:center;gap:1.1rem;
+padding:.6rem 1.4rem;background:rgba(10,12,14,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--seam)}
+.mark{display:flex;align-items:center;gap:.55rem;font-weight:800;letter-spacing:.2em;font-size:.88rem;white-space:nowrap}
+.mark .g{color:var(--faint);font-weight:500}
+.bstat{display:flex;align-items:center;gap:.4rem;font-family:var(--mono);font-size:.7rem;color:var(--dim);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.amber{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.dot.red{background:var(--red);box-shadow:0 0 8px var(--red)}
+.dot.unk{background:var(--faint);box-shadow:none}
+.dot.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+/* liveness motion (card glass-liveness-motion): every animation CONVEYS state, never decoration —
+   .beat = alive (soft breathing halo); .alarm = needs-you (urgent red pulse); a running gate
+   station shimmers ("working now"); .hbeat = the room is live. ALL disabled under reduced-motion. */
+.ava.beat{animation:breathe 2.4s ease-in-out infinite}
+.ava.alarm{animation:alarm 1.1s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(56,211,135,0)}50%{box-shadow:0 0 0 4px rgba(56,211,135,.14)}}
+@keyframes alarm{0%,100%{box-shadow:0 0 0 0 rgba(255,93,93,0)}50%{box-shadow:0 0 0 5px rgba(255,93,93,.22)}}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:0 0}}
+.hbeat{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok);margin-right:.4rem;vertical-align:middle;animation:hb 2s ease-in-out infinite}
+@keyframes hb{0%,100%{opacity:.35;transform:scale(.82)}50%{opacity:1;transform:scale(1.15)}}
+.panel{animation:rise .26s ease-out}
+@keyframes rise{0%{opacity:0;transform:translateY(6px)}100%{opacity:1;transform:none}}
+.spacer{flex:1}
+.clock{font-family:var(--mono);font-size:.74rem;color:var(--dim);font-variant-numeric:tabular-nums}
+.side{position:fixed;top:49px;bottom:0;left:0;width:196px;padding:.9rem .7rem;border-right:1px solid var(--seam);
+background:rgba(13,16,19,.6);display:flex;flex-direction:column;gap:.15rem;z-index:15}
+.nav{display:flex;align-items:center;gap:.65rem;padding:.5rem .7rem;border-radius:8px;font-size:.85rem;color:var(--dim);width:100%;text-align:left}
+.nav svg{flex:none;opacity:.8}
+.nav:hover{background:var(--steel2);color:var(--bone);text-decoration:none}
+.nav.on{background:var(--ember-dim);color:var(--ember);font-weight:600}
+.side .foot{margin-top:auto;font-size:.62rem;color:var(--faint);padding:.6rem .5rem;line-height:1.5}
+.main{margin:49px 0 0 196px;padding:1.4rem 1.8rem 3rem;min-height:calc(100vh - 49px)}
+.crumb{font-family:var(--mono);font-size:.72rem;color:var(--faint);margin-bottom:.9rem}
+.crumb a{color:var(--dim)}
+.pagehead{display:flex;align-items:baseline;gap:1rem;margin-bottom:1.1rem;flex-wrap:wrap}
+.pagehead h1{font-size:1.15rem;letter-spacing:.02em}
+.pagehead .sub{color:var(--dim);font-size:.8rem}
+.asof{margin-left:auto;font-family:var(--mono);font-size:.66rem;color:var(--faint)}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:1rem}
+.panel{background:var(--steel);border:1px solid var(--seam);border-radius:12px;padding:1rem 1.15rem;overflow-x:auto;grid-column:span 12}
+.panel h2{font-size:.68rem;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);font-weight:700;margin-bottom:.7rem;display:flex;align-items:center;gap:.6rem}
+.panel h2 .hint{margin-left:auto;font-weight:400;letter-spacing:.02em;text-transform:none;color:var(--faint);font-size:.7rem}
+.c6{grid-column:span 6}.c4{grid-column:span 4}.c8{grid-column:span 8}.c3{grid-column:span 3}
+@media(max-width:1150px){.c6,.c4,.c8,.c3{grid-column:span 12}.side{width:60px}.nav span{display:none}.main{margin-left:60px}.side .foot{display:none}}
+table{border-collapse:collapse;width:100%}
+td,th{padding:.4rem .6rem;border-bottom:1px solid var(--seam);text-align:left;font-family:var(--mono);font-size:.78rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+th{color:var(--faint);font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+tr:last-child td{border-bottom:0}
+td.dim{color:var(--dim)} td.wrap{white-space:normal}
+tr.rowlink{cursor:pointer} tr.rowlink:hover td{background:rgba(255,255,255,.02)}
+.pill{display:inline-block;padding:.08rem .55rem;border-radius:999px;font-size:.66rem;font-weight:700;font-family:var(--sans);letter-spacing:.03em;white-space:nowrap}
+.pill.ok{color:var(--ok);background:var(--ok-bg)} .pill.warn{color:var(--warn);background:var(--warn-bg)}
+.pill.red{color:var(--red);background:var(--red-bg)} .pill.unk{color:var(--dim);background:rgba(127,141,153,.12)}
+.pill.ember{color:var(--ember);background:var(--ember-dim)} .pill.blue{color:var(--blue);background:var(--blue-bg)}
+.verb{display:inline-flex;align-items:center;gap:.45rem;font-family:var(--mono);font-size:.7rem;color:var(--ember);
+background:var(--ember-dim);border:1px solid rgba(255,122,41,.25);border-radius:7px;padding:.24rem .55rem;cursor:pointer;transition:border-color .15s}
+.verb:hover{border-color:var(--ember)}
+.verb::after{content:"\\2909";color:rgba(255,122,41,.5);font-size:.75rem}
+.verb.copied::after{content:"\\2713";color:var(--ok)}
+.verb.danger{color:var(--red);background:var(--red-bg);border-color:rgba(255,93,93,.3)}
+.verb.danger::after{color:rgba(255,93,93,.5)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:1rem}
+.tile{background:linear-gradient(180deg,var(--steel2),var(--steel));border:1px solid var(--seam);border-radius:12px;
+padding:.9rem 1.1rem;position:relative;overflow:hidden;text-align:left;width:100%;display:block}
+.tile::after{content:"";position:absolute;inset:0 0 auto 0;height:2px;background:var(--tint,var(--seam2))}
+.tile:hover{border-color:var(--seam2);text-decoration:none}
+.tile .lbl{font-size:.64rem;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.tile .n{font-family:var(--mono);font-size:2rem;font-weight:700;color:var(--bone);font-variant-numeric:tabular-nums}
+.tile .sub{font-size:.72rem;color:var(--dim);font-family:var(--mono)}
+.tile.ok{--tint:var(--ok)} .tile.warn{--tint:var(--warn)} .tile.ember{--tint:var(--ember)} .tile.red{--tint:var(--red)}
+.rail{position:relative;height:14px;margin:.1rem 0 1rem;border-radius:3px;overflow:hidden;border:1px solid var(--seam);
+background:repeating-linear-gradient(90deg,var(--seam2) 0 3px,transparent 3px 26px),linear-gradient(180deg,#1b222a,#12161b)}
+.rail .pawl{position:absolute;top:1px;left:0;width:34px;height:10px;border-radius:2px;background:linear-gradient(90deg,transparent,var(--ember));opacity:.85;animation:tick 6s linear infinite}
+@keyframes tick{0%{left:-5%}100%{left:102%}}
+@media(prefers-reduced-motion:reduce){.rail .pawl{animation:none;left:40%}}
+.kan{display:grid;grid-template-columns:repeat(5,1fr);gap:.8rem;min-width:900px}
+.kol .khead{display:flex;align-items:baseline;gap:.5rem;padding-bottom:.5rem;border-bottom:2px solid var(--kc,var(--seam2));margin-bottom:.6rem}
+.kol .khead .kname{font-size:.64rem;letter-spacing:.13em;text-transform:uppercase;font-weight:800;color:var(--kc,var(--dim))}
+.kol .khead .kn{font-family:var(--mono);font-size:.7rem;color:var(--faint)}
+.kol.open{--kc:var(--ember)} .kol.landing{--kc:var(--warn)} .kol.landed{--kc:var(--ok)} .kol.cut{--kc:var(--blue)}
+.card{display:block;width:100%;text-align:left;background:var(--steel2);border:1px solid var(--seam);border-left:3px solid var(--kc,var(--seam2));
+border-radius:8px;padding:.5rem .65rem;margin-bottom:.55rem;font-family:var(--mono);font-size:.74rem}
+.card:hover{border-color:var(--kc,var(--seam2));text-decoration:none}
+.card .cslug{font-weight:700;color:var(--bone)}
+.card .ctitle{color:var(--dim);font-size:.68rem;margin:.15rem 0;font-family:var(--sans);white-space:normal}
+.card .cmeta{color:var(--faint);font-size:.66rem;display:flex;gap:.55rem;flex-wrap:wrap}
+.card.ghost{opacity:.5;border-style:dashed;text-align:center;color:var(--faint);font-family:var(--sans);cursor:default}
+.kmore{text-align:center;font-size:.7rem;color:var(--faint);font-family:var(--mono)}
+.steps{display:flex;gap:0;margin:.6rem 0 .9rem;min-width:560px}
+.step{flex:1;position:relative;padding:.55rem .8rem .55rem 1.4rem;background:var(--steel2);border:1px solid var(--seam);font-family:var(--mono);font-size:.72rem;color:var(--dim)}
+.step:first-child{border-radius:8px 0 0 8px;padding-left:.9rem}.step:last-child{border-radius:0 8px 8px 0}
+.step::after{content:"";position:absolute;right:-9px;top:50%;transform:translateY(-50%) rotate(45deg);width:16px;height:16px;background:inherit;border-right:1px solid var(--seam);border-top:1px solid var(--seam);z-index:1}
+.step:last-child::after{display:none}
+.step b{display:block;color:var(--bone);font-size:.74rem}
+.step.done{background:rgba(56,211,135,.08)} .step.done b{color:var(--ok)}
+.step.running{background:linear-gradient(90deg,rgba(240,184,62,.10),rgba(240,184,62,.24),rgba(240,184,62,.10));background-size:200% 100%;animation:shimmer 1.6s linear infinite} .step.running b{color:var(--warn)}
+.step.skipped b{color:var(--dim);font-style:italic}
+.step.failed{background:var(--red-bg)} .step.failed b{color:var(--red)}
+.step.stalled{background:rgba(255,93,93,.07)} .step.stalled b{color:var(--warn)}
+.timeline{border-left:2px solid var(--seam2);margin:.4rem 0 .4rem .4rem;padding-left:1rem}
+.tl{position:relative;padding:.3rem 0 .55rem;font-family:var(--mono);font-size:.74rem}
+.tl::before{content:"";position:absolute;left:-1.32rem;top:.62rem;width:8px;height:8px;border-radius:50%;background:var(--seam2)}
+.tl.hot::before{background:var(--ember);box-shadow:0 0 6px var(--ember)}
+.tl .ts{color:var(--faint);font-size:.66rem}
+.tl .ev{color:var(--bone);font-weight:600} .tl .det{color:var(--dim)}
+.agent{display:flex;align-items:center;gap:.7rem;padding:.5rem 0;border-bottom:1px solid var(--seam)}
+.agent:last-child{border-bottom:0}
+.ava{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-family:var(--mono);font-size:.6rem;font-weight:800;background:var(--ember-dim);color:var(--ember);border:1px solid rgba(255,122,41,.3)}
+.ava.ok{background:var(--ok-bg);color:var(--ok);border-color:rgba(56,211,135,.3)}
+.ava.warn{background:var(--warn-bg);color:var(--warn);border-color:rgba(240,184,62,.3)}
+.ava.red{background:var(--red-bg);color:var(--red);border-color:rgba(255,93,93,.3)}
+.ava.dim{background:rgba(127,141,153,.12);color:var(--dim);border-color:var(--seam2)}
+.agent .who{flex:1;min-width:0}
+.agent .who b{font-size:.8rem;display:block}
+.agent .who span{font-size:.7rem;color:var(--dim);font-family:var(--mono)}
+.lane{padding:.6rem 0;border-bottom:1px solid var(--seam)}
+.lane:last-child{border-bottom:0}
+.lane .agent{padding:0;border-bottom:0}
+.lanebody{display:flex;align-items:center;gap:.7rem .95rem;flex-wrap:wrap;margin-top:.25rem;padding-left:2.7rem}
+.lanebody .facts{font-family:var(--mono);font-size:.68rem;color:var(--faint)}
+.lanebody .working{font-family:var(--mono);font-size:.68rem;color:var(--warn)}
+.lanebody .working.pre{color:var(--dim)}
+.steps.mini{min-width:0;max-width:440px;margin:0}
+.steps.mini .step{padding:.28rem .5rem .28rem .92rem;font-size:0;line-height:1}
+.steps.mini .step:first-child{padding-left:.55rem;border-radius:6px 0 0 6px}
+.steps.mini .step:last-child{border-radius:0 6px 6px 0}
+.steps.mini .step b{font-size:.62rem;display:inline}
+.steps.mini .step::after{width:11px;height:11px;right:-6px}
+.owsum{display:flex;gap:.6rem;flex-wrap:wrap;margin:.2rem 0 1rem}
+.owstat{flex:1;min-width:92px;border:1px solid var(--seam);border-radius:10px;padding:.6rem .8rem;background:var(--steel2)}
+.owstat .n{font-size:1.45rem;font-weight:800;font-family:var(--mono);line-height:1;color:var(--bone);font-variant-numeric:tabular-nums}
+.owstat .l{font-size:.64rem;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;margin-top:.25rem}
+.owstat.ok .n{color:var(--ok)}.owstat.warn .n{color:var(--warn)}.owstat.red .n{color:var(--red)}.owstat.unk .n{color:var(--dim)}
+.owask{margin:.45rem 0 .2rem 2.7rem;padding:.55rem .8rem;border-left:3px solid var(--warn);background:var(--warn-bg);border-radius:0 8px 8px 0}
+.owask b{display:block;font-size:.74rem;color:var(--warn)}
+.owask p{font-size:.76rem;color:var(--bone);margin:.3rem 0 .5rem;font-family:var(--sans);white-space:pre-wrap;word-break:break-word}
+.meter{height:12px;border-radius:999px;background:var(--steel2);border:1px solid var(--seam);overflow:hidden;margin:.5rem 0 .3rem}
+.meter i{display:block;height:100%;background:linear-gradient(90deg,var(--ok),var(--ember))}
+.meter.over i{background:linear-gradient(90deg,var(--warn),var(--red))}
+.bignum{font-family:var(--mono);font-size:1.9rem;font-weight:700;font-variant-numeric:tabular-nums}
+.bignum small{font-size:.78rem;color:var(--dim);font-weight:400}
+.banner{border:1px solid var(--red);background:var(--red-bg);color:var(--red);border-radius:8px;padding:.5rem .8rem;font-size:.78rem;margin-bottom:.8rem}
+pre.tail{font-family:var(--mono);font-size:.7rem;white-space:pre-wrap;background:var(--void);border:1px solid var(--seam);border-radius:8px;padding:.7rem .8rem;color:var(--dim);max-height:260px;overflow:auto}
+.empty{color:var(--dim);font-size:.82rem;padding:.5rem 0}
+.prov{font-size:.64rem;color:var(--faint);font-family:var(--mono);margin-top:.6rem}
+@media(prefers-reduced-motion:reduce){.dot.pulse,.ava.beat,.ava.alarm,.step.running,.hbeat,.panel{animation:none}}
+.kbtn{font-family:var(--mono);font-size:.68rem;color:var(--dim);border:1px solid var(--seam2);border-radius:6px;padding:.2rem .55rem;white-space:nowrap}
+.kbtn:hover{border-color:var(--ember);color:var(--ember)}
+.pal{position:fixed;inset:0;background:rgba(5,6,8,.7);z-index:50;display:none;align-items:flex-start;justify-content:center;padding-top:14vh}
+.pal.open{display:flex}
+.palbox{width:min(560px,90vw);background:var(--steel);border:1px solid var(--seam2);border-radius:12px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.6)}
+.palbox input{width:100%;background:var(--steel2);border:0;border-bottom:1px solid var(--seam);color:var(--bone);font:inherit;font-family:var(--mono);font-size:.9rem;padding:.8rem 1rem;outline:none}
+.palbox input:focus{border-bottom-color:var(--ember)}
+.palbox .ri[aria-selected="true"]{background:var(--ember-dim)}
+tr.rowlink:focus-visible td{background:var(--ember-dim)}
+.palbox .res{max-height:300px;overflow-y:auto}
+.palbox .ri{display:flex;gap:.7rem;align-items:center;padding:.55rem 1rem;font-size:.8rem;width:100%;text-align:left}
+.palbox .ri:hover,.palbox .ri.sel{background:var(--ember-dim)}
+.palbox .ri .k{color:var(--faint);font-family:var(--mono);font-size:.66rem;margin-left:auto}
+footer{margin-top:2rem;text-align:center;color:var(--faint);font-size:.7rem}
+"""
+
+# Client renderers: everything that touches DATA goes through E() before innerHTML — DATA is
+# state agents wrote (card slugs, telemetry fields) and is treated as hostile at render time,
+# on top of the server-side \\u003c JSON armoring.
+GLASS_JS = """
+const E=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const pill=(k,t)=>`<span class="pill ${E(k)}">${E(t)}</span>`;
+const verb=(v,d)=>v?`<button class="verb${d?' danger':''}" data-v="${E(v)}">${E(v)}</button>`:"";
+const shq=s=>/^[A-Za-z0-9._\\/~-]+$/.test(s)?s:"'"+String(s).replace(/'/g,"'\\''")+"'";
+const asof=()=>`<span class="asof"><span class="hbeat" aria-hidden="true"></span>as of ${E(DATA.asof)} \\u00b7 sources: local state files (reload to recompute)</span>`;
+const NAV=[["overview","Overview","M3 12l9-9 9 9M5 10v10h14V10"],["board","Board","M3 4h18M3 12h18M3 20h18"],
+ ["agents","Agents","M12 12a4 4 0 100-8 4 4 0 000 8zM4 20c0-4 4-6 8-6s8 2 8 6"],["overwatch","Overwatch","M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7zM12 9a3 3 0 100 6 3 3 0 000-6"],["github","GitHub","M12 2a10 10 0 00-3 19.5c.5.1.7-.2.7-.5v-2c-3 .7-3.5-1.3-3.5-1.3"],
+ ["repos","Repos","M4 4h16v6H4zM4 14h16v6H4z"],["budget","Budget","M12 2v20M17 6H9.5a2.5 2.5 0 000 5h5a2.5 2.5 0 010 5H6"],
+ ["history","History","M12 8v4l3 3M21 12a9 9 0 11-9-9"],["config","Config &amp; Keys","M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 01-.1 1.2l2 1.6-2 3.4-2.4-1a7 7 0 01-2 1.2L14 21h-4l-.4-2.6a7 7 0 01-2-1.2l-2.5 1-2-3.4 2-1.6A7 7 0 015 12"]];
+function sidebar(cur){
+ document.getElementById('side').innerHTML = NAV.map(([id,label,path])=>
+  `<a class="nav${cur===id?' on':''}" href="#/${id}" aria-label="${E(String(label).replace("&amp;","and"))}"${cur===id?' aria-current="page"':''}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="${path}"/></svg><span>${label}</span></a>`).join("")
+  +`<div class="foot">\\u00a79 \\u2014 renders state, never mutates it.<br>Every action is a verb.<br><br>glass v4 \\u00b7 stage 1</div>`;
+}
+function head(t,sub,crumb){return `${crumb?`<div class="crumb">${crumb}</div>`:""}<div class="pagehead"><h1>${t}</h1><span class="sub">${sub||""}</span>${asof()}</div>`}
+function unbuilt(title,sub,card,verbs,q){return head(E(title),E(sub))+
+ `<div class="panel"><h2>not built yet ${pill("unk","ships with card "+card)}</h2>
+ <p class="empty">${E(q)} \\u2014 until this page ships, the terminal answers it:</p>
+ <div style="display:flex;flex-direction:column;gap:.5rem;align-items:flex-start;margin-top:.4rem">${verbs.map(v=>verb(v)).join("")}</div></div>`}
+const PAGES={
+ overview(){const D=DATA;
+  const needRows=D.needs.length?D.needs.map(n=>`<div style="display:flex;align-items:center;gap:.8rem;padding:.5rem 0;border-bottom:1px solid var(--seam);flex-wrap:wrap">
+    ${pill(n.sev,n.kind)}<div style="flex:1;min-width:200px;font-size:.82rem">${E(n.msg)}
+    <small style="display:block;color:var(--faint);font-family:var(--mono);font-size:.66rem">${E(n.age||"")}</small></div>${verb(n.verb)}</div>`).join("")
+   :`<div class="empty">nothing needs you \\u2014 the swarm is unblocked. Start something: ${verb("ratchet take <slug> --repo <repo>")}</div>`;
+  const feedRows=D.feed.length?D.feed.map(f=>`<div style="display:flex;gap:.7rem;padding:.4rem 0;border-bottom:1px solid var(--seam);font-size:.78rem;align-items:baseline">
+    <span style="color:var(--faint);font-family:var(--mono);font-size:.68rem;flex:none">${E(f.ts)}</span>${pill(f.pill,f.ev)}
+    <span style="font-family:var(--mono)">${E(f.msg)}</span></div>`).join("")
+   :`<div class="empty">no ledgered activity yet \\u2014 the feed fills as verbs run</div>`;
+  return head("Overview","anything on fire \\u00b7 what moved today")+
+  `<div class="tiles">
+   <a class="tile ${D.needs.length?"warn":"ok"}" href="#/overview"><div class="lbl">needs you</div><div class="n">${D.needs.length}</div><div class="sub">${D.needs.length?E(D.needs[0].kind):"queue clear"}</div></a>
+   <a class="tile ember" href="#/board"><div class="lbl">lanes in flight</div><div class="n">${D.lanes.open+D.lanes.landing}</div><div class="sub">${D.lanes.open} open \\u00b7 ${D.lanes.landing} landing</div></a>
+   <a class="tile warn" href="#/github"><div class="lbl">open issues</div><div class="n">${D.issues.total===null?"\\u2014":D.issues.total}</div><div class="sub">${E(D.issues.sub)}${D.issues.age?" \\u00b7 as of "+E(D.issues.age)+" ago":""}</div></a>
+   <a class="tile ok" href="#/budget"><div class="lbl">spend today</div><div class="n">$${E(D.spend.day)}</div><div class="sub">of $${E(D.spend.cap)} day cap</div></a></div>
+  <div class="grid">
+  <div class="panel c6"><h2>needs you ${pill(D.needs.length?"warn":"ok",D.needs.length)}<span class="hint">worst first \\u00b7 derived from cards \\u00b7 journals \\u00b7 trains \\u2014 no stored inbox</span></h2>
+   ${needRows}<div class="prov">watching: cards \\u00b7 journals \\u00b7 recordings \\u00b7 train ledger \\u00b7 computed at render</div></div>
+  <div class="panel c6"><h2>today<span class="hint">telemetry ledger \\u00b7 whitelisted events \\u00b7 newest first</span></h2>
+   ${feedRows}</div>
+  <div class="panel c6"><h2>what is working<span class="hint">green systems \\u2014 derived from persisted state, never assumed</span></h2>
+   ${(D.working||[]).length?`<table>${D.working.map(w=>`<tr><td>${E(w.name)}</td><td>${pill(w.ok?"ok":"red",w.ok?"ok":"attention")}</td><td class="dim">${E(w.note)}</td></tr>`).join("")}</table>`:`<div class="empty">nothing verified yet \\u2014 run ${verb("ratchet doctor")} and ${verb("ratchet chain")}</div>`}
+   <div class="prov">only systems the machine can prove from state appear here \\u00b7 not a hardcoded list</div></div>
+  <div class="panel c6"><h2>new here? this is the whole idea<span class="hint">60-second orientation</span></h2>
+   <p style="font-size:.84rem;line-height:1.6;max-width:64ch;color:var(--dim)">
+   <b style="color:var(--bone)">Ratchet runs AI coding agents without letting them wreck the repos.</b>
+   Every piece of work \\u2014 bug fix, feature, design \\u2014 is a <b style="color:var(--ember)">card</b> in its own isolated lane.
+   Nothing merges until it clears <b style="color:var(--bone)">the gate</b>: full test suite, adversarial review, secret scan.
+   A ratchet turns one way \\u2014 shipped work can\\u2019t slide back.</p>
+   <table style="margin-top:.6rem">
+    <tr><td class="dim">watch</td><td><a href="#/overview">Overview</a> \\u2014 is anything on fire?</td></tr>
+    <tr><td class="dim">follow work</td><td><a href="#/board">Board</a> \\u2014 every card\\u2019s full story (ships next)</td></tr>
+    <tr><td class="dim">act</td><td>click any <span class="verb" style="pointer-events:none">verb</span> to copy it \\u2014 run it in your terminal; the gate applies either way</td></tr>
+   </table>
+   <p style="margin-top:.6rem;font-size:.7rem;color:var(--faint)">this page can see everything and touch nothing (\\u00a79) \\u2014 that\\u2019s why you can trust it</p></div></div>`},
+ board(){const D=DATA;const cols={pending:[],open:[],landing:[],landed:[]};
+  for(const b of D.board){if(cols[b.status])cols[b.status].push(b)}
+  const STEPL=["queued","suite","review","push","done"];
+  const chip=b=>`<a class="card" href="#/card/${E(b.wid)}"><span class="cslug">${E(b.slug)}${b.risk==="high"?"!":""}${b.stuck?" \\u26a0":""}</span><div class="ctitle">${E(b.title)}</div>
+   <div class="cmeta"><span>${E(b.repo)}</span><span>${E(STEPL[b.step]||"")}</span><span>${E(b.last_ev_age||b.age||"")}</span>${b.stuck?`<span style="color:var(--red)">${E(b.stuck_why||"stuck")}</span>`:""}</div></a>`;
+  const landedToday=cols.landed.filter(b=>b.landed_day===D.today);
+  const older=cols.landed.length-landedToday.length;
+  return head("Board","the ratchet \\u2014 bugs, features, and design move through the same one-way gate")+
+  `<div class="rail"><div class="pawl"></div></div><div class="panel"><div class="kan">
+   <div class="kol"><div class="khead"><span class="kname">Pending</span><span class="kn">${cols.pending.length}</span></div>${cols.pending.map(chip).join("")||`<div class="card ghost">queue empty \\u2014 ${verb("ratchet take <slug> --repo <r>")}</div>`}</div>
+   <div class="kol open"><div class="khead"><span class="kname">Open</span><span class="kn">${cols.open.length}</span></div>${cols.open.map(chip).join("")||`<div class="card ghost">nothing open</div>`}</div>
+   <div class="kol landing"><div class="khead"><span class="kname">Landing</span><span class="kn">${cols.landing.length}</span></div>${cols.landing.map(chip).join("")||`<div class="card ghost">nothing in the gate</div>`}</div>
+   <div class="kol landed"><div class="khead"><span class="kname">Landed</span><span class="kn">${landedToday.length} today \\u00b7 ${cols.landed.length} total</span></div>${landedToday.slice(0,8).map(chip).join("")||`<div class="card ghost">none today</div>`}${older>0||landedToday.length>8?`<div class="kmore">+ ${cols.landed.length-Math.min(landedToday.length,8)} more \\u2192 <a href="#/history">History</a></div>`:""}</div>
+   <div class="kol cut"><div class="khead"><span class="kname">Cut</span><span class="kn">${D.trains.length}</span></div>${D.trains.map(t=>`<div class="card"><span class="cslug">${E(t.name)}</span><div class="cmeta"><span>${E(t.status)}</span><span>${E(t.snapshot)}</span><span>${E(t.ts)}</span></div></div>`).join("")||`<div class="card ghost">no release cut<br>${verb("ratchet cut <name>")}</div>`}</div>
+  </div>${D.abandoned?`<div class="prov">${D.abandoned} abandoned card(s) \\u2014 collapsed (\\u00a79: still on the books)</div>`:""}</div>`},
+ card(id){const c=DATA.cards[id];if(!c)return head("card not found","")+`<div class="panel"><div class="empty">no card ${E(id||"")} \\u2014 <a href="#/board">back to Board</a></div></div>`;
+  const SN={done:"passed",skipped:"skipped",failed:"FAILED",running:"running",stalled:"stalled",pending:"\\u2014",unrecorded:"not recorded"};
+  const MK={done:"\\u2713 ",skipped:"\\u21b7 ",failed:"\\u2717 ",running:"",stalled:"",pending:"",unrecorded:""};
+  const gate=c.gate?`<div class="steps">${c.gate.map(g=>`<div class="step ${E(g.state)}"><b>${MK[g.state]||""}${E(g.st)}</b>${E(SN[g.state]||g.state)}</div>`).join("")}</div>`
+   +(c.gate_why?`<p style="font-size:.74rem;color:var(--red);font-family:var(--mono)">gate abort: ${E(c.gate_why)}</p>`:"")
+   +(c.interrupted?`<p style="font-size:.74rem;color:var(--warn);font-family:var(--mono)">land run INTERRUPTED (claimant dead) \\u2014 re-run land or ${verb("ratchet reconcile --reap",true)}</p>`:"")
+   :`<div class="empty">no land run journaled yet \\u2014 the gate stepper fills when ${verb("ratchet land "+(c.worktree?shq(c.worktree):"<worktree>")+" --fuse-done")} runs</div>`;
+  const d=c.diff;
+  const diffTxt=d?(d.error?`git read failed at land: ${E(d.error)}`:`+${E(d.plus)} \\u2212${E(d.minus)} \\u00b7 ${E(d.n_files)} file(s)`):"\\u2014 (recorded at land time)";
+  const pillState=c.status==="landed"?pill("ok","landed"):c.stuck_why?pill("red","stuck"):c.status==="landing"?pill("warn","landing"):pill("ember",c.status);
+  return head(`${E(c.slug)} ${pillState}`,E(c.title),`<a href="#/board">Board</a> \\u2192 ${E(c.slug)}`)+
+  `<div class="grid"><div class="panel c8"><h2>gate<span class="hint">from the land journal \\u2014 a skip renders as a skip, never a pass</span></h2>${gate}
+   ${c.suite_tail?`<h2 style="margin-top:1rem">suite tail (failing step output)</h2><pre class="tail">${E(c.suite_tail)}</pre>`:""}
+   <table><tr><td class="dim">repo</td><td>${E(c.repo)}</td><td class="dim">branch</td><td>${E(c.branch)}</td></tr>
+   <tr><td class="dim">issue</td><td>${c.issue?(c.issue.includes("#")&&c.issue.includes("/")?`<a target="_blank" rel="noopener" href="https://github.com/${E(c.issue.split("#")[0])}/issues/${E(c.issue.split("#")[1])}">${E(c.issue)} \\u2197</a>`:E(c.issue)):"\\u2014"}</td>
+   <td class="dim">agent</td><td>${E(c.agent)}</td></tr>
+   <tr><td class="dim">diff</td><td class="wrap">${diffTxt}</td><td class="dim">result</td><td>${c.result?E(c.result):"\\u2014"}</td></tr>
+   ${c.wt_gone?`<tr><td class="dim">worktree</td><td colspan="3" style="color:var(--red)">${E(c.worktree)} \\u2014 GONE (reap candidate)</td></tr>`:""}</table>
+   ${d&&d.subjects&&d.subjects.length?`<h2 style="margin-top:1rem">commits at land</h2><table>${d.subjects.map(x=>`<tr><td class="wrap">${E(x)}</td></tr>`).join("")}</table>`:""}
+   <h2 style="margin-top:1rem">flight recording<span class="hint">${E(c.n_events)} event(s)${c.n_events>c.tl.length?" \\u00b7 showing last "+c.tl.length:""}</span></h2>
+   ${c.tl.length?`<div class="timeline">${c.tl.map((t,i)=>`<div class="tl${i===c.tl.length-1?" hot":""}"><span class="ts">${E(t[0])}</span> <span class="ev">${E(t[1])}</span> <span class="det">${E(t[3])}</span></div>`).join("")}</div>`:c.archived?`<div class="empty">recording not loaded (landed &gt;7d ago) \\u2014 ${verb("ratchet log "+shq(id))}</div>`:`<div class="empty">no recording yet \\u2014 events land here as the lane works</div>`}</div>
+   <div class="panel c4"><h2>verbs</h2><div style="display:flex;flex-direction:column;gap:.5rem;align-items:flex-start">
+   ${verb("ratchet log "+shq(id))}${verb("ratchet replay "+shq(id))}
+   ${c.status!=="landed"&&c.worktree?verb("ratchet land "+shq(c.worktree)+" --fuse-done"):""}
+   ${c.stuck_why?verb("ratchet reconcile",true):""}${c.status==="open"?verb("ratchet kill "+shq(id),true):""}</div>
+   <p style="margin-top:.8rem;font-size:.68rem;color:var(--faint)">verbs run in your terminal \\u2014 the gate applies either way (\\u00a79)</p></div></div>`},
+ agents(){const D=DATA;
+  const onshift=D.board.filter(b=>b.status==="open"||b.status==="landing")
+   .sort((a,b)=>(a.stuck?0:a.quiet?1:2)-(b.stuck?0:b.quiet?1:2));
+  const initials=n=>String(n).replace(/[^a-z0-9]/gi," ").trim().split(/\\s+/).map(w=>w[0]||"").join("").slice(0,3).toUpperCase()||"?";
+  const laneAva=b=>b.stuck?"red":b.quiet?"warn":b.status==="landing"?"warn":"ok";
+  const GMK={done:"\\u2713",skipped:"\\u21b7",failed:"\\u2717",running:"\\u25cf",stalled:"\\u25cf",pending:"",unrecorded:""};
+  const miniGate=b=>{const c=DATA.cards[b.wid],g=c&&c.gate;
+    if(!g||!g.length)return `<span class="working${b.status==="landing"?"":" pre"}">${b.status==="landing"?"land run \\u00b7 no gate recorded":"working \\u00b7 pre-land"}</span>`;
+    return `<div class="steps mini">${g.map(s=>`<div class="step ${E(s.state)}"><b>${GMK[s.state]?GMK[s.state]+" ":""}${E(s.st||"?")}</b></div>`).join("")}</div>`;};
+  const shiftRows=onshift.length?onshift.map(b=>`<div class="lane"><div class="agent"><div class="ava ${laneAva(b)} ${b.stuck?"alarm":b.quiet?"":"beat"}">${E(initials(b.agent))}</div>
+    <div class="who"><b><a href="#/card/${E(b.wid)}">${E(b.title||b.slug)}</a></b><span>${E(b.agent)}${b.agent==="unattributed"?" \\u00b7 UNATTRIBUTED":""} \\u00b7 ${E(b.repo)} \\u00b7 ${E(b.slug)}</span></div>
+    ${b.stuck?pill("red",b.stuck_why||"stuck"):b.quiet?pill("warn","quiet"):pill(b.status==="landing"?"warn":"ok",b.status)}${b.stuck?verb("ratchet reconcile",true):""}</div>
+    <div class="lanebody">${miniGate(b)}<span class="facts">alive ${E(b.age||"\\u2014")} \\u00b7 last activity ${E(b.last_ev_age||"none recorded")}</span></div></div>`).join("")
+   :`<div class="empty">no lanes on shift \\u2014 start one: ${verb("ratchet take <slug> --repo <repo>")}</div>`;
+  const recRows=D.agents.length?D.agents.map(a=>`<tr><td>${E(a.agent)}${a.unattributed?" "+pill("unk","unattr"):""}</td>
+    <td>${pill(a.state==="stuck"?"red":a.state==="quiet"?"warn":a.state==="on-shift"?"ok":"unk",a.state)}</td>
+    <td class="dim">${E(a.lands)} landed</td><td class="dim">${E(a.active)} active${a.stuck?" \\u00b7 "+E(a.stuck)+" stuck":""}</td>
+    <td class="dim">${E(a.last_ev_age||"\\u2014")}</td></tr>`).join("")
+   :`<div class="empty">no agents have taken a card yet</div>`;
+  return head("Agents","who\\u2019s alive \\u00b7 what they\\u2019re on \\u00b7 progress")+
+  `<div class="grid">
+   <div class="panel c8"><h2>on shift now ${pill(onshift.length?"ok":"unk",onshift.length)}<span class="hint">one card per active lane \\u00b7 stuck first \\u00b7 gate progress + last activity \\u00b7 click the title for its story</span></h2>
+    ${shiftRows}
+    <div class="prov">\\u201clast activity\\u201d is the newest recorded event, not a heartbeat \\u2014 a working-but-silent lane can read \\u201cquiet\\u201d (silent &gt;90m) before it\\u2019s called dead \\u00b7 worktree gone / land interrupted \\u21d2 stuck (reap verb)</div></div>
+   <div class="panel c4"><h2>track record<span class="hint">per agent \\u00b7 all cards</span></h2>
+    ${D.agents.length?`<table><tr><th>agent</th><th>state</th><th>lands</th><th>now</th><th>last</th></tr>${recRows}</table>`:recRows}
+    <p style="margin-top:.7rem;font-size:.7rem;color:var(--faint)">liveness rule: no events for 90m \\u21d2 flagged before dead</p></div>
+   <div class="panel c8"><h2>not captured yet<span class="hint">honest gaps \\u2014 the kernel doesn\\u2019t record these; the page won\\u2019t invent them</span></h2>
+    <table>
+     <tr><td class="dim">true liveness / heartbeat</td><td>no per-lane heartbeat in kernel state \\u2014 \\u201clast activity\\u201d is the newest recording write, so a busy-but-silent lane can look quiet \\u2014 <span class="pill unk">FRICTION #12</span></td></tr>
+     <tr><td class="dim">model / CLI per lane</td><td>the card records its agent, not which model/CLI ran it \\u2014 <span class="pill unk">FRICTION #11</span></td></tr>
+     <tr><td class="dim">per-agent metered spend</td><td>flat lanes are UNPRICED by design \\u2014 see <a href="#/budget">Budget</a> for the honest spend oracle</td></tr>
+     <tr><td class="dim">historical gate-trip rate</td><td>land journals keep only the last run per worktree \\u2014 \\u201cstuck now\\u201d is shown instead of an all-time trip rate</td></tr>
+    </table></div></div>`},
+ overwatch(){const D=DATA.overwatch,S=D.summary;
+  const ini=n=>String(n).replace(/[^a-z0-9]/gi," ").trim().split(/\\s+/).map(w=>w[0]||"").join("").slice(0,3).toUpperCase()||"?";
+  const LB={SILENT:["red","SILENT"],blocked:["warn","blocked"],"idle-empty":["unk","idle"],ok:["ok","live"],unknown:["unk","unknown"]};
+  const badge=t=>{const m=LB[t.liveness]||["unk",t.liveness];return pill(m[0],m[1]);};
+  const dot=t=>t.liveness==="ok"?"ok":t.liveness==="SILENT"?"red":t.liveness==="blocked"||t.liveness==="idle-empty"?"warn":"dim";
+  const team=t=>`<div class="lane"><div class="agent"><div class="ava ${dot(t)} ${t.liveness==="SILENT"?"alarm":t.liveness==="ok"?"beat":""}">${E(ini(t.team))}</div>
+    <div class="who"><b>${E(t.team)}</b><span>${E(t.why||"")}</span></div>
+    ${t.flag_state==="answered"?pill("ok","answered"):""}${badge(t)}</div>
+    ${t.flag_state==="open"?`<div class="owask"><b>\\u2691 needs Overwatch${t.ask_age?" \\u00b7 "+E(t.ask_age):""}</b><p>${E(t.ask||"(no question recorded)")}</p>${verb("ratchet overwatch respond "+shq(t.team)+" --text '<answer>'")}</div>`:""}
+    ${t.latest?`<div class="lanebody"><span class="facts">latest: ${E(t.latest)}</span></div>`:""}</div>`;
+  const rows=D.teams.length?D.teams.map(team).join(""):`<div class="empty">no teams registered yet \\u2014 Overwatch coordinates sub-CLI teams under ~/.ratchet/overwatch</div>`;
+  const stat=(l,n,c)=>`<div class="owstat ${n?c:"unk"}"><div class="n" data-count="${E(n)}">${E(n)}</div><div class="l">${E(l)}</div></div>`;
+  return head("Overwatch","the fleet \\u00b7 who\\u2019s alive \\u00b7 who needs you")+
+  `<div class="grid">
+   <div class="panel"><h2>fleet ${S.silent?pill("red",S.silent+" SILENT"):S.needs?pill("warn",S.needs+" need you"):pill("ok","all clear")}<span class="hint">teams Overwatch coordinates \\u00b7 alarms + open asks first \\u00b7 every action is a copyable verb</span></h2>
+    <div class="owsum">${stat("teams",S.total,"unk")}${stat("live",S.live,"ok")}${stat("need you",S.needs,"warn")}${stat("SILENT",S.silent,"red")}${stat("blocked",S.blocked,"warn")}</div>
+    ${rows}
+    <div class="prov">liveness from ~/.ratchet/overwatch/&lt;team&gt;/.waker heartbeat + flags \\u2014 the same read-only contract ${verb("ratchet overwatch sweep")} runs on \\u00b7 a team that never beat is \\u201cunknown\\u201d, never faked live \\u00b7 SILENT = was alive then stopped beating (&gt;${Math.round(D.stale_after/60)}m), or blocked with a dead waker</div></div>
+  </div>`},
+ github(){const R=DATA.github;const delta=d=>d===null||d===undefined?"":d>0?pill("warn","+"+d):d<0?pill("ok",""+d):pill("unk","\\u00b10");
+  if(!R.length)return head("GitHub","issues + PRs across the estate \\u00b7 cached boards")+
+   `<div class="panel"><h2>no snapshot yet ${pill("unk","unbuilt")}</h2>
+    <p class="empty">the triage boards render a CACHED snapshot, never a live fetch (\\u00a79) \\u2014 none has been taken on this machine yet.</p>
+    <div style="margin-top:.4rem">${verb("ratchet-maintain snapshot --all")}</div></div>`;
+  const cnt=(b,cols)=>`<table><tr>${cols.map(c=>`<th>${E(c.toUpperCase())}</th>`).join("")}</tr><tr>${cols.map(c=>`<td>${E((b.counts||{})[c]||0)}</td>`).join("")}</tr></table>`;
+  const ghUrl=(gh,n,kind)=>gh?`https://github.com/${gh}/${kind}/${n}`:null;
+  return head("GitHub","issues + PRs across the estate \\u00b7 cached boards")+
+  `<div class="grid">${R.map(r=>`<div class="panel c6"><h2>${E(r.repo)} ${delta(r.issues.delta)}<span class="hint">${E(r.issues.total===null?"?":r.issues.total)} issues \\u00b7 ${E(r.prs.total===null?"?":r.prs.total)} PRs</span></h2>
+    ${cnt(r.issues,["triage","active","blocked","stale"])}
+    <div style="font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin:.6rem 0 .2rem">pull requests ${delta(r.prs.delta)}</div>
+    ${cnt(r.prs,["review","ready","checks-fail","draft","stale"])}
+    ${r.issues.top.length?`<table style="margin-top:.5rem"><tr><th>#</th><th>title</th><th>age</th></tr>${r.issues.top.map(t=>{const u=ghUrl(r.gh,t.number,"issues");return `<tr class="rowlink"${u?` data-ext="${E(u)}"`:""}><td class="dim">${u?`<a href="${E(u)}" target="_blank" rel="noopener" aria-label="issue ${E(t.number)} ${E(t.title)} \\u2014 opens on GitHub">#${E(t.number)}</a>`:"#"+E(t.number)}</td><td class="wrap">${E(t.title)}${u?" \\u2197":""} <span class="pill unk">${E(t.col)}</span></td><td class="dim">${t.age_days===null?"\\u2014":E(t.age_days)+"d"}</td></tr>`}).join("")}</table>`:""}
+    <div class="prov">cached from the last sweep${r.age?" \\u00b7 as of "+E(r.age)+" ago":""} \\u00b7 refresh: ${verb("ratchet-maintain snapshot "+shq(r.repo))}</div>
+    <div class="prov">rows open on GitHub \\u2197 (no local issue summaries in kernel state)</div></div>`).join("")}</div>`},
+ repos(){const D=DATA.repos_est;const HP={"OK":"ok","WARN":"warn","RED":"red","UNKNOWN":"unk","SKIP":"unk","unrun":"unk"};
+  return head("Repos","topology \\u00b7 protection \\u00b7 governance")+
+  `<div class="panel"><table><tr><th>repo</th><th>remote</th><th>branch</th><th>health</th><th>protection</th><th>governance</th></tr>
+   ${D.repos.map(r=>`<tr class="rowlink" data-nav="#/repo/${E(r.name)}"><td><b><a href="#/repo/${E(r.name)}">${E(r.name)}</a></b></td>
+    <td class="dim">${E(r.gh||r.remote)}</td><td class="dim">${E(r.branch)}</td>
+    <td>${pill(HP[r.health]||"unk",r.health==="unrun"?"doctor unrun":r.health)}</td>
+    <td class="dim">${r.protect.length?E(r.protect.length)+" required":"\\u2014"}</td>
+    <td>${!r.gov_known?pill("unk","tree absent"):r.gov_missing.length?pill("warn",(r.gov_total-r.gov_missing.length)+"/"+r.gov_total):pill("ok",r.gov_total+"/"+r.gov_total)}</td></tr>`).join("")}</table>
+   <div class="prov">health from doctor-report.json${D.doctor_run?(D.doctor_age?" \\u00b7 as of "+E(D.doctor_age)+" ago":""):" \\u2014 never run"} \\u00b7 page views never fetch (\\u00a79) \\u00b7 refresh: ${verb("ratchet doctor")}</div></div>`},
+ repo(name){const r=(DATA.repos_est.repos||[]).find(x=>x.name===name);
+  if(!r)return head("repo not found","")+`<div class="panel"><div class="empty">unknown repo ${E(name||"")} \\u2014 <a href="#/repos">back to Repos</a></div></div>`;
+  const HP={"OK":"ok","WARN":"warn","RED":"red","UNKNOWN":"unk","SKIP":"unk"};
+  const lands=DATA.board.filter(b=>b.repo===name&&b.status==="landed").slice(0,10);
+  return head(E(r.name),E(r.gh||r.remote),`<a href="#/repos">Repos</a> \\u2192 ${E(r.name)}`)+
+  `<div class="grid">
+   <div class="panel c6"><h2>doctor<span class="hint">last persisted run \\u00b7 never live git on view</span></h2>
+    ${r.checks.length?`<table>${r.checks.map(c=>`<tr><td class="dim">${E(c.name)}</td><td>${pill(HP[c.status]||"unk",c.status)}</td><td class="wrap dim">${E(c.msg)}</td></tr>`).join("")}</table>`:`<div class="empty">doctor has never run for the estate \\u2014 ${verb("ratchet doctor "+shq(r.name))}</div>`}
+    <div class="prov">rerun: ${verb("ratchet doctor "+shq(r.name))}</div></div>
+   <div class="panel c6"><h2>recent lands</h2>
+    ${lands.length?`<table>${lands.map(b=>`<tr><td><a href="#/card/${E(b.wid)}">${E(b.slug)}</a></td><td class="dim">${E(b.last_ev_age||b.age||"")}</td></tr>`).join("")}</table>`:`<div class="empty">no lands recorded \\u2014 ${verb("ratchet take <slug> --repo "+shq(r.name))}</div>`}
+    <h2 style="margin-top:1rem">protection</h2>
+    ${r.protect.length?`<p style="font-size:.74rem;color:var(--dim)">${E(r.protect.length)} required check(s):</p><div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.3rem">${r.protect.map(c=>`<span class="pill blue">${E(c)}</span>`).join("")}</div>`:`<div class="empty">no required-checks cache \\u2014 ${verb("ratchet protect verify "+shq(r.name))}</div>`}
+    <h2 style="margin-top:1rem">governance</h2>
+    ${!r.gov_known?`<div class="empty">working tree not checked out here \u2014 governance presence unknown</div>`:r.gov_missing.length?`<p style="font-size:.74rem;color:var(--warn)">missing: ${r.gov_missing.map(f=>E(f)).join(", ")}</p><div style="margin-top:.3rem">${verb("ratchet govern "+shq(r.name))}</div>`:`<p style="font-size:.74rem;color:var(--ok)">all ${E(r.gov_total)} governance files present</p>`}</div></div>`},
+ issue(key){return head("issue "+(key||""),"external \\u2014 no local summary")+
+  `<div class="panel"><div class="empty">kernel state carries no per-issue summary \\u2014 issues open on GitHub \\u2197 from the <a href="#/github">GitHub boards</a>.</div>
+   <div style="margin-top:.4rem">${verb("gh issue view <n> -R <owner/repo> -w")}</div></div>`},
+ budget(){const b=DATA.budget;const t=b.tail;const over=b.pct>=100;
+  const scope=t.scanned_all?"whole ledger":"recent tail only \\u2014 authoritative: ratchet-budget report";
+  return head("Budget","the oracle \\u2014 honest, late, fail-closed")+
+  `<div class="grid">
+   ${b.chain_ok===false?`<div class="banner" style="grid-column:span 12">\\u26a0 telemetry chain BROKEN \\u2014 spend figures are UNTRUSTED until ${verb("ratchet chain")} passes</div>`:""}
+   <div class="panel c6"><h2>metered spend \\u00b7 today<span class="hint">exact \\u00b7 kernel spend cursor</span></h2>
+    <div class="bignum">$${E(b.metered_today)} <small>/ $${E(b.cap)} day cap</small></div>
+    <div class="meter ${over?"over":""}"><i style="width:${E(b.pct)}%"></i></div>
+    <table><tr><td class="dim">per-card reserve</td><td>$${E(b.per_card)}</td></tr>
+     <tr><td class="dim">per-lane ceiling</td><td>$${E(b.per_lane)}</td></tr>
+     <tr><td class="dim">premium policy</td><td>${pill(b.premium==="never"?"ok":"warn",b.premium)}</td></tr></table>
+    <div class="prov">metered = Flux-priced work \\u00b7 flat sub-CLI lanes are governed, never fake-priced</div></div>
+   <div class="panel c6"><h2>fail-closed surface<span class="hint">${E(scope)}</span></h2>
+    <table><tr><td class="dim">metered calls</td><td>${E(t.n_metered)}</td></tr>
+     <tr><td class="dim">flat lanes</td><td>${E(t.n_flat)}</td></tr>
+     <tr><td class="dim">UNPRICED calls</td><td>${t.n_unpriced?pill("red",t.n_unpriced+" \\u2014 fail closed"):t.scanned_all?pill("ok","0 \\u2014 nothing escaped the meter"):pill("unk","0 in tail \\u2014 run ratchet-budget report to be sure")}</td></tr></table>
+    ${t.n_unpriced?`<p style="margin-top:.5rem;font-size:.72rem;color:var(--red)">an UNPRICED call reported usage but no price \\u2014 the oracle FAILS CLOSED: spend blocks until it is priced. Audit: ${verb("ratchet-budget report")}</p>`:`<p style="margin-top:.5rem;font-size:.7rem;color:var(--faint)">UNPRICED &gt; 0 fails closed (spend blocks until priced)</p>`}</div>
+   <div class="panel c12"><h2>by card \\u00b7 today<span class="hint">metered only \\u00b7 ${t.scanned_all?"complete":"recent tail (partial)"}</span></h2>
+    ${t.by_card.length?`<table><tr><th>card</th><th>metered</th></tr>${t.by_card.map(r=>`<tr><td>${E(r.card)}</td><td class="dim">$${E(r.usd)}</td></tr>`).join("")}</table>`:`<div class="empty">no metered spend recorded today \\u2014 flat lanes carry no dollar cost</div>`}
+    <div class="prov">full audit across the whole ledger: ${verb("ratchet-budget report --period day")}</div></div></div>`},
+ history(){const H=DATA.history;const c=DATA.chain;
+  return head("History","what the machine did \\u00b7 chain-verified")+
+  `<div class="grid">
+   <div class="panel c8"><h2>ledger stream<span class="hint">telemetry \\u00b7 ${H.scanned_all?"whole ledger":"recent tail"} \\u00b7 newest first</span></h2>
+    ${H.stream.length?H.stream.map(e=>`<div style="display:flex;gap:.8rem;padding:.4rem 0;border-bottom:1px solid var(--seam);font-size:.78rem;align-items:baseline">
+     <span style="color:var(--faint);font-family:var(--mono);font-size:.66rem;flex:none;width:6.5rem">${E(e.ts)}</span>${pill(e.pill,e.ev)}
+     <span style="font-family:var(--mono)">${E(e.msg)}</span></div>`).join(""):`<div class="empty">no ledgered events yet</div>`}</div>
+   <div class="panel c4"><h2>chain integrity<span class="hint">verified when run \\u00b7 never on view</span></h2>
+    <table><tr><td class="dim">telemetry chain</td><td>${pill(c.state==="ok"?"ok":c.state==="warn"?"warn":c.state==="red"?"red":"unk",c.label)}</td></tr>
+     <tr><td class="dim">as of</td><td class="dim">${E(c.age||"\\u2014")}</td></tr></table>
+    <p style="font-size:.7rem;color:var(--faint);margin:.4rem 0">${E(c.detail||"")}</p>
+    <div class="prov">verify now: ${verb("ratchet chain")}</div>
+    <h2 style="margin-top:1rem">release trains</h2>
+    ${DATA.trains.length?`<table><tr><th>candidate</th><th>status</th><th>snapshot</th></tr>${DATA.trains.map(t=>`<tr><td>${E(t.name)}</td><td>${pill(t.status==="promoted"?"ok":t.status==="rolled-back"?"red":"blue",t.status)}</td><td class="dim">${E(t.snapshot)}</td></tr>`).join("")}</table>`:`<div class="empty">no trains cut \\u2014 ${verb("ratchet cut <name>")}</div>`}
+    <h2 style="margin-top:1rem">regression corpus</h2>
+    ${H.corpus_n?`<table>${H.corpus.map(x=>`<tr><td class="dim">${E(x.id)}</td><td>${E(x.repo)}</td></tr>`).join("")}</table><div class="prov">${E(H.corpus_n)} card(s) \\u2014 each a bug that escaped once, now a test</div>`:`<div class="empty">corpus empty \\u2014 no regressions captured</div>`}</div></div>`},
+ config(){const C=DATA.config;const K=DATA.keys;
+  const KS={"works":"ok","present":"warn","unknown":"unk","missing":"red"};
+  const KL={"works":"WORKS","present":"PRESENT \\u00b7 unverified","unknown":"KEYCHAIN","missing":"MISSING"};
+  const cfgRows=C.rows.map(r=>`<tr><td class="dim">${E(r.key)}</td><td class="wrap">${E(r.value)}</td><td>${pill(r.source==="file"?"blue":"unk",r.source)}</td><td>${r.verb?verb(r.verb):'<span class="dim">\\u2014</span>'}</td></tr>`).join("");
+  const keysPanel=K.exposed
+   ?`<div class="panel c6"><h2>keys &amp; environment ${pill("red","hidden")}</h2><div class="empty">the glass is network-exposed \\u2014 key presence is withheld (\\u00a79: a name-set hints at what to attack). Serve on 127.0.0.1 to see it.</div></div>`
+   :`<div class="panel c6"><h2>keys &amp; environment<span class="hint">presence only \\u2014 values never render</span></h2>
+     <table><tr><th>integration</th><th>state</th><th>note / add verb</th></tr>
+     ${K.keys.map(k=>`<tr><td>${E(k.name)}</td><td>${pill(KS[k.state]||"unk",KL[k.state]||k.state)}</td>
+       <td class="wrap" style="font-size:.72rem;color:var(--dim)">${E(k.note)}${k.add?"<br>"+verb(k.add):""}</td></tr>`).join("")}</table>
+     <p style="margin-top:.6rem;font-size:.68rem;color:var(--faint)">WORKS = a last successful use seen in telemetry \\u00b7 fixed allowlist, env never enumerated \\u00b7 no value or last-4 ever leaves the server</p></div>`;
+  return head("Config &amp; Keys","read-only by contract \\u2014 copy the verb, the gate records the write")+
+  `<div class="grid">
+   <div class="panel c6"><h2>config<span class="hint">source: ${C.sourced?"config.json (sha "+E(C.digest)+")":"pure defaults"}</span></h2>
+    <table><tr><th>key</th><th>value</th><th>source</th><th>change</th></tr>${cfgRows}</table>
+    <p style="margin-top:.6rem;font-size:.68rem;color:var(--faint)">the verb edits config.json in your terminal \\u2014 this page never writes (\\u00a79)</p></div>
+   ${keysPanel}</div>`}
+};
+function bridge(){const D=DATA;
+ const dot=s=>s==="ok"?"":s==="warn"?" amber":s==="red"?" red":" unk";
+ document.getElementById("bstats").innerHTML=
+  `<div class="bstat" title="${E(D.ground.detail)}"><span class="dot${dot(D.ground.state)}"></span> ${E(D.ground.label)}</div>`+
+  `<div class="bstat" title="${E(D.chain.detail)}"><span class="dot${dot(D.chain.state)}"></span> ${E(D.chain.label)}</div>`+
+  (D.landing?`<div class="bstat"><span class="dot amber pulse"></span> ${D.landing} landing</div>`:"");
+ document.getElementById("bspend").innerHTML=`metered <b style="color:var(--bone)">&nbsp;$${E(D.spend.day)}</b>&nbsp;/ $${E(D.spend.cap)}`;
+}
+function render(){
+ const h=location.hash.replace(/^#\\//,"")||"overview";const [page,...rest]=h.split("/");const arg=rest.join("/");
+ sidebar(page==="card"?"board":page==="repo"?"repos":page==="issue"?"github":page);
+ const fn=PAGES[page];
+ document.getElementById("main").innerHTML=(fn?fn(arg):PAGES.overview())+
+  `<footer>\\u00a79 \\u2014 this glass renders state and never mutates it \\u00b7 every action is a verb \\u00b7 progress that can\\u2019t slip back</footer>`;
+ document.querySelectorAll(".verb").forEach(v=>v.addEventListener("click",e=>{e.preventDefault();e.stopPropagation();
+  navigator.clipboard&&navigator.clipboard.writeText(v.getAttribute("data-v")||v.textContent);
+  v.classList.add("copied");setTimeout(()=>v.classList.remove("copied"),1200)}));
+ // row navigation via data-* read with getAttribute — NOT an inline handler: the value is a
+ // string assigned to location.hash (always #-prefixed) or passed to window.open (always an
+ // https://github.com/… URL), never compiled as JS, so an attacker-controlled repo name or
+ // remote slug containing a quote cannot execute (review CRITICAL — E() alone is unsafe inside
+ // an inline onclick because the browser HTML-decodes &#39; back to ' before running it).
+ // The keyboard/AT nav path is a REAL <a> inside each row's first cell (native link semantics,
+ // table role=row preserved). The row click is a mouse-only convenience over the whole row; it
+ // skips clicks that already hit the inner link so an external row never opens twice.
+ const rowClick=fn=>e=>{if(!e.target.closest("a"))fn()};
+ document.querySelectorAll("[data-nav]").forEach(el=>el.addEventListener("click",rowClick(()=>{location.hash=el.getAttribute("data-nav")})));
+ document.querySelectorAll("[data-ext]").forEach(el=>el.addEventListener("click",rowClick(()=>{const u=el.getAttribute("data-ext");if(u&&u.indexOf("https://")===0)window.open(u,"_blank","noopener")})));
+ // count-up: numbers ease from 0 to their value AT RENDER (a "live counts" cue — render-time only,
+ // never a network poll; the DATA is unchanged). Skipped whole under prefers-reduced-motion, where
+ // the server-rendered final number simply stays put.
+ if(!(window.matchMedia&&matchMedia("(prefers-reduced-motion:reduce)").matches)){
+  document.querySelectorAll("[data-count]").forEach(el=>{
+   const end=parseInt(el.getAttribute("data-count"),10);if(!(end>0)){return}
+   let t0=null;el.textContent="0";
+   const step=ts=>{if(!el.isConnected){el.textContent=String(end);return}
+    if(t0===null){t0=ts}const p=Math.min(1,(ts-t0)/520);
+    el.textContent=String(Math.round(end*(1-Math.pow(1-p,3))));
+    if(p<1){requestAnimationFrame(step)}else{el.textContent=String(end)}};
+   requestAnimationFrame(step);
+  });
+ }
+ window.scrollTo(0,0);
+ // move focus to the <main> container on a route CHANGE (not first paint) so keyboard/AT users
+ // aren't dropped to <body> when the old focused element is destroyed (a11y focus management).
+ if(window.__navd){const m=document.getElementById("main");if(m)m.focus({preventScroll:true})}
+ window.__navd=true;
+}
+window.addEventListener("hashchange",render);
+bridge();render();
+setInterval(()=>{document.getElementById("clock").textContent=new Date().toTimeString().slice(0,8)},1000);
+
+/* \\u2318K command palette. The index is built from cards/repos/pages/verbs ONLY \\u2014 KEY rows
+   are deliberately EXCLUDED (systems R2-8: a searchable key-name set is a leak of its own), and no
+   config value or secret ever enters it. Every entry is an E()-escaped label; navigation reuses
+   the safe location.hash assignment (never eval). */
+function buildIndex(){
+ const ix=NAV.map(([id,label])=>["page",label.replace("&amp;","&"),"#/"+id]);
+ (DATA.board||[]).forEach(b=>ix.push(["card",b.slug+" \\u2014 "+(b.title||""),"#/card/"+b.wid]));
+ ((DATA.repos_est||{}).repos||[]).forEach(r=>ix.push(["repo",r.name,"#/repo/"+r.name]));
+ [["verb","ratchet doctor",null],["verb","ratchet chain",null],["verb","ratchet-maintain snapshot --all",null],
+  ["verb","ratchet-budget report --period day",null],["verb","~/.ratchet/bin/ratchet-daily.sh",null]]
+  .forEach(v=>ix.push(v));
+ return ix;
+}
+const pal=document.getElementById("pal"),pin=document.getElementById("palin"),pres=document.getElementById("palres");
+let IX=[],sel=0,hits=[],total=0,palPrev=null;
+const palIsOpen=()=>pal.classList.contains("open");
+function palOpen(){IX=buildIndex();palPrev=document.activeElement;pal.hidden=false;pal.classList.add("open");
+ pin.setAttribute("aria-expanded","true");pin.value="";palFilter("");pin.focus()}
+function palHide(){pal.classList.remove("open");pal.hidden=true;
+ pin.setAttribute("aria-expanded","false");pin.setAttribute("aria-activedescendant","")}
+function palClose(){palHide();
+ // restore focus to the trigger (or wherever it was) so keyboard users aren't dropped to <body>
+ const t=palPrev&&document.body.contains(palPrev)?palPrev:document.getElementById("kbtn");if(t)t.focus()}
+function palFilter(q){q=q.toLowerCase();const all=IX.filter(i=>i[1].toLowerCase().includes(q));total=all.length;
+ hits=all.slice(0,9);sel=0;palPaint()}
+function palPaint(){
+ pres.innerHTML=hits.map((h,i)=>`<button class="ri" id="ri-${i}" role="option" aria-selected="${i===sel}" data-i="${i}">${pill(h[0]==="card"?"ember":h[0]==="verb"?"unk":h[0]==="repo"?"blue":"ok",h[0])} ${E(h[1])}<span class="k">${h[2]?"\\u21b5 open":"\\u21b5 copy"}</span></button>`).join("")
+  +(total>hits.length?`<div class="empty" style="padding:.5rem 1rem;font-size:.7rem">+ ${total-hits.length} more \\u2014 refine your search</div>`:"")
+  ||`<div class="empty" style="padding:.8rem 1rem">no matches</div>`;
+ pres.querySelectorAll(".ri").forEach(b=>b.addEventListener("click",()=>palGo(+b.dataset.i)));
+ pin.setAttribute("aria-activedescendant",hits.length?("ri-"+sel):"");
+ const s=pres.querySelector('.ri[aria-selected="true"]');if(s)s.scrollIntoView({block:"nearest"})}
+function palGo(i){const h=hits[i];if(!h)return;
+ if(h[2]){const same=location.hash===h[2];palHide();location.hash=h[2];  // nav: render() focuses
+  if(same){const m=document.getElementById("main");if(m)m.focus()}}        // main on hashchange;
+ else{navigator.clipboard&&navigator.clipboard.writeText(h[1]);palClose()}}// same-hash → do it here
+pin.addEventListener("input",()=>palFilter(pin.value));
+document.getElementById("kbtn").addEventListener("click",palOpen);
+document.getElementById("skip").addEventListener("click",()=>{const m=document.getElementById("main");if(m)m.focus()});
+document.addEventListener("keydown",e=>{
+ if((e.metaKey||e.ctrlKey)&&e.key==="k"){e.preventDefault();palIsOpen()?palClose():palOpen()}
+ else if(palIsOpen()){
+  if(e.key==="Escape"){e.preventDefault();palClose()}
+  else if(e.key==="Tab"){e.preventDefault();pin.focus()}  // focus trap: keep the modal contained
+  else if(e.key==="ArrowDown"){e.preventDefault();sel=Math.min(sel+1,hits.length-1);palPaint()}
+  else if(e.key==="ArrowUp"){e.preventDefault();sel=Math.max(sel-1,0);palPaint()}
+  else if(e.key==="Enter"){e.preventDefault();palGo(sel)}}});
+pal.addEventListener("click",e=>{if(e.target===pal)palClose()});
+"""
+
+
+def render_shell(data):
+    """The single served document: shell + server-computed DATA + client hash router.
+    The JSON payload is armored for <script> embedding: every '<' is emitted as \\u003c
+    (kills </script> breakout and <!-- ambiguity in one move) and ensure_ascii keeps
+    U+2028/U+2029 as escapes. Client renderers still E() every field before innerHTML."""
+    payload = json.dumps(data).replace("<", "\\u003c")
+    return ("<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>RATCHET GLASS — mission control</title>"
+            f"<style>{GLASS_CSS}</style></head><body>"
+            "<button class='skip' id='skip'>skip to content</button>"
+            "<header class='bridge'>"
+            "<div class='mark'><svg width='20' height='20' viewBox='0 0 24 24' fill='none' aria-hidden='true'>"
+            "<circle cx='12' cy='12' r='8.5' stroke='#ff7a29' stroke-width='2.4' stroke-dasharray='4.1 2.2'/>"
+            "<circle cx='12' cy='12' r='3.2' fill='#ff7a29'/></svg>"
+            "RATCHET <span class='g'>// GLASS</span></div>"
+            "<div id='bstats' style='display:flex;gap:1.1rem;align-items:center'></div>"
+            "<div class='spacer'></div>"
+            "<div class='bstat' id='bspend'></div>"
+            "<button class='kbtn' id='kbtn' aria-haspopup='dialog' aria-controls='pal'>⌘K jump</button>"
+            "<div class='clock' id='clock' aria-hidden='true'>--:--:--</div>"
+            "</header>"
+            "<nav class='side' id='side' aria-label='Primary'></nav>"
+            "<main class='main' id='main' tabindex='-1'></main>"
+            "<div class='pal' id='pal' role='dialog' aria-modal='true' aria-label='Command palette' hidden><div class='palbox'>"
+            "<input id='palin' placeholder='jump to a card, repo, page, or verb…' autocomplete='off'"
+            " role='combobox' aria-expanded='false' aria-controls='palres' aria-label='Jump to a card, repo, page, or verb'>"
+            "<div class='res' id='palres' role='listbox' aria-label='Results'></div></div></div>"
+            "<span style='display:none'>every action is a CLI verb; this page renders state and will never mutate it (§9)</span>"
+            f"<script>const DATA = {payload};{GLASS_JS}</script>"
+            "</body></html>")
+
+
+# ---------- the server (GET only, exact 404s, threaded, 10s handler timeout) ----------
+
+def serve(argv):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    try:
+        port = int(argv[argv.index("--port") + 1]) if "--port" in argv else 8721
+        if not 0 <= port <= 65535:
+            raise ValueError(port)
+    except (IndexError, ValueError):
+        sys.stderr.write("glass: --port needs a number in 0..65535\n")
+        return 2
+    bind = "127.0.0.1"
+    if "--bind-all" in argv:
+        # everything the kernel knows becomes network-readable. Demand a deliberate ack so a
+        # copy-pasted --bind-all can't quietly expose the workspace (kernel council HIGH).
+        if os.environ.get("RATCHET_GLASS_EXPOSE") != "1":
+            print("glass: REFUSE — --bind-all exposes all workspace state to your whole network.\n"
+                  "  If you truly mean it: RATCHET_GLASS_EXPOSE=1 ratchet-glass serve --bind-all", flush=True)
+            return 2
+        bind = "0.0.0.0"
+        print("glass: WARNING — serving beyond localhost; everything on it is readable on your network", flush=True)
+
+    K.GLASS_RO = True  # kernel loaders now RAISE on corrupt state instead of quarantining (§9)
+    global GLASS_EXPOSED
+    GLASS_EXPOSED = bind != "127.0.0.1"  # keys page refuses even presence when network-exposed
+
+    import html as _html
+
+    def esc(x):
+        return _html.escape(str(x))
+
+    class Glass(BaseHTTPRequestHandler):
+        # NO do_POST / do_PUT / do_DELETE / do_PATCH exists here — BaseHTTPRequestHandler
+        # answers 501 for any method without a handler; the selftest proves it at runtime
+        # and scans this source to prove it stays true by construction.
+        timeout = 10  # a stalled client (slow-loris) holds ONE thread ≤10s, never the server
+
+        def log_message(self, *a):
+            pass
+
+        def _send(self, body, code=200):
+            data = body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            # no external loads ever; inline style+script are the whole app (systems audit §9-7)
+            self.send_header("Content-Security-Policy",
+                             "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            try:
+                pth = self.path.split("?")[0]
+                if pth == "/":
+                    self._send(render_shell(build_data()))
+                    return
+                if pth == "/favicon.ico":
+                    self._send("", 404)  # browsers ask; it isn't state — quietly no
+                    return
+                # EXACT matches only: every page is a hash route under /; any other server
+                # path is a 404, never a silent home render (kernel audit: typos looked real)
+                self._send("<!doctype html><html><head><meta charset='utf-8'>"
+                           "<title>404</title></head><body style='background:#0a0c0e;color:#7f8d99;"
+                           "font-family:monospace;padding:2rem'>404 — the glass serves one document at "
+                           "<a style='color:#ff7a29' href='/'>/</a>; pages are hash routes (#/board, #/card/&lt;id&gt;)"
+                           "</body></html>", 404)
+            except BaseException as e:
+                # BaseException: a sys.exit deep in a loader raises SystemExit, which a handler
+                # thread would swallow SILENTLY. Render the failure; a 500 is honest (kernel catch).
+                try:
+                    self._send("<!doctype html><html><head><meta charset='utf-8'><title>error</title>"
+                               "</head><body style='background:#0a0c0e;color:#ff5d5d;font-family:monospace;"
+                               f"padding:2rem'>render error — {esc(type(e).__name__)}: {esc(e)}"
+                               "<p style='color:#7f8d99'>page views mutate nothing (§9) — fix the file "
+                               "with a terminal verb and reload</p></body></html>", 500)
+                except OSError:
+                    pass  # client already gone
+
+    srv = ThreadingHTTPServer((bind, port), Glass)
+    srv.daemon_threads = True  # ^C wins even with a connection mid-stall
+    print(f"glass: http://{bind}:{srv.server_port}/ — read-only; ^C stops it", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nglass: stopped")
+    return 0
+
+
+# ---------- selftest (prove the fences catch their targets, hermetically) ----------
+
+def selftest(argv):
+    import hashlib as _hl, shutil as _sh, socket as _sock, subprocess as _sp, tempfile as _tf
+    import re as _re_mod
+    import urllib.error, urllib.request
+    results = []
+
+    def check(label, okv, detail=""):
+        results.append((label, bool(okv), str(detail)[:200]))
+
+    def _dirhash(d):
+        h = _hl.sha1()
+        for root, _, files in os.walk(d):
+            for fn in sorted(files):
+                p = os.path.join(root, fn)
+                h.update(os.path.relpath(p, d).encode())
+                with open(p, "rb") as f:
+                    h.update(f.read())
+        return h.hexdigest()
+
+    def _env(home, extra_env=None):
+        env = dict(os.environ, RATCHET_HOME=home)
+        for k in ("WL_HOME", "RATCHET_MANIFEST", "WL_MANIFEST", "RATCHET_GLASS_EXPOSE"):
+            env.pop(k, None)
+        if extra_env:
+            env.update(extra_env)
+        return env
+
+    def _spawn(home, extra=(), extra_env=None):
+        p = _sp.Popen([sys.executable, os.path.abspath(__file__), "serve", "--port", "0", *extra],
+                      env=_env(home, extra_env), stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
+        for _ in range(5):  # --bind-all prints a WARNING line before the http announce
+            line = p.stdout.readline()
+            if "http://" in line:
+                try:
+                    return p, int(line.rsplit(":", 1)[1].split("/")[0])
+                except (IndexError, ValueError):
+                    break
+            if not line:
+                break
+        p.terminate()
+        raise RuntimeError("serve did not announce a port: %r" % line)
+
+    def _get(port, path, timeout=5):
+        try:
+            r = urllib.request.urlopen("http://127.0.0.1:%d%s" % (port, path), timeout=timeout)
+            return r.getcode(), r.read().decode(errors="replace"), dict(r.headers)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(errors="replace"), dict(e.headers)
+
+    def _stop(p):
+        p.terminate()
+        try:
+            p.wait(timeout=10)
+        except _sp.TimeoutExpired:
+            p.kill()
+            p.wait(timeout=5)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    old = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 6 * 86400))
+    old40 = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 40 * 86400))
+
+    # 1. GET-only by construction: this source defines no mutating handler
+    src = open(os.path.abspath(__file__)).read()
+    check("GET-only by construction (no mutating handlers in source)",
+          all(("def do_%s" % v) not in src for v in ("POST", "PUT", "DELETE", "PATCH")), "source scan")
+
+    # 2-4. empty home: shell 200 + markers, POST 501, unknown routes 404, NOTHING written
+    tmp = _tf.mkdtemp(prefix="glass-st-")
+    try:
+        p, port = _spawn(tmp)
+        try:
+            code, body, hdrs = _get(port, "/")
+            check("shell 200 on empty home with §9 markers",
+                  code == 200 and "RATCHET" in body and "never mutate" in body, "code=%s" % code)
+            check("shell carries the 9-page sidebar (hash router)",
+                  all(('["%s",' % s) in body and ("%s()" % s) in body
+                      for s in ("overview", "board", "agents", "overwatch", "github", "repos",
+                                "budget", "history", "config")),
+                  body[:80])
+            check("shell teaches verbs in empty states (take hint in payload)",
+                  "ratchet take" in body, "")
+            # a11y contract (WCAG): landmarks + skip link + focusable main + visible focus
+            check("a11y: header/nav/main landmarks + labeled nav + skip link + focusable main",
+                  "<header class='bridge'>" in body and "aria-label='Primary'" in body
+                  and "id='main' tabindex='-1'" in body and "class='skip'" in body, "")
+            check("a11y: a global :focus-visible outline exists (keyboard focus is visible)",
+                  ":focus-visible{outline" in body, "")
+            check("a11y: ⌘K palette is a proper dialog (role=dialog, aria-modal, combobox input)",
+                  "role='dialog' aria-modal='true'" in body and "role='combobox'" in body
+                  and "role='listbox'" in body, "")
+            check("a11y: palette keyboard model present (focus trap, restore, +N more, aria state)",
+                  'e.key==="Tab"' in body and "palPrev" in body and "aria-activedescendant" in body
+                  and "refine your search" in body and 'setAttribute("aria-expanded"' in body, "")
+            check("a11y: nav rows carry a REAL inner <a> link (native keyboard, table role=row kept)",
+                  'href="#/repo/${E(r.name)}"' in body and 'target="_blank" rel="noopener"' in body
+                  and 'role="link"' not in body and 'e.target.closest("a")' in body, "")
+            check("a11y: --faint text color meets WCAG AA on the dark theme (bumped from #54626e)",
+                  "--faint:#7a8792" in body and "--faint:#54626e" not in body, "")
+            check("a11y: decorative SVG icons are aria-hidden (shell + client-rendered sidebar)",
+                  "aria-hidden='true'" in body and 'aria-hidden="true"' in body, "")
+            check("CSP forbids external loads",
+                  "default-src 'none'" in hdrs.get("Content-Security-Policy", ""),
+                  hdrs.get("Content-Security-Policy", "MISSING"))
+            # liveness motion (card glass-liveness-motion): tasteful, state-conveying animation that
+            # is ALWAYS opt-out under prefers-reduced-motion and never a network poll (§9 read-only).
+            check("motion: avatars convey liveness (breathe=alive, alarm=needs-you) via keyframes",
+                  "@keyframes breathe" in body and "@keyframes alarm" in body
+                  and ".ava.beat{" in body and ".ava.alarm{" in body, "")
+            check("motion: an in-progress gate station shimmers + the header carries a heartbeat",
+                  "@keyframes shimmer" in body and 'class="hbeat"' in body and "@keyframes hb{" in body
+                  # the gradient + animation must be COLOCATED on the winning .step.running rule, and
+                  # the old solid-bg rule (which silently clobbered the shimmer via the background
+                  # shorthand) must be GONE — a substring check that catches the cascade-dead defect.
+                  and ".step.running{background:linear-gradient" in body
+                  and "animation:shimmer 1.6s" in body
+                  and ".step.running{background:rgba(240,184,62,.1)}" not in body, "")
+            check("motion: counts ease up at render-time only (data-count + rAF), never a poll",
+                  "data-count=" in body and "requestAnimationFrame(step)" in body
+                  and "fetch(" not in body and "XMLHttpRequest" not in body, "")
+            check("motion: EVERY animation respects prefers-reduced-motion (CSS guard + JS check)",
+                  ".ava.beat,.ava.alarm,.step.running,.hbeat,.panel{animation:none}" in body
+                  and 'matchMedia("(prefers-reduced-motion:reduce)")' in body, "")
+            check("motion is state-bound: SILENT alarms / live breathes / stuck lane alarms",
+                  't.liveness==="SILENT"?"alarm":t.liveness==="ok"?"beat"' in body
+                  and 'b.stuck?"alarm":b.quiet?"":"beat"' in body, "")
+            post_code = 0
+            try:
+                urllib.request.urlopen(urllib.request.Request(
+                    "http://127.0.0.1:%d/" % port, data=b"x=1", method="POST"), timeout=5)
+            except urllib.error.HTTPError as e:
+                post_code = e.code
+            check("POST refused with 501", post_code == 501, "post=%s" % post_code)
+            n1, _, _ = _get(port, "/no-such-route")
+            n2, _, _ = _get(port, "/card/abc123")          # old server route — pages are hash routes now
+            n3, _, _ = _get(port, "/trainsgarbage")
+            fav, _, _ = _get(port, "/favicon.ico")
+            check("unknown server routes 404 (exact match, home only)",
+                  n1 == 404 and n2 == 404 and n3 == 404 and fav == 404,
+                  "codes=%s/%s/%s/fav=%s" % (n1, n2, n3, fav))
+            check("empty home: GitHub + Repos render empty, not crashed",
+                  '"github": []' in body and '"repos": []' in body, "")
+            wrote = os.listdir(tmp)
+            check("empty home: page views created NOTHING", not wrote, "wrote=%s" % wrote)
+        finally:
+            _stop(p)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 4b. estate pages: a SEEDED manifest + doctor-report + maintain snapshots + checknames +
+    # governance files render real rows (BRIEF: assert rendered rows against a seeded fixture),
+    # and seeding them writes NOTHING on a page view
+    tmp = _tf.mkdtemp(prefix="glass-est-")
+    try:
+        st = os.path.join(tmp, "state")
+        cache = os.path.join(st, ".cache")
+        os.makedirs(cache)
+        repodir = os.path.join(tmp, "repo-demo")
+        os.makedirs(os.path.join(repodir, ".github"))
+        for gf in ("SECURITY.md", "CODEOWNERS", "CONTRIBUTING.md"):
+            open(os.path.join(repodir, gf), "w").write("x")
+        open(os.path.join(repodir, ".github", "PULL_REQUEST_TEMPLATE.md"), "w").write("x")
+        json.dump({"schema_version": 1, "repos": {
+            "demo": {
+                "path": repodir, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+                "gh_login": "acme", "worktree_root": os.path.join(tmp, "wt"),
+                "remotes": {"origin": "https://github.com/acme/demo.git"}},
+            "x'y": {  # hostile repo NAME (quote) — the row nav must not become executable JS
+                "path": os.path.join(tmp, "nope"), "mainline": "main", "fetch_remote": "origin",
+                "push_remote": "origin", "gh_login": "acme", "worktree_root": os.path.join(tmp, "wt"),
+                "remotes": {"origin": "https://github.com/acme/x-y.git"}}}},
+            open(os.path.join(st, "workspace.json"), "w"))
+        json.dump({"repos": {"demo": {"SYNC": {"status": "OK", "msg": "synced", "ts": now},
+                                      "CLEAN": {"status": "WARN", "msg": "3 dirty", "ts": now}}},
+                   "ts": now, "summary": {"RED": 0, "UNKNOWN": 0, "WARN": 1, "OK": 1, "SKIP": 0}},
+                  open(os.path.join(st, "doctor-report.json"), "w"))
+        hostile_iss = "</script><script>x</script>"
+        json.dump({"ts": now, "issues": {"total": 12,
+                    "counts": {"triage": 5, "active": 4, "blocked": 2, "stale": 1},
+                    "top": {"triage": [{"number": 101, "title": hostile_iss, "age_days": 3}]}},
+                   "prs": {"total": 3, "counts": {"review": 1, "ready": 1, "checks-fail": 1,
+                           "draft": 0, "stale": 0}, "top": {}}},
+                  open(os.path.join(cache, "triage-demo.json"), "w"))
+        json.dump({"ts": old, "issues": {"total": 10, "counts": {}, "top": {}},
+                   "prs": {"total": 3, "counts": {}, "top": {}}},
+                  open(os.path.join(cache, "triage-demo.prev.json"), "w"))
+        json.dump(["selftest", "build"], open(os.path.join(cache, "checknames-acme_demo.json"), "w"))
+        before = _dirhash(tmp)
+        p, port = _spawn(tmp)
+        try:
+            code, body, _ = _get(port, "/")
+            _get(port, "/")
+            import re as _re2
+            D = json.loads(_re2.search(r"const DATA = (.*?);\n", body).group(1))
+            gh = {g["repo"]: g for g in D.get("github", [])}
+            check("GitHub board renders the snapshot (total + counts + delta vs .prev)",
+                  gh.get("demo", {}).get("issues", {}).get("total") == 12
+                  and gh["demo"]["issues"]["counts"]["triage"] == 5
+                  and gh["demo"]["issues"]["delta"] == 2, str(gh.get("demo", {}).get("issues")))
+            check("GitHub snapshot never triggers a live gh call (renders cache only)",
+                  gh.get("demo", {}).get("age") is not None, "")
+            check("hostile issue title from the snapshot cannot break out",
+                  "</script><script>x" not in body and hostile_iss.replace("<", "\\u003c") in body, "")
+            # the real fence: row navigation must NOT be an inline onclick — E() decodes &#39;
+            # back to ' before an inline handler runs, so a quote in a repo name/remote would
+            # execute. After the fix there are zero inline handlers; nav rides a data-* attr.
+            check("no inline onclick handlers exist (E-inside-JS XSS class eliminated)",
+                  "onclick=" not in body, "")
+            # nav rides an E()-escaped data-* ATTRIBUTE (safe: read via getAttribute, assigned to
+            # location.hash / passed to window.open — never compiled as JS). The shipped client
+            # source proves the safe pattern; the hostile repo name flows only as inert data.
+            check("row nav uses an E-escaped data-attribute, not a JS-context interpolation",
+                  'data-nav="#/repo/${E(r.name)}"' in body and 'data-ext="${E(u)}"' in body, "")
+            check("hostile repo name flows only as inert data in the payload",
+                  "\"x'y\"" in body, "")
+            check("governance for an absent working tree reads UNKNOWN, not all-missing",
+                  {r["name"]: r for r in D["repos_est"]["repos"]}.get("x'y", {}).get("gov_known") is False, "")
+            re_ = {r["name"]: r for r in D.get("repos_est", {}).get("repos", [])}
+            check("Repos health = worst doctor check (OK+WARN -> WARN)",
+                  re_.get("demo", {}).get("health") == "WARN"
+                  and D["repos_est"]["doctor_run"] is True, str(re_.get("demo", {}).get("health")))
+            check("Repos protection from checknames cache (no gh call)",
+                  re_.get("demo", {}).get("protect") == ["selftest", "build"], str(re_.get("demo", {}).get("protect")))
+            check("Repos governance presence is a local stat (all 4 present -> none missing)",
+                  re_.get("demo", {}).get("gov_missing") == [], str(re_.get("demo", {}).get("gov_missing")))
+        finally:
+            _stop(p)
+        after = _dirhash(tmp)
+        check("estate page views wrote NOTHING (manifest/doctor/snapshot read-only)",
+              before == after, "before=%s after=%s" % (before[:8], after[:8]))
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 4c. Budget robustness + fail-closed HONESTY on a big/hostile ledger (review MAJORs):
+    # a non-dict line and a NaN cost must NOT 500; a ledger past the tail bound must render
+    # scanned_all=False AND suppress the green "nothing escaped" all-clear; a no-ts unpriced
+    # call is COUNTED toward the fail-closed surface (oracle parity), never silently dropped.
+    tmp = _tf.mkdtemp(prefix="glass-bud-")
+    try:
+        st = os.path.join(tmp, "state")
+        os.makedirs(st)
+        pad = json.dumps({"ts": now, "event": "exec", "cli": "claude", "p": "x" * 70}) + "\n"
+        lines = [pad * 7000]                                    # > 512KB → tail-bounded
+        lines.append("null\n")                                  # non-dict line → must not 500
+        lines.append('{"ts": "%s", "cost_usd": NaN}\n' % now)   # NaN cost → must not 500 (round pct)
+        lines.append(json.dumps({"ts": now, "event": "think", "model": "glm"}) + "\n")   # UNPRICED, dated
+        lines.append(json.dumps({"event": "think", "model": "kimi"}) + "\n")             # UNPRICED, NO ts
+        open(os.path.join(st, "telemetry.jsonl"), "w").write("".join(lines))
+        p, port = _spawn(tmp)
+        try:
+            code, body, _ = _get(port, "/")
+        finally:
+            _stop(p)
+        check("big/hostile ledger (non-dict + NaN) renders 200, never 500", code == 200, "code=%s" % code)
+        import re as _re3
+        m = _re3.search(r"const DATA = (.*?);\n", body)
+        Db = json.loads(m.group(1)) if m else {}
+        tb = Db.get("budget", {}).get("tail", {})
+        check("ledger past the tail bound reports scanned_all=False",
+              tb.get("scanned_all") is False, str(tb.get("scanned_all")))
+        check("no-ts UNPRICED call is counted toward the fail-closed surface (oracle parity)",
+              tb.get("n_unpriced", 0) >= 2, str(tb.get("n_unpriced")))
+        check("NaN cost never poisons the exact metered headline (finite, no 500)",
+              "nan" not in Db.get("budget", {}).get("metered_today", "").lower(), "")
+        check("client suppresses the green UNPRICED all-clear when the tail is truncated",
+              "t.scanned_all?pill(" in body, "")
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 4d. Config & Keys (stage 5): config renders from config.json with source; keys are
+    # PRESENCE-ONLY over a fixed allowlist; a planted secret VALUE must never appear anywhere in
+    # the served document or the ⌘K index; the palette index EXCLUDES key rows.
+    _SECRET_RE = _re_mod.compile(
+        r"sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+        r"|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}")
+    fake_gh = "ghp_" + "A" * 36
+    fake_flux = "sk-flux-" + "B" * 32
+    tmp = _tf.mkdtemp(prefix="glass-key-")
+    try:
+        st = os.path.join(tmp, "state")
+        cache = os.path.join(st, ".cache")
+        os.makedirs(cache)
+        cfg_secret = "ghp_" + "C" * 36  # a token a user might paste into a policy field by mistake
+        json.dump({"schema_version": 1, "premium_policy": "ask",
+                   "budgets": {"per_day_usd": 9.0}, "contract_hosts": ["https://x/" + cfg_secret]},
+                  open(os.path.join(st, "config.json"), "w"))
+        json.dump({"ok": True, "verdict": "ok", "detail": "n", "ts": now, "lines": 3},
+                  open(os.path.join(cache, "chain-verdict.json"), "w"))
+        planted = {"GH_TOKEN": fake_gh, "FLUX_TEST_KEY": fake_flux}
+        p, port = _spawn(tmp, extra_env=planted)
+        try:
+            code, body, _ = _get(port, "/")
+        finally:
+            _stop(p)
+        import re as _re4
+        D = json.loads(_re4.search(r"const DATA = (.*?);\n", body).group(1))
+        cfg = D.get("config", {})
+        check("config renders from config.json with source=file + a change verb",
+              cfg.get("sourced") is True
+              and any(r["key"] == "premium_policy" and r["source"] == "file" and r["verb"]
+                      for r in cfg.get("rows", [])), "")
+        krows = D.get("keys", {}).get("keys", [])
+        gh_row = next((k for k in krows if "gh keychain" in k["name"]), {})
+        flux_row = next((k for k in krows if "FLUX_TEST_KEY" in k["name"]), {})
+        check("keys are presence-only: planted GH + FLUX read PRESENT/WORKS, never a value",
+              gh_row.get("state") in ("present", "works")
+              and flux_row.get("state") in ("present", "works"),
+              str({k["name"]: k["state"] for k in krows}))
+        check("NO secret-shaped string appears anywhere in the served document",
+              not _SECRET_RE.search(body) and fake_gh not in body and fake_flux not in body
+              and cfg_secret not in body, "")
+        check("a secret in a config VALUE is redacted, never rendered verbatim",
+              any(r["key"] == "contract_hosts" for r in cfg.get("rows", []))
+              and cfg_secret not in json.dumps(cfg.get("rows", [])), "")
+        bi0 = body.find("function buildIndex(){")
+        bi1 = body.find("function palOpen", bi0) if bi0 >= 0 else -1
+        bidx = body[bi0:bi1] if bi0 >= 0 and bi1 > bi0 else ""
+        check("the command palette index is built from cards/repos/pages/verbs only, never keys",
+              bool(bidx) and "DATA.board" in bidx and "repos_est" in bidx
+              and "keys" not in bidx.lower(), "")
+        check("what-is-working is derived (chain row present from the seeded verdict)",
+              any(w["name"] == "telemetry chain" for w in D.get("working", [])), "")
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 4e. network-exposed: the keys page withholds even the presence NAME set (R2-8). Bind 0.0.0.0
+    # with the exposure ack; connect via localhost (0.0.0.0 accepts it) and assert redaction.
+    tmp = _tf.mkdtemp(prefix="glass-exp-")
+    try:
+        os.makedirs(os.path.join(tmp, "state"))
+        p, port = _spawn(tmp, extra=("--bind-all",),
+                         extra_env={"RATCHET_GLASS_EXPOSE": "1", "FLUX_TEST_KEY": fake_flux})
+        try:
+            code, body, _ = _get(port, "/")
+        finally:
+            _stop(p)
+        D = json.loads(_re_mod.search(r"const DATA = (.*?);\n", body).group(1))
+        check("network-exposed: keys page withholds the presence set (exposed=True, no rows)",
+              D.get("keys", {}).get("exposed") is True and not D.get("keys", {}).get("keys"), "")
+        check("network-exposed: no allowlist key NAME leaks into the payload",
+              "FLUX_TEST_KEY" not in body and fake_flux not in body, "")
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 5-8. populated home: renders real state; stays BYTE-IDENTICAL (cursor never advances);
+    # spend counts appended tail without persisting; hostile titles never escape escaping
+    tmp = _tf.mkdtemp(prefix="glass-st2-")
+    try:
+        st = os.path.join(tmp, "state")
+        cache = os.path.join(st, ".cache")
+        os.makedirs(cache)
+        hostile = "</script><script>alert(1)</script><!--\u2028pwn"
+        wts = {}
+        for w in ("lander", "failer", "ghostpid", "corpsefail", "badjournal", "alicewt", "stalewt"):  # /w/b stays GONE
+            wts[w] = os.path.join(tmp, "wt-" + w)
+            os.makedirs(wts[w])
+        json.dump({"schema_version": 1, "cards": [
+            {"work_id": "aaaa111111", "slug": "live-card", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "open", "agent": "alice", "created": old, "worktree": wts["alicewt"]},
+            {"work_id": "bbbb222222", "slug": hostile, "title": hostile, "repo": "ratchet",
+             "risk": "normal", "status": "open", "agent": "x", "created": old, "worktree": "/w/b"},
+            {"work_id": "cccc333333", "slug": "lander", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landing", "agent": "x", "created": now, "worktree": wts["lander"]},
+            {"work_id": "dddd444444", "slug": "failer", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landing", "agent": "x", "created": now, "worktree": wts["failer"]},
+            {"work_id": "eeee555555", "slug": "ghostpid", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landing", "agent": "x", "created": now, "worktree": wts["ghostpid"]},
+            {"work_id": "ffff666666", "slug": "shipped", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landed", "agent": "x", "created": old, "worktree": "/w/f"},
+            {"work_id": "9999000000", "slug": "gone-card", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "abandoned", "agent": "x", "created": old, "worktree": "/w/g"},
+            {"work_id": "hhhh777777", "slug": "old-ship", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landed", "agent": "x", "created": old40,
+             "land_ts": old40, "worktree": "/w/h"},
+            {"work_id": "iiii888888", "slug": "corpsefail", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landing", "agent": "x", "created": now, "worktree": wts["corpsefail"]},
+            {"work_id": "jjjj999999", "slug": "badjournal", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landing", "agent": "x", "created": now, "worktree": wts["badjournal"]},
+            {"work_id": "../../seekrit", "slug": "traverse", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "open", "agent": "", "created": now, "worktree": "/w/k"},
+            {"work_id": "kkkk101010", "slug": "stalelane", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "open", "agent": "stalebob", "created": old, "worktree": wts["stalewt"]},
+            {"work_id": "mmmm121212", "slug": "bobship", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landed", "agent": "stalebob", "created": now,
+             "land_ts": now, "worktree": "/w/m"},
+            {"work_id": "llll111111", "slug": "carolship", "title": "t", "repo": "ratchet",
+             "risk": "normal", "status": "landed", "agent": "carol", "created": old40,
+             "land_ts": old40, "worktree": "/w/l"}]},
+            open(os.path.join(st, "workcards.json"), "w"))
+        # land journals: an HONEST skip, an abort at suite, and a dead-pid interruption
+        json.dump({"schema_version": 1, "runs": [
+            {"run_id": "r1", "verb": "land", "ref": os.path.realpath(wts["lander"]), "pid": 1,
+             "pid_start": "x", "started": now, "done": True, "outcome": "ok",
+             "steps": [{"label": "rebase", "ts": now}, {"label": "suite:skipped", "ts": now},
+                       {"label": "review", "ts": now}, {"label": "pushed", "ts": now},
+                       {"label": "pr", "ts": now}]},
+            {"run_id": "r2", "verb": "land", "ref": os.path.realpath(wts["failer"]), "pid": 1,
+             "pid_start": "x", "started": now, "done": True, "outcome": "aborted:suite",
+             "steps": [{"label": "rebase", "ts": now}]},
+            {"run_id": "r3", "verb": "land", "ref": os.path.realpath(wts["ghostpid"]), "pid": 99999999,
+             "pid_start": "nope", "started": now, "done": False,
+             "steps": [{"label": "rebase", "ts": now}, {"label": "suite", "ts": now}]},
+            {"run_id": "r4", "verb": "land", "ref": os.path.realpath(wts["corpsefail"]), "pid": 1,
+             "pid_start": "x", "started": now, "done": True, "outcome": "aborted:corpus",
+             "steps": [{"label": "rebase", "ts": now}, {"label": "suite", "ts": now}]},
+            {"run_id": "r5", "verb": "land", "ref": os.path.realpath(wts["badjournal"]),
+             "pid": "evil", "pid_start": 7, "started": now, "done": False, "steps": None}]},
+            open(os.path.join(st, "journals.json"), "w"))
+        # flight recordings: suite-tail with HOSTILE content; a landed card with diff facts
+        # and 50 events (the payload must cap at 40)
+        rd = os.path.join(st, "recordings", "dddd444444")
+        os.makedirs(rd)
+        open(os.path.join(rd, "events.jsonl"), "w").write(
+            json.dumps({"ts": now, "agent": "x", "event": "land_suite_fail", "exit": 2,
+                        "tail": "suite-tail.txt"}) + "\n")
+        open(os.path.join(rd, "suite-tail.txt"), "w").write(
+            "FAIL test_x\n" + hostile + "\nexit 2\n")
+        rf = os.path.join(st, "recordings", "ffff666666")
+        os.makedirs(rf)
+        with open(os.path.join(rf, "events.jsonl"), "w") as fh:
+            for i in range(47):
+                fh.write(json.dumps({"ts": now, "agent": "x", "event": "progress", "i": i}) + "\n")
+            fh.write(json.dumps({"ts": now, "agent": "x", "event": "land_gate",
+                                 "repo": "ratchet", "branch": "feat/shipped"}) + "\n")
+            fh.write(json.dumps({"ts": now, "agent": "x", "event": "diff_facts", "files": ["a.py"],
+                                 "n_files": 3, "plus": 119, "minus": 4,
+                                 "subjects": ["feat: thing", hostile]}) + "\n")
+            fh.write(json.dumps({"ts": now, "agent": "x", "event": "land_pass",
+                                 "repo": "ratchet", "branch": "feat/shipped"}) + "\n")
+        # a file OUTSIDE the recordings tree that a traversal work_id would reach
+        sk = os.path.join(st, "seekrit")
+        os.makedirs(sk)
+        open(os.path.join(sk, "suite-tail.txt"), "w").write("TOP SECRET DATA")
+        open(os.path.join(sk, "events.jsonl"), "w").write(
+            json.dumps({"ts": now, "event": "leak", "secret": "TOP SECRET DATA"}) + "\n")
+        # an OLD landed card's recording: must NOT be loaded (archived bound)
+        rh = os.path.join(st, "recordings", "hhhh777777")
+        os.makedirs(rh)
+        open(os.path.join(rh, "events.jsonl"), "w").write(
+            json.dumps({"ts": old40, "event": "take", "note": "ARCHIVED-EVENT-MARKER"}) + "\n")
+        rk = os.path.join(st, "recordings", "kkkk101010")  # stalebob active lane — STALE
+        os.makedirs(rk)
+        open(os.path.join(rk, "events.jsonl"), "w").write(
+            json.dumps({"ts": old40, "agent": "stalebob", "event": "progress"}) + "\n")
+        rm = os.path.join(st, "recordings", "mmmm121212")  # stalebob landed lane — FRESH
+        os.makedirs(rm)
+        open(os.path.join(rm, "events.jsonl"), "w").write(
+            json.dumps({"ts": now, "agent": "stalebob", "event": "land_pass",
+                        "repo": "ratchet", "branch": "feat/bobship"}) + "\n")
+        json.dump({"trains": [{"name": "rc-1", "ts": now, "status": "cut",
+                               "snapshot": "abc123def456", "refs": {}}]},
+                  open(os.path.join(st, "release-trains.json"), "w"))
+        json.dump({"cards": [{"id": "corp1", "repo": "ratchet", "title": "a bug that escaped once"}]},
+                  open(os.path.join(st, "regression-corpus.json"), "w"))
+        ev1 = json.dumps({"ts": now, "event": "take", "work_id": "aaaa111111", "cost_usd": 1.0}) + "\n"
+        ev2 = json.dumps({"ts": now, "event": "land_gate_pass", "work_id": hostile, "cost_usd": 0.25}) + "\n"
+        ev3 = json.dumps({"ts": now, "event": "think", "model": "glm"}) + "\n"  # usage, no price -> UNPRICED
+        ev4 = json.dumps({"ts": now, "event": "exec", "cli": "claude"}) + "\n"  # sub-CLI lane -> FLAT
+        open(os.path.join(st, "telemetry.jsonl"), "w").write(ev1 + ev2 + ev3 + ev4)
+        # cursor covers only ev1: the page must ADD ev2's 0.25 in memory and NOT move the cursor
+        json.dump({"offset": len(ev1.encode()), "day": now[:10], "day_sum": 1.0},
+                  open(os.path.join(cache, "spend-cursor.json"), "w"))
+        json.dump({"ok": True, "verdict": "ok", "detail": "n entries", "ts": now, "lines": 2},
+                  open(os.path.join(cache, "chain-verdict.json"), "w"))
+        json.dump({"repos": {"ratchet": {"SYNC": {"status": "OK", "msg": "", "ts": now}}},
+                   "ts": now, "summary": {"RED": 0, "UNKNOWN": 0, "WARN": 0, "OK": 1, "SKIP": 0}},
+                  open(os.path.join(st, "doctor-report.json"), "w"))
+        json.dump({"ts": now, "issues": {"total": 7}, "prs": {"total": 2}},
+                  open(os.path.join(cache, "triage-demo.json"), "w"))
+        # config.json PRESENT and UNWITNESSED: this reproduced the review CRITICAL — the
+        # kernel's config_load used to witness it on first load (state write + ledger append)
+        # from a page view. The byte-identical check below is the fence.
+        json.dump({"schema_version": 1, "budgets": {"per_day_usd": 7.5}},
+                  open(os.path.join(st, "config.json"), "w"))
+        # Overwatch fleet board: seed teams across every liveness class the sweep contract defines,
+        # under RATCHET_HOME/overwatch (the spawn sets RATCHET_HOME=tmp). build_overwatch CALLS the
+        # kernel's own read-only classifiers (K._ow_liveness/_teams/_load_flag), so this proves the
+        # glass reads the REAL contract — not a reimplementation that could drift. A live-waker
+        # 'blocked' needs a real claimant pid, so that state is covered by the kernel's own selftest.
+        import hashlib as _hl
+        owh = os.path.join(tmp, "overwatch")
+        nowe = time.time()
+
+        def _seedteam(name, hb=None, flag=None, awaiting=None, brief="brief\n",
+                      status="## latest line\nbody\n"):
+            td = os.path.join(owh, name)
+            wk = os.path.join(td, ".waker")
+            os.makedirs(wk)
+            open(os.path.join(td, "BRIEF.md"), "w").write(brief)
+            open(os.path.join(td, "STATUS.md"), "w").write(status)
+            if hb is not None:
+                json.dump(hb, open(os.path.join(wk, "heartbeat.json"), "w"))
+            if flag is not None:
+                json.dump(flag, open(os.path.join(wk, "flag.json"), "w"))
+            if awaiting is not None:
+                json.dump(awaiting, open(os.path.join(wk, "awaiting.json"), "w"))
+        _seedteam("aa-ok", hb={"ts": nowe, "state": "working"})
+        _seedteam("bb-silent", hb={"ts": nowe - 2000, "state": "working"})  # stale >900s -> SILENT
+        _seedteam("cc-idle", hb={"ts": nowe, "state": "idle-empty"})
+        _seedteam("dd-unknown")  # never emitted a heartbeat -> unknown, NEVER faked live
+        eeb = "the ee brief body\n"  # OPEN ask (flag baseline == current sha) + DEAD waker -> SILENT
+        _seedteam("ee-open", brief=eeb,
+                  flag={"flag_id": "f1", "brief_sha": _hl.sha256(eeb.encode()).hexdigest(),
+                        "question": hostile, "created": now},
+                  awaiting={"pid": 999999999, "pid_start": "nope"})
+        _seedteam("ff-answered", hb={"ts": nowe, "state": "working"},  # brief moved past flag -> answered
+                  flag={"flag_id": "f2", "brief_sha": "stale-sha", "question": "old q", "created": now})
+        # gg-blocked: OPEN ask with a LIVE waker (this very process is the claimant) -> 'blocked',
+        # not SILENT. Deterministic via the kernel's own pid-claimant binding (os.getpid + its ps
+        # start), the same way the kernel selftest seeds a live waker.
+        ggb = "the gg brief body\n"
+        _seedteam("gg-blocked", brief=ggb,
+                  flag={"flag_id": "f3", "brief_sha": _hl.sha256(ggb.encode()).hexdigest(),
+                        "question": "waiting on a decision", "created": now},
+                  awaiting={"pid": os.getpid(), "pid_start": K.pid_start(os.getpid())})
+        before = _dirhash(tmp)
+        p, port = _spawn(tmp)
+        try:
+            code, body, _ = _get(port, "/")
+            _get(port, "/")  # render twice — a second view must also write nothing
+            check("populated home renders 200", code == 200, "code=%s" % code)
+            check("stale open card surfaces in needs-you payload",
+                  "live-card" in body and "stale-card" in body, "")
+            check("landing lanes counted in bridge payload", '"landing": 5' in body, "")
+            check("chain verdict rendered from cache (never re-verified on view)",
+                  "chain intact" in body, "")
+            check("doctor report drives the ground badge", "ground green" in body, "")
+            check("issues tile sums the maintain snapshot", '"total": 7' in body, "")
+            check("spend = cursor sum + appended tail (1.0 + 0.25)", "1.2500" in body, "")
+            check("config.json read (cap 7.50 rendered) without being witnessed",
+                  '"cap": "7.50"' in body, "")
+            check("hostile title cannot break out of the payload",
+                  "</script><script>" not in body and "<!--" not in body
+                  and "\u2028" not in body and "alert(1)" in body,  # present, but only armored
+                  "")
+            import re as _re
+            m = _re.search(r"const DATA = (.*?);\n", body)
+            D = json.loads(m.group(1)) if m else {}
+            cards = D.get("cards", {})
+            g_skip = {g["st"]: g["state"] for g in (cards.get("cccc333333", {}).get("gate") or [])}
+            check("stepper honesty: suite:skipped renders SKIPPED, never a pass",
+                  g_skip.get("suite") == "skipped" and g_skip.get("rebase") == "done"
+                  and g_skip.get("push") == "done", str(g_skip))
+            g_fail = {g["st"]: g["state"] for g in (cards.get("dddd444444", {}).get("gate") or [])}
+            check("stepper marks the aborted station FAILED with its recorded reason",
+                  g_fail.get("suite") == "failed" and g_fail.get("rebase") == "done"
+                  and g_fail.get("push") == "pending"
+                  and cards.get("dddd444444", {}).get("gate_why") == "suite", str(g_fail))
+            check("failing suite tail reaches the card (armored, not raw)",
+                  "FAIL test_x" in (cards.get("dddd444444", {}).get("suite_tail") or ""), "")
+            g_int = {g["st"]: g["state"] for g in (cards.get("eeee555555", {}).get("gate") or [])}
+            check("dead-pid land run renders STALLED at the next station",
+                  g_int.get("review") == "stalled" and g_int.get("suite") == "done"
+                  and cards.get("eeee555555", {}).get("interrupted") is True, str(g_int))
+            bd = {b["wid"]: b for b in D.get("board", [])}
+            check("gone worktree flags the board chip stuck",
+                  bd.get("bbbb222222", {}).get("stuck") is True
+                  and bd.get("bbbb222222", {}).get("stuck_why") == "worktree gone", "")
+            check("landed card carries diff facts + result + today grouping",
+                  cards.get("ffff666666", {}).get("diff", {}).get("plus") == 119
+                  and "landed" in (cards.get("ffff666666", {}).get("result") or "")
+                  and bd.get("ffff666666", {}).get("landed_day") == D.get("today"), "")
+            check("timeline capped at 40 of 50 events (count honest)",
+                  cards.get("ffff666666", {}).get("n_events") == 50
+                  and len(cards.get("ffff666666", {}).get("tl") or []) == 40, "")
+            check("abandoned cards collapse to a count, off the board",
+                  D.get("abandoned") == 1 and "9999000000" not in bd, "")
+            check("cut release train reaches the CUT column data",
+                  D.get("trains") and D["trains"][0]["name"] == "rc-1"
+                  and D["trains"][0]["status"] == "cut", "")
+            g_corp = {g["st"]: g["state"] for g in (cards.get("iiii888888", {}).get("gate") or [])}
+            check("corpus abort cannot evaporate: a station renders FAILED with the reason",
+                  g_corp.get("suite") == "done" and g_corp.get("review") == "failed"
+                  and cards.get("iiii888888", {}).get("gate_why") == "corpus", str(g_corp))
+            g_bad = {g["st"]: g["state"] for g in (cards.get("jjjj999999", {}).get("gate") or [])}
+            check("hostile journal types (steps null, pid str) degrade, never 500",
+                  code == 200 and g_bad.get("rebase") == "stalled"
+                  and cards.get("jjjj999999", {}).get("interrupted") is True, str(g_bad))
+            check("traversal work_id cannot read outside the recordings tree",
+                  "TOP SECRET" not in body
+                  and any(b["slug"] == "traverse" for b in D.get("board", [])), "")
+            check("old landed card is ARCHIVED: on the board, recording not read",
+                  cards.get("hhhh777777", {}).get("archived") is True
+                  and cards.get("hhhh777777", {}).get("tl") == []
+                  and "ARCHIVED-EVENT-MARKER" not in body
+                  and any(b["wid"] == "hhhh777777" for b in D.get("board", [])), "")
+            check("copy verbs shell-quote agent-written values (shq present)",
+                  "shq(" in body and "shq(id)" in body, "")
+            byag = {a["agent"]: a for a in D.get("agents", [])}
+            check("agent 'x' aggregates lands + stuck lanes across the card set",
+                  byag.get("x", {}).get("lands") == 2 and byag.get("x", {}).get("stuck", 0) >= 3
+                  and byag["x"]["state"] == "stuck", str(byag.get("x")))
+            check("empty agent field renders as UNATTRIBUTED (never blank/faked)",
+                  byag.get("unattributed", {}).get("unattributed") is True
+                  and byag["unattributed"]["active"] >= 1, str(byag.get("unattributed")))
+            check("a stuck agent sorts to the top of the track record",
+                  D.get("agents") and D["agents"][0]["agent"] == "x", "")
+            check("distinct agents are kept separate (alice on shift, not merged into x)",
+                  "alice" in byag and byag["alice"]["active"] >= 1
+                  and byag["alice"]["state"] in ("on-shift", "quiet"), str(byag.get("alice")))
+            check("Agents payload invents no model/spend/cost fields (honest gaps only)",
+                  all(all(k not in a for k in ("model", "cli", "spend", "cost", "price"))
+                      for a in D.get("agents", [])) and len(D.get("agents", [])) > 0, "")
+            # Live Agents Dashboard (mandate card 1): the on-shift panel is lane-centric — each
+            # active worktree is an agent-at-work carrying the human title, inline gate progress,
+            # tenure + honest last-activity. All derived from state the page already ships; the
+            # missing true-liveness datum is named, not faked.
+            check("live dashboard: lane card surfaces the human title (escaped), slug fallback",
+                  'class="lane"' in body and "E(b.title||b.slug)" in body, "")
+            check("live dashboard: inline gate progress reuses the card's own honest gate array",
+                  "DATA.cards[b.wid]" in body and 'class="steps mini"' in body, "")
+            # aaaa111111 is a real open/no-run lane, so an on-shift row DOES reach miniGate's
+            # empty-gate branch — which routes to the 'working' span, never a faked stepper. The
+            # harness can't run the client JS, so we assert the branch is wired AND the fixture
+            # exercises it (honest about what this proves), not a bare always-true constant.
+            check("live dashboard: an open no-run lane exists and routes to 'working', not a stepper",
+                  bd.get("aaaa111111", {}).get("status") == "open"
+                  and not cards.get("aaaa111111", {}).get("gate")
+                  and "!g||!g.length" in body and "pre-land" in body,
+                  str(bd.get("aaaa111111", {}).get("status")))
+            check("live dashboard: tenure + last-activity shown, labeled honestly (no 'last seen alive')",
+                  "b.age" in body and "last activity" in body and "not a heartbeat" in body
+                  and "last event" not in body, "")
+            check("live dashboard: the missing heartbeat is a named honest gap (FRICTION #12)",
+                  "true liveness / heartbeat" in body and "FRICTION #12" in body, "")
+            # Overwatch fleet board (bound to the real `overwatch sweep` contract, in-process).
+            ow = D.get("overwatch", {})
+            owt = {t["team"]: t for t in ow.get("teams", [])}
+            check("overwatch: reads the REAL sweep contract via the kernel's read-only classifiers",
+                  ow.get("summary", {}).get("total") == 7
+                  and owt.get("aa-ok", {}).get("liveness") == "ok"
+                  and owt.get("cc-idle", {}).get("liveness") == "idle-empty", str(ow.get("summary")))
+            check("overwatch: a stale heartbeat is SILENT (the alarm), never silently 'ok'",
+                  owt.get("bb-silent", {}).get("liveness") == "SILENT"
+                  and ow.get("summary", {}).get("silent") == 2, str(owt.get("bb-silent")))
+            check("overwatch: an open ask with a DEAD waker is SILENT + counted as needs-you",
+                  owt.get("ee-open", {}).get("liveness") == "SILENT"
+                  and owt.get("ee-open", {}).get("flag_state") == "open"
+                  and ow.get("summary", {}).get("needs") == 2, str(owt.get("ee-open")))
+            check("overwatch: an open ask with a LIVE waker is 'blocked' (waiting), not SILENT",
+                  owt.get("gg-blocked", {}).get("liveness") == "blocked"
+                  and owt.get("gg-blocked", {}).get("flag_state") == "open"
+                  and ow.get("summary", {}).get("blocked") == 1, str(owt.get("gg-blocked")))
+            check("overwatch: a never-beat team is 'unknown', NEVER faked live",
+                  owt.get("dd-unknown", {}).get("liveness") == "unknown"
+                  and "no heartbeat" in owt.get("dd-unknown", {}).get("why", ""),
+                  str(owt.get("dd-unknown")))
+            check("overwatch: an answered flag reads 'answered', not a standing alarm",
+                  owt.get("ff-answered", {}).get("flag_state") == "answered"
+                  and owt.get("ff-answered", {}).get("liveness") == "ok", str(owt.get("ff-answered")))
+            check("overwatch: attention-first order floats a SILENT team to the top",
+                  bool(ow.get("teams")) and ow["teams"][0]["liveness"] == "SILENT", "")
+            check("overwatch: a hostile ask question is armored + shows a copyable respond verb",
+                  "</script><script>" not in body and "alert(1)" in body
+                  and "ratchet overwatch respond" in body, "")
+            check("overwatch: page binds to the sweep contract + carries the honest 'unknown' gap",
+                  "ratchet overwatch sweep" in body and "never faked live" in body, "")
+            bud = D.get("budget", {})
+            check("Budget: metered today is the exact cursor sum (1.25), cap from config (7.50)",
+                  bud.get("metered_today") == "1.2500" and bud.get("cap") == "7.50", str(bud.get("metered_today")))
+            check("Budget: tail classifies metered / UNPRICED / flat (2 / 1 / 1)",
+                  bud.get("tail", {}).get("n_metered") == 2 and bud["tail"]["n_unpriced"] == 1
+                  and bud["tail"]["n_flat"] == 1, str(bud.get("tail")))
+            check("Budget: UNPRICED>0 surfaces as the fail-closed signal",
+                  bud["tail"]["n_unpriced"] == 1 and bud.get("chain_ok") is True, "")
+            check("Budget: per-card metered split from the tail (aaaa111111 -> $1.00)",
+                  any(r["card"] == "aaaa111111" and r["usd"] == "1.0000"
+                      for r in bud.get("tail", {}).get("by_card", [])), str(bud.get("tail", {}).get("by_card")))
+            hist = D.get("history", {})
+            check("History: whitelisted telemetry stream, newest first",
+                  any(r["ev"] == "land_gate_pass" for r in hist.get("stream", []))
+                  and hist["stream"][0]["ev"] in ("exec", "think", "land_gate_pass", "take")
+                  and all(r["ev"] != "exec" for r in hist.get("stream", [])), str(len(hist.get("stream", []))))
+            check("History: regression corpus rendered (1 card)",
+                  hist.get("corpus_n") == 1 and hist.get("corpus", [{}])[0].get("id") == "corp1", str(hist.get("corpus_n")))
+            check("active-lane liveness ignores fresh landed cards (no masking)",
+                  byag.get("stalebob", {}).get("state") == "quiet", str(byag.get("stalebob")))
+            check("an agent with only landed cards is idle, not on-shift",
+                  byag.get("carol", {}).get("state") == "idle"
+                  and byag.get("carol", {}).get("lands", 0) >= 1, str(byag.get("carol")))
+        finally:
+            _stop(p)
+        after = _dirhash(tmp)
+        check("populated home stays BYTE-IDENTICAL after views (cursor not advanced)",
+              before == after, "before=%s after=%s" % (before[:8], after[:8]))
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 9. corrupt state on a page view: 500 naming the file, file NOT quarantine-renamed
+    tmp = _tf.mkdtemp(prefix="glass-st3-")
+    try:
+        st = os.path.join(tmp, "state")
+        os.makedirs(st)
+        cj = os.path.join(st, "workcards.json")
+        open(cj, "w").write("{ not json")
+        p, port = _spawn(tmp)
+        try:
+            code, body, _ = _get(port, "/")
+        finally:
+            _stop(p)
+        renamed = [f for f in os.listdir(st) if f.startswith("workcards.json.corrupt")]
+        check("corrupt state renders 500 naming the file", code == 500 and "CORRUPT" in body,
+              "code=%s" % code)
+        check("corrupt file NOT renamed by a page view (§9)",
+              os.path.exists(cj) and not renamed, "renamed=%s" % renamed)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 9a2. workcards.json with a VALID-JSON wrong shape (list / keyless) degrades to an
+    # empty board — one bad file must never dark the whole control plane with a 500
+    for shape in ("[]", '{"schema_version": 1}'):
+        tmp = _tf.mkdtemp(prefix="glass-st3a-")
+        try:
+            os.makedirs(os.path.join(tmp, "state"))
+            open(os.path.join(tmp, "state", "workcards.json"), "w").write(shape)
+            p, port = _spawn(tmp)
+            try:
+                code, body, _ = _get(port, "/")
+            finally:
+                _stop(p)
+            check("wrong-shaped workcards.json (%s) renders 200, empty board" % shape[:12],
+                  code == 200 and '"board": []' in body, "code=%s" % code)
+        finally:
+            _sh.rmtree(tmp, ignore_errors=True)
+
+    # 9b. INVALID config.json on a page view: an honest 500 (not a silently-dead thread — the
+    # kernel used to sys.exit here, which a handler thread swallows), and NO witness write
+    tmp = _tf.mkdtemp(prefix="glass-st3b-")
+    try:
+        st = os.path.join(tmp, "state")
+        os.makedirs(st)
+        open(os.path.join(st, "config.json"), "w").write("{ not json")
+        p, port = _spawn(tmp)
+        try:
+            code, body, _ = _get(port, "/")
+        finally:
+            _stop(p)
+        check("invalid config.json renders 500 (never a silent empty reply)",
+              code == 500 and "INVALID JSON" in body, "code=%s" % code)
+        check("invalid config not witnessed by a page view",
+              not os.path.exists(os.path.join(st, "config-witness.json")), "")
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 10. slow-loris: an idle connection must not serialize the glass (threaded + timeout)
+    tmp = _tf.mkdtemp(prefix="glass-st4-")
+    try:
+        p, port = _spawn(tmp)
+        try:
+            lor = _sock.socket()
+            lor.connect(("127.0.0.1", port))
+            try:
+                code2, body2, _ = _get(port, "/")
+            finally:
+                lor.close()
+            check("slow-loris: second request unblocked", code2 == 200 and "RATCHET" in body2,
+                  "code=%s" % code2)
+        finally:
+            _stop(p)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 11. --bind-all refuses without the explicit exposure ack
+    tmp = _tf.mkdtemp(prefix="glass-st5-")
+    try:
+        r = _sp.run([sys.executable, os.path.abspath(__file__), "serve", "--bind-all", "--port", "0"],
+                    env=_env(tmp), capture_output=True, text=True, timeout=30)
+        check("--bind-all refuses without RATCHET_GLASS_EXPOSE=1",
+              r.returncode == 2 and "REFUSE" in r.stdout, "rc=%s" % r.returncode)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 12. unknown verb → usage, nonzero; malformed --port → graceful refusal, not a traceback
+    r = _sp.run([sys.executable, os.path.abspath(__file__), "bogus"],
+                capture_output=True, text=True, timeout=30)
+    check("unknown verb exits nonzero with usage", r.returncode != 0 and "usage" in r.stderr,
+          "rc=%s" % r.returncode)
+    for bad in (["--port"], ["--port", "abc"], ["--port", "99999999"]):
+        r = _sp.run([sys.executable, os.path.abspath(__file__), "serve", *bad],
+                    capture_output=True, text=True, timeout=30)
+        if not (r.returncode == 2 and "--port" in r.stderr):
+            break
+    check("malformed --port refused gracefully (missing / non-numeric / out of range)",
+          r.returncode == 2 and "--port" in r.stderr, "rc=%s err=%s" % (r.returncode, r.stderr[:60]))
+
+    # ---- perf card glass-perf-readonce: PROVE read-once (fewer reads, IDENTICAL output) ----
+    # The sub-builders used to each re-open the multi-MB ledger / re-load config / re-stat the
+    # cache dir. build_data now reads every SHARED source ONCE (_read_ctx) and injects it. This
+    # proves BOTH halves of the contract in-process on a seeded home: (a) each shared reader fires
+    # EXACTLY ONCE per page view (was 2-3x each), and (b) the injected sub-builders are byte-
+    # identical to the self-reading (ctx=None) path — same rendered output, fewer reads.
+    tmp = _tf.mkdtemp(prefix="glass-readonce-")
+    _save = (K.WL_HOME, K.CACHE_DIR, K.MANIFEST_PATH, K.GLASS_RO)
+    _o = {"tev": _tail_events, "spend": spend_today_ro, "man": _manifest_ro,
+          "cfg": K.config_load, "cache": K.cache_get_stale, "sload": K.state_load, "ls": os.listdir}
+    g = sys.modules[__name__]
+    try:
+        st = os.path.join(tmp, "state"); cache = os.path.join(st, ".cache"); os.makedirs(cache)
+        open(os.path.join(st, "telemetry.jsonl"), "w").write(
+            json.dumps({"ts": now, "event": "land_gate_pass", "repo": "demo", "cost_usd": 0.12}) + "\n"
+            + json.dumps({"ts": now, "event": "take", "slug": "x", "cost_usd": 0.03}) + "\n")
+        json.dump({"ok": True, "verdict": "ok", "detail": "intact", "ts": now, "lines": 2},
+                  open(os.path.join(cache, "chain-verdict.json"), "w"))
+        json.dump({"ts": now, "issues": {"total": 4, "counts": {}, "top": {}},
+                   "prs": {"total": 0, "counts": {}, "top": {}}},
+                  open(os.path.join(cache, "triage-demo.json"), "w"))
+        json.dump(["selftest"], open(os.path.join(cache, "checknames-acme_demo.json"), "w"))
+        json.dump({"repos": {"demo": {"OK": {"status": "OK", "msg": "", "ts": now}}}, "ts": now,
+                   "summary": {"OK": 1, "RED": 0, "WARN": 0, "UNKNOWN": 0, "SKIP": 0}},
+                  open(os.path.join(st, "doctor-report.json"), "w"))
+        json.dump({"repos": {"demo": {"path": tmp, "mainline": "main", "push_remote": "origin",
+                   "remotes": {"origin": "https://github.com/acme/demo.git"}}}},
+                  open(os.path.join(st, "workspace.json"), "w"))
+        K.WL_HOME, K.CACHE_DIR, K.MANIFEST_PATH = tmp, cache, os.path.join(st, "workspace.json")
+        K.GLASS_RO = True  # page-view semantics: loaders don't witness-write (would perturb the ledger)
+
+        counts = {"tev": 0, "spend": 0, "man": 0, "cfg": 0, "chain": 0, "doctor": 0, "cachels": 0}
+        def _c(key, fn):
+            def w(*a, **k):
+                counts[key] += 1; return fn(*a, **k)
+            return w
+        g._tail_events, g.spend_today_ro, g._manifest_ro = _c("tev", _o["tev"]), _c("spend", _o["spend"]), _c("man", _o["man"])
+        K.config_load = _c("cfg", _o["cfg"])
+        def _cache_w(key, *a, **k):
+            if key == "chain-verdict":
+                counts["chain"] += 1
+            return _o["cache"](key, *a, **k)
+        def _sload_w(name, *a, **k):
+            if name == "doctor-report.json":
+                counts["doctor"] += 1
+            return _o["sload"](name, *a, **k)
+        _cabs = os.path.abspath(cache)
+        def _ls_w(p, *a, **k):
+            if os.path.abspath(p) == _cabs:
+                counts["cachels"] += 1
+            return _o["ls"](p, *a, **k)
+        K.cache_get_stale, K.state_load, os.listdir = _cache_w, _sload_w, _ls_w
+
+        D = build_data()
+        reads = dict(counts)  # FREEZE before the identity self-reads below re-invoke the readers
+        check("perf: every shared source read EXACTLY ONCE per page view (was 2-3x each)",
+              all(v == 1 for v in reads.values()), "counts=%s (want all 1)" % reads)
+        # output-identical: injected blocks == self-reading (ctx=None) builders. These four carry
+        # no _age_str, so static-state re-reads compare EXACTLY (github/repos/working age fields are
+        # covered by the fixture selftests above + the count proof).
+        check("perf: injected sub-builders byte-identical to self-read (ctx=None) path",
+              D["budget"] == build_budget() and D["history"] == build_history()
+              and D["config"] == build_config() and D["keys"] == build_keys(),
+              "budget/history/config/keys identical under injection")
+    finally:
+        g._tail_events, g.spend_today_ro, g._manifest_ro = _o["tev"], _o["spend"], _o["man"]
+        K.config_load, K.cache_get_stale, K.state_load, os.listdir = _o["cfg"], _o["cache"], _o["sload"], _o["ls"]
+        K.WL_HOME, K.CACHE_DIR, K.MANIFEST_PATH, K.GLASS_RO = _save
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        sys.stdout.write(("  OK    " if okv else "  FAIL  ") + label
+                         + ("" if okv else "  -- " + detail) + "\n")
+    sys.stdout.write("\n  ratchet-glass selftest: %d/%d\n" % (passed, len(results)))
+    return 0 if passed == len(results) else 2
+
+
+_USAGE = ("usage:\n"
+          "  ratchet-glass serve [--port N] [--bind-all]\n"
+          "  ratchet-glass selftest\n")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        sys.stdout.write(_USAGE)
+        return 0
+    verb, rest = argv[0], argv[1:]
+    if verb == "serve":
+        return serve(rest)
+    if verb == "selftest":
+        return selftest(rest)
+    if verb in ("-h", "--help"):
+        sys.stdout.write(_USAGE)
+        return 0
+    sys.stderr.write("ratchet-glass: unknown verb %r\n%s" % (verb, _USAGE))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

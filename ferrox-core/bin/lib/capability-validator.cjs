@@ -78,7 +78,15 @@ for (const entry of LOOP_HOST_CONTRACT) {
 
 // ─── Config-slice validation ──────────────────────────────────────────────────
 
-const VALID_CONFIG_SLICE_TYPES = new Set(['boolean', 'string', 'number', 'enum']);
+// Phase 20 plan 04 adds 'array'. `fleet.adapters` is a roster of adapter
+// identities, which is a list by nature, and the alternatives were both worse:
+// a comma separated string pushes parsing onto every reader, and omitting the
+// declaration entirely would leave a supported key undocumented in the registry
+// every install ships. The addition is a widening of an allow-list that carries
+// its own shape check below (an array default must be an array), so it adds a
+// check rather than removing one. `src/federated-config.cts:63` mirrors this set
+// and was widened in the same commit; the 2 must not drift.
+const VALID_CONFIG_SLICE_TYPES = new Set(['boolean', 'string', 'number', 'enum', 'array']);
 
 /**
  * Validate a single config-slice entry (one key's { type, default, description }).
@@ -134,6 +142,12 @@ function validateConfigSliceEntry(capId, key, slice) {
         // FIX 6a: Reject NaN and non-finite number defaults
         errors.push(
           'capability "' + capId + '" config["' + key + '"]: default for type:"number" must be a finite number (got: ' + String(def) + ')',
+        );
+      }
+    } else if (slice.type === 'array') {
+      if (!Array.isArray(def)) {
+        errors.push(
+          'capability "' + capId + '" config["' + key + '"]: default must be an array for type:"array" (got: ' + typeof def + ')',
         );
       }
     } else if (slice.type === 'enum') {
@@ -725,7 +739,10 @@ const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo', 'antigravity']);
 // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today — see
 // capabilities/qwen/capability.json's extendedHookEvents).
-const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']);
+// `UserPromptSubmit` fires on what the USER typed, before the model acts. Every
+// other event in this set fires after a decision was already made, which is why
+// the offer hook needed a new one rather than reusing an existing surface.
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart', 'UserPromptSubmit']);
 
 // ADR-1239 Phase A: hostIntegration axes (MUST stay parity-identical to HOST_INTEGRATION_AXES in src/host-integration.cts)
 const VALID_EMBEDDING_MODES   = new Set(['imperative', 'declarative']);

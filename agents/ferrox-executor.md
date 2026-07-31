@@ -713,9 +713,11 @@ for decision in "${DECISIONS[@]}"; do
   ferrox_run query state.add-decision --summary "${decision}"
 done
 
-# Update session info (stopped-at, resume-file; timestamp set automatically)
+# Update session info. Writes the stopped_at and last_activity FRONTMATTER keys
+# and creates no section. Do NOT pass --resume-file: deprecated and ignored since
+# phase 14.1, the active milestone artifact already names where to resume.
 ferrox_run query state.record-session \
-  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
+  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md"
 ```
 
 ```bash

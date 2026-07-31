@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""ratchet-kanban — a read-only GLASS view of work-card state.
+
+The board's columns ARE the card lifecycle states (pending -> open -> landing ->
+landed). It is a WINDOW, never a lever: this companion only ever READS
+workcards.json via the kernel and prints; it holds no verb that mutates state.
+That read-only guarantee is proved by the selftest (running `board` against an
+empty home writes nothing).
+
+Verbs:
+  board [--repo <name>] [--all]   render the board; --repo filters to one repo,
+                                  --all also shows terminal columns (landed/cut)
+  selftest                        hermetic proofs of grouping, filtering,
+                                  read-only-ness, and robustness
+"""
+import importlib.machinery, importlib.util
+import json, os, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel",
+        importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+K = _kernel()
+
+# Active columns, in lifecycle order. Each is (status_key, header).
+ACTIVE_COLUMNS = [
+    ("pending", "PENDING"),
+    ("open",    "OPEN"),
+    ("landing", "LANDING"),
+]
+# Terminal states — hidden unless --all. `landed`/`closed` mean merged.
+TERMINAL_COLUMNS = [
+    ("landed",    "LANDED"),
+    ("cut",       "CUT"),
+    ("abandoned", "ABANDONED"),
+]
+_TERMINAL = {k for k, _ in TERMINAL_COLUMNS} | {"closed"}
+_CELLW = 22          # content width of a column
+_GUTTER = "  "       # always ≥2 spaces between columns so cells never merge
+
+
+def _age_str(created):
+    """Compact age from an ISO timestamp; '' if unparseable/missing."""
+    if not created:
+        return ""
+    try:
+        t = time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError):
+        return ""
+    secs = max(0, time.time() - t)
+    if secs < 3600:
+        return "%dm" % int(secs // 60)
+    if secs < 86400:
+        return "%dh" % int(secs // 3600)
+    return "%dd" % int(secs // 86400)
+
+
+def _clean(s):
+    """Strip C0/C1 control bytes so adversary-written card fields can't inject
+    terminal escapes into the glass. (The board is trusted human-readable
+    output over data an agent may have written.)"""
+    return "".join(ch for ch in s if ch >= " " and ch != "\x7f")
+
+
+def _cell(card):
+    """One-line label for a card, truncated to the column width. Every field is
+    coerced defensively — workcards.json is agent-populated and may carry
+    wrong-typed values."""
+    slug = _clean(str(card.get("slug") or card.get("work_id") or "?"))
+    badge = "!" if card.get("risk") == "high" else ""
+    age = _age_str(card.get("created"))
+    agent = card.get("agent")
+    agent = _clean(agent) if isinstance(agent, str) and agent and agent != "unattributed" else ""
+    tail = " ".join(x for x in (age, ("@" + agent) if agent else "") if x)
+    line = (slug + badge + (("  " + tail) if tail else "")).strip()
+    if len(line) > _CELLW:
+        line = line[:_CELLW - 1] + "…"
+    return line
+
+
+def _group(cards):
+    groups = {}
+    for c in cards:
+        if not isinstance(c, dict):
+            continue
+        status = c.get("status", "?")
+        if not isinstance(status, str):
+            status = "?"
+        groups.setdefault(status, []).append(c)
+    return groups
+
+
+def render_board(cards, repo=None, show_all=False):
+    """Pure render: list of card dicts -> board string. No IO, no state."""
+    cards = [c for c in cards if isinstance(c, dict)]
+    if repo:
+        cards = [c for c in cards if c.get("repo") == repo]
+    groups = _group(cards)
+    columns = list(ACTIVE_COLUMNS) + (list(TERMINAL_COLUMNS) if show_all else [])
+
+    scope = ("repo " + repo) if repo else "all repos"
+    active_n = sum(len(groups.get(k, [])) for k, _ in ACTIVE_COLUMNS)
+    landed_n = len(groups.get("landed", [])) + len(groups.get("closed", []))
+    out = ["RATCHET BOARD · %s" % scope, ""]
+
+    if not cards:
+        out.append("  no cards — start work with:  ratchet take <slug> --repo <repo>")
+        return "\n".join(out) + "\n"
+
+    # header + rule row
+    headers, rules, cols = [], [], []
+    for key, label in columns:
+        col_cards = groups.get(key, [])
+        headers.append(("%s (%d)" % (label, len(col_cards))).ljust(_CELLW))
+        rules.append(("─" * 14).ljust(_CELLW))
+        cols.append([_cell(c) for c in col_cards] or ["—"])
+    out.append(_GUTTER.join(headers).rstrip())
+    out.append(_GUTTER.join(rules).rstrip())
+    depth = max(len(c) for c in cols)
+    for row in range(depth):
+        line = _GUTTER.join((col[row] if row < len(col) else "").ljust(_CELLW) for col in cols)
+        out.append(line.rstrip())
+
+    out.append("")
+    foot = "%d active" % active_n
+    if landed_n:
+        foot += " · %d landed" % landed_n
+    if not show_all and (landed_n or groups.get("cut") or groups.get("abandoned")):
+        foot += "  (--all to show terminal columns)"
+    out.append(foot)
+    return "\n".join(out) + "\n"
+
+
+def _load_cards_readonly():
+    """Read cards WITHOUT the kernel's side-effecting state_load — which, on a
+    corrupt/mid-write file, MOVES it aside (os.replace) and exits. A window must
+    never mutate what it observes, so a corrupt or missing file yields an empty
+    board and touches nothing on disk."""
+    try:
+        with open(K.state_path(K.CARDS)) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict) and isinstance(data.get("cards"), list):
+        return data["cards"]
+    return []
+
+
+def board(argv):
+    repo = None
+    if "--repo" in argv:
+        i = argv.index("--repo")
+        if i + 1 < len(argv):
+            repo = argv[i + 1]
+    show_all = "--all" in argv
+    sys.stdout.write(render_board(_load_cards_readonly(), repo=repo, show_all=show_all))
+    return 0
+
+
+def selftest(argv):
+    import json as _json, subprocess as _sp, tempfile as _tf, shutil as _sh
+    results = []
+
+    def check(label, ok, detail=""):
+        results.append((label, bool(ok), str(detail)[:200]))
+
+    def card(slug, status, repo="ratchet", risk="normal", agent="sean", created=None):
+        return {"work_id": slug + "id", "slug": slug, "title": slug, "repo": repo,
+                "risk": risk, "status": status, "agent": agent,
+                "created": created or K_now(), "worktree": "/w/" + slug}
+
+    def K_now():
+        return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    sample = [
+        card("fix-login", "pending"),
+        card("wave9-kanban", "open"),
+        card("hot-patch", "open", risk="high"),
+        card("old-thing", "landing", repo="other"),
+        card("shipped-1", "landed"),
+        card("shipped-2", "closed"),
+    ]
+
+    # 1. empty -> friendly, no columns, exit-safe
+    empty = render_board([])
+    check("empty board shows the take hint", "no cards" in empty and "ratchet take" in empty, empty[:40])
+
+    # 2. cards land in the right state columns
+    b = render_board(sample)
+    check("PENDING column counts its card", "PENDING (1)" in b, b)
+    check("OPEN column counts both open cards", "OPEN (2)" in b, b)
+    check("LANDING column counts its card", "LANDING (1)" in b, b)
+    check("a pending card's slug appears", "fix-login" in b)
+    check("an open card's slug appears", "wave9-kanban" in b)
+
+    # 3. terminal cards hidden by default, shown with --all
+    check("landed card hidden by default", "shipped-1" not in b, b[-120:])
+    check("footer notes landed count", "2 landed" in b, b)
+    ball = render_board(sample, show_all=True)
+    check("--all reveals LANDED column", "LANDED (1)" in ball and "shipped-1" in ball, ball)
+
+    # 4. --repo filters to one repo
+    br = render_board(sample, repo="ratchet")
+    check("repo filter drops other repo's landing card", "old-thing" not in br, br)
+    check("repo filter keeps this repo's cards", "wave9-kanban" in br)
+    check("repo scope shown in header", "repo ratchet" in br, br.splitlines()[0])
+
+    # 5. high-risk badge
+    check("high-risk card gets a ! badge", "hot-patch!" in b, b)
+
+    # 6. robustness: cards missing optional fields / junk entries don't crash
+    junk = render_board([{"slug": "bare", "status": "open"}, "not-a-dict", {"status": "pending"}])
+    check("missing-field / non-dict cards render without crashing", "bare" in junk, junk)
+
+    # 6b. wrong-TYPED fields (workcards.json is agent-populated) don't crash
+    wt = render_board([{"slug": "aaa", "status": "open", "agent": 123},
+                       {"slug": "bbb", "status": ["open"]},
+                       {"slug": "ccc", "status": "open", "agent": ["x"]}])
+    check("wrong-typed agent/status render without crashing",
+          "RATCHET BOARD" in wt and "aaa" in wt and "ccc" in wt, wt[:60])
+
+    # 6c. escape-injection: control bytes in a field are stripped from output
+    esc = render_board([{"slug": "\x1b[31mPWN\x1b[0m", "status": "open", "agent": "x\x1by"}])
+    check("terminal escape bytes stripped from board", "\x1b" not in esc, repr(esc[:80]))
+
+    def _dirhash(d):
+        import hashlib
+        h = hashlib.sha1()
+        for root, _, files in os.walk(d):
+            for fn in sorted(files):
+                p = os.path.join(root, fn)
+                h.update(os.path.relpath(p, d).encode())
+                with open(p, "rb") as f:
+                    h.update(f.read())
+        return h.hexdigest()
+
+    def _run_board(home, extra=()):
+        env = dict(os.environ, RATCHET_HOME=home)
+        env.pop("WL_HOME", None)
+        env.pop("RATCHET_MANIFEST", None)
+        return _sp.run([sys.executable, os.path.abspath(__file__), "board", *extra],
+                       capture_output=True, text=True, env=env, timeout=30)
+
+    # 7. READ-ONLY proof #1 — empty home: board writes NO state
+    tmp = _tf.mkdtemp(prefix="kanban-st-")
+    try:
+        r = _run_board(tmp)
+        wrote = os.path.exists(os.path.join(tmp, "state", "workcards.json"))
+        check("board on empty home exits 0", r.returncode == 0, "rc=%d" % r.returncode)
+        check("board is READ-ONLY: wrote no workcards.json", not wrote, "wrote=%s" % wrote)
+        check("board on empty home prints the take hint", "ratchet take" in r.stdout, r.stdout[:40])
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 7b. READ-ONLY proof #2 — POPULATED home is left byte-identical (sound proof,
+    #     not the tautological empty-home case)
+    tmp = _tf.mkdtemp(prefix="kanban-st2-")
+    try:
+        st = os.path.join(tmp, "state")
+        os.makedirs(st)
+        with open(os.path.join(st, "workcards.json"), "w") as f:
+            _json.dump({"schema_version": 1, "cards": [card("live", "open")]}, f)
+        before = _dirhash(st)
+        r = _run_board(tmp, ["--all"])
+        after = _dirhash(st)
+        check("board on POPULATED home renders the card", "live" in r.stdout, r.stdout[:60])
+        check("board leaves populated state byte-identical (read-only)", before == after,
+              "before=%s after=%s" % (before[:8], after[:8]))
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 7c. READ-ONLY proof #3 — a CORRUPT workcards.json must NOT be moved/renamed
+    #     (the kernel's state_load moves it aside; the glass must not)
+    tmp = _tf.mkdtemp(prefix="kanban-st3-")
+    try:
+        st = os.path.join(tmp, "state")
+        os.makedirs(st)
+        cj = os.path.join(st, "workcards.json")
+        with open(cj, "w") as f:
+            f.write("{ truncated not json ")
+        r = _run_board(tmp)
+        still_there = os.path.exists(cj)
+        no_corrupt_sibling = not any(n.startswith("workcards.json.corrupt") for n in os.listdir(st))
+        check("corrupt workcards.json NOT renamed by viewing (read-only)",
+              still_there and no_corrupt_sibling, "there=%s clean=%s" % (still_there, no_corrupt_sibling))
+        check("board on corrupt state falls back to empty, exits 0", r.returncode == 0, "rc=%d" % r.returncode)
+    finally:
+        _sh.rmtree(tmp, ignore_errors=True)
+
+    # 8. unknown verb -> usage, nonzero
+    r = _sp.run([sys.executable, os.path.abspath(__file__), "bogus"], capture_output=True, text=True, timeout=30)
+    check("unknown verb exits nonzero", r.returncode != 0, "rc=%d" % r.returncode)
+
+    passed = sum(1 for _, ok, _ in results if ok)
+    for label, ok, detail in results:
+        sys.stdout.write(("  OK    " if ok else "  FAIL  ") + label + ("" if ok else "  -- " + detail) + "\n")
+    sys.stdout.write("\n  ratchet-kanban selftest: %d/%d\n" % (passed, len(results)))
+    return 0 if passed == len(results) else 2
+
+
+_USAGE = ("usage:\n"
+          "  ratchet-kanban board [--repo <name>] [--all]\n"
+          "  ratchet-kanban selftest\n")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        return board([])
+    verb, rest = argv[0], argv[1:]
+    if verb == "board":
+        return board(rest)
+    if verb == "selftest":
+        return selftest(rest)
+    if verb in ("-h", "--help"):
+        sys.stdout.write(_USAGE)
+        return 0
+    sys.stderr.write("ratchet-kanban: unknown verb %r\n%s" % (verb, _USAGE))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

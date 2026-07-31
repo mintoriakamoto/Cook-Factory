@@ -1,6 +1,6 @@
 ---
 name: ferrox:manager
-description: Interactive command center for managing multiple phases from one terminal
+description: "You are running several steps at once and want one place to watch and drive them"
 argument-hint: "[--analyze-deps]"
 allowed-tools:
   - Read

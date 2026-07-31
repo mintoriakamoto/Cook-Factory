@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""ratchet-delint — the lint/format DISPATCH layer. Detect + delegate, never reimplement.
+
+Ratchet does not ship a linter. It detects which real tools are installed for a repo's languages
+(ruff, eslint, biome, prettier, gofmt, clippy, shellcheck…) and runs them — in CHECK mode as a gate
+step, or with --fix to apply their own autofixers. A missing tool is reported, never fabricated; the
+gate only fails on a tool that is present AND unhappy. No model calls, no protected-state mutation.
+
+Verbs:
+  detect <repo>                          which linters are available / missing for the repo's langs
+  check  <repo> [--paths a,b] [--fix]    run available linters (check, or --fix); nonzero on issues
+  selftest                               hermetic proofs (mock linters — no real tool needed)
+"""
+import importlib.machinery, importlib.util
+import json, os, subprocess, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+
+K = _kernel()
+
+EXT_LANG = {".py": "python", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+            ".ts": "typescript", ".tsx": "typescript", ".go": "go", ".rs": "rust", ".sh": "shell"}
+
+# language → ordered linter candidates. First AVAILABLE one wins. `bin` is the executable probed on
+# PATH. Per-spec flags surfaced by the cross-audit:
+#   stdout_fails: tool exits 0 even when it found issues (gofmt -l lists files, rc 0) → non-empty
+#                 stdout = failure, so the gate can't false-green.
+#   path_aware:   tool accepts file paths (ruff/eslint/biome/shellcheck do; gofmt formats the whole
+#                 package and clippy rejects paths) → only forward --paths to path-aware tools.
+#   exec:         tool BUILDS/RUNS repo code (cargo clippy runs build.rs + proc-macros) → a code-exec
+#                 vector on an untrusted repo; skipped unless --trust-repo.
+# `check`/`fix` are the BASE command (no target). `target` is what to lint when --paths is absent:
+#   ["."] = whole tree (dir-lintable); "SHELL" = the repo's tracked shell files; [] = tool needs no
+#   target (clippy lints the crate). A path_aware tool with --paths uses the paths instead.
+# exec=True marks a tool that RUNS repo code — clippy builds the crate (build.rs/proc-macros); eslint
+# loads eslint.config.js (JS). Both are code-exec vectors on an untrusted repo → skipped w/o --trust-repo.
+# biome's config is declarative (biome.json), so it stays non-exec and is preferred over eslint.
+LINTERS = {
+    "python": [{"name": "ruff", "bin": "ruff", "check": ["ruff", "check"], "fix": ["ruff", "check", "--fix"], "path_aware": True, "target": ["."]}],
+    "javascript": [{"name": "biome", "bin": "biome", "check": ["biome", "lint"], "fix": ["biome", "lint", "--apply"], "path_aware": True, "target": ["."]},
+                   {"name": "eslint", "bin": "eslint", "check": ["eslint"], "fix": ["eslint", "--fix"], "path_aware": True, "target": ["."], "exec": True}],
+    "go": [{"name": "gofmt", "bin": "gofmt", "check": ["gofmt", "-l"], "fix": ["gofmt", "-w"], "stdout_fails": True, "path_aware": True, "target": ["."]}],
+    "rust": [{"name": "clippy", "bin": "cargo", "check": ["cargo", "clippy", "-q", "--", "-D", "warnings"],
+              "fix": ["cargo", "clippy", "--fix", "--allow-dirty"], "exec": True, "path_aware": False, "target": []}],
+    "shell": [{"name": "shellcheck", "bin": "shellcheck", "check": ["shellcheck"], "fix": None, "path_aware": True, "target": "SHELL"}],
+}
+LINTERS["typescript"] = LINTERS["javascript"]
+
+def _repo_root(repo):
+    m = K.load_manifest()
+    return K.expand(m["repos"][repo]["path"]) if repo in m["repos"] else None
+
+def _shebang_lang(root, f):
+    try:
+        first = open(os.path.join(root, f), encoding="utf-8", errors="replace").readline()
+    except OSError:
+        return None
+    if not first.startswith("#!"):
+        return None
+    if "python" in first: return "python"
+    if "node" in first: return "javascript"
+    if any(s in first for s in ("bash", "/sh", "zsh")): return "shell"
+    return None
+
+def _langs(root):
+    rc, out, _ = K.git(root, "ls-files", "-z")
+    langs = set()
+    if rc == 0:
+        for f in out.split("\0"):
+            if not f:
+                continue
+            lang = EXT_LANG.get(os.path.splitext(f)[1].lower())
+            if lang is None and os.path.splitext(f)[1] == "":  # extensionless CLI script → shebang
+                lang = _shebang_lang(root, f)
+            if lang:
+                langs.add(lang)
+    return langs
+
+def _available(spec):
+    # shutil.which: fast, offline, side-effect-free — no probe subprocess (gofmt -h exits nonzero;
+    # `cargo clippy --version` can download the component / hang). Present on PATH = available.
+    import shutil
+    return shutil.which(spec["bin"]) is not None
+
+def detect(root, langs=None, trust=False):
+    """Map each present language to its chosen (first available) linter, or None if none installed.
+    A tool that BUILDS/RUNS repo code (exec=True, e.g. cargo clippy) is skipped unless trust=True —
+    running it on an untrusted repo executes build.rs/proc-macros."""
+    langs = langs if langs is not None else _langs(root)
+    chosen = {}
+    for lang in sorted(langs):
+        chosen[lang] = next((s for s in LINTERS.get(lang, [])
+                             if _available(s) and (trust or not s.get("exec"))), None)
+    return chosen
+
+def _resolve_target(spec, root, paths):
+    """What to lint. --paths (for a path_aware tool) wins; else the spec's default target. 'SHELL'
+    expands to the repo's tracked shell files (.sh + extensionless shebang scripts) so a bare
+    shellcheck isn't run argumentless (which errors/hangs)."""
+    if paths and spec.get("path_aware"):
+        return list(paths)
+    t = spec.get("target")
+    if t == "SHELL":
+        rc, out, _ = K.git(root, "ls-files", "-z", "*.sh")
+        files = [f for f in out.split("\0") if f] if rc == 0 else []
+        rc2, out2, _ = K.git(root, "ls-files", "-z")
+        for f in (out2.split("\0") if rc2 == 0 else []):
+            if f and os.path.splitext(f)[1] == "" and _shebang_lang(root, f) == "shell":
+                files.append(f)
+        return files
+    return list(t) if t else []
+
+def run_one(spec, root, paths, fix):
+    mode = "fix" if fix else "check"
+    cmd = spec.get("fix") if fix else spec.get("check")
+    if not cmd:
+        return {"name": spec["name"], "mode": mode, "rc": 0, "skipped": "no fixer", "out": ""}
+    target = _resolve_target(spec, root, paths)
+    if spec.get("target") == "SHELL" and not target:
+        return {"name": spec["name"], "mode": mode, "rc": 0, "skipped": "no shell files", "out": ""}
+    argv = list(cmd) + target
+    try:
+        p = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=600,
+                           stdin=subprocess.DEVNULL)  # never inherit stdin (shellcheck would hang)
+        out = (p.stdout + p.stderr)[-4000:]
+        rc = p.returncode
+        # some tools signal "found issues" via stdout while exiting 0 (gofmt -l) → treat as failure
+        if rc == 0 and spec.get("stdout_fails") and p.stdout.strip():
+            rc = 1
+        return {"name": spec["name"], "mode": mode, "rc": rc, "out": out}
+    except subprocess.TimeoutExpired:
+        return {"name": spec["name"], "mode": mode, "rc": 124, "out": "timed out"}
+    except OSError as e:
+        return {"name": spec["name"], "mode": mode, "rc": 127, "out": str(e)}
+
+def detect_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-delint detect <repo>"); return 1
+    root = _repo_root(pos[0])
+    if root is None:
+        print(f"delint: unknown repo '{pos[0]}'"); return 2
+    trust = "--trust-repo" in args
+    chosen = detect(root, trust=trust)
+    if not chosen:
+        print(f"delint: no lintable languages detected in {pos[0]}"); return 0
+    for lang, spec in chosen.items():
+        if spec:
+            print(f"  {lang:12} → {spec['name']} (available)")
+        else:
+            # was an exec tool installed but skipped for lack of trust?
+            import shutil
+            execd = [s for s in LINTERS.get(lang, []) if s.get("exec") and shutil.which(s["bin"])]
+            if execd and not trust:
+                print(f"  {lang:12} → {execd[0]['name']} present but SKIPPED (builds repo code; pass --trust-repo)")
+            else:
+                cands = ", ".join(s["name"] for s in LINTERS.get(lang, [])) or "none known"
+                print(f"  {lang:12} → none installed (add one of: {cands})")
+    return 0
+
+def check_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-delint check <repo> [--paths a,b] [--fix]"); return 1
+    root = _repo_root(pos[0])
+    if root is None:
+        print(f"delint: unknown repo '{pos[0]}'"); return 2
+    paths = None
+    if "--paths" in args:
+        i = args.index("--paths")
+        if i + 1 >= len(args):
+            print("delint: --paths needs a value"); return 1
+        paths = [p for p in args[i + 1].split(",") if p.strip()]
+    fix = "--fix" in args
+    trust = "--trust-repo" in args
+    if fix:
+        print("delint: --fix MUTATES the working tree in place (runs each tool's autofixer) — not a gate")
+    chosen = detect(root, trust=trust)
+    ran = [(lang, s) for lang, s in chosen.items() if s]
+    if not ran:
+        missing = [lang for lang, s in chosen.items() if s is None]
+        print(f"delint: no linter installed for {missing or 'this repo'} — gate PASSES (nothing to run, honestly reported)")
+        return 0
+    results, failed = [], []
+    for lang, spec in ran:
+        r = run_one(spec, root, paths, fix)
+        results.append((lang, r))
+        status = "ok" if r["rc"] == 0 else f"rc {r['rc']}"
+        print(f"  {r['name']} ({lang}, {r['mode']}): {status}" + (f" — {r.get('skipped')}" if r.get("skipped") else ""))
+        if r["rc"] != 0:
+            failed.append(r["name"])
+    for lang, s in chosen.items():
+        if s is None:
+            print(f"  {lang}: no linter installed (skipped — reported, not failed)")
+    if failed:
+        print(f"delint: {len(failed)} linter(s) unhappy: {', '.join(failed)}")
+        return 2
+    print(f"delint: {len(ran)} linter(s) clean")
+    return 0
+
+def selftest(args):
+    """Hermetic: language detection, availability probing, and gate aggregation via MOCK linters
+    (bash true/false) — proves the dispatch layer without needing ruff/eslint/etc installed."""
+    import tempfile
+    results = []
+    with tempfile.TemporaryDirectory(prefix="rdelint-st-") as tmp:
+        root = os.path.join(tmp, "repo"); os.makedirs(os.path.join(root, "src"))
+        subprocess.run(["git", "init", "-q", "-b", "main", root])
+        subprocess.run(["git", "-C", root, "config", "user.email", "t@t"])
+        subprocess.run(["git", "-C", root, "config", "user.name", "t"])
+        open(os.path.join(root, "src", "a.py"), "w").write("x = 1\n")
+        open(os.path.join(root, "src", "b.ts"), "w").write("export const y = 2\n")
+        open(os.path.join(root, "go.mod"), "w").write("module x\n")
+        open(os.path.join(root, "main.go"), "w").write("package main\n")
+        open(os.path.join(root, "deploy"), "w").write("#!/bin/bash\necho hi\n")  # extensionless → shebang=shell
+        subprocess.run(["git", "-C", root, "add", "."]); subprocess.run(["git", "-C", root, "commit", "-qm", "c0"])
+        home = os.path.join(tmp, "home"); os.makedirs(os.path.join(home, "state"))
+        mpath = os.path.join(tmp, "m.json")
+        json.dump({"schema_version": 1, "min_wl_plane": "0", "repos": {"sb": {
+            "path": root, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "t", "forbidden_push": [], "remotes": {}, "worktree_root": os.path.join(tmp, "wts")}},
+            "noise_paths": [], "archive_dir": tmp, "fetch_ttl_seconds": 300, "sync_warn_behind": 1, "sync_red_behind": 50}, open(mpath, "w"))
+        os.environ["WL_HOME"] = home; os.environ["WL_MANIFEST"] = mpath; os.environ["WL_INSTANCE"] = "rdelint-st"
+        global K
+        K = _kernel()
+
+        results.append(("LANGS detects langs by extension AND extensionless scripts by shebang",
+                        _langs(root) == {"python", "typescript", "go", "shell"}, str(_langs(root))))
+        results.append(("REGISTRY maps langs to linters; marks code-exec (clippy/eslint) + gofmt stdout-fails",
+                        LINTERS["python"][0]["name"] == "ruff" and LINTERS["typescript"][0]["name"] == "biome"
+                        and LINTERS["rust"][0].get("exec") and LINTERS["javascript"][1].get("exec")  # eslint execs JS config
+                        and not LINTERS["javascript"][0].get("exec")  # biome (declarative) is safe, preferred
+                        and LINTERS["go"][0].get("stdout_fails"), ""))
+        # shellcheck on a repo with NO shell files is skipped (never run argumentless → no error/hang)
+        bare = os.path.join(tmp, "bare"); os.makedirs(bare); subprocess.run(["git", "init", "-q", bare])
+        results.append(("SHELLCHECK with no shell files is skipped, not run argumentless",
+                        run_one(LINTERS["shell"][0], bare, None, False).get("skipped") == "no shell files", ""))
+        # mock linters: a passing one and a failing one (via bash), proving gate aggregation
+        pass_spec = {"name": "passlint", "bin": "true", "check": ["true"]}
+        fail_spec = {"name": "faillint", "bin": "true", "check": ["bash", "-c", "exit 1"]}
+        results.append(("RUN aggregates a passing linter as rc 0",
+                        run_one(pass_spec, root, None, False)["rc"] == 0, ""))
+        results.append(("RUN surfaces a failing linter's nonzero rc (the gate signal)",
+                        run_one(fail_spec, root, None, False)["rc"] == 1, ""))
+        # cross-audit: a tool that exits 0 but PRINTS issues (gofmt -l) is a FAILURE, not a false green
+        gofmt_like = {"name": "gofmtmock", "bin": "bash", "check": ["bash", "-c", "echo main.go; exit 0"], "stdout_fails": True}
+        results.append(("RUN treats non-empty stdout as failure for exit-0 tools (gofmt false-green closed)",
+                        run_one(gofmt_like, root, None, False)["rc"] == 1, ""))
+        # cross-audit: paths are forwarded ONLY to path-aware tools (gofmt/clippy ignore/reject them)
+        arg_probe = {"name": "argmock", "bin": "bash", "check": ["bash", "-c", "test $# -eq 0 || exit 3", "--"]}
+        results.append(("RUN forwards --paths only to path-aware tools",
+                        run_one({**arg_probe, "path_aware": False}, root, ["x.py"], False)["rc"] == 0
+                        and run_one({**arg_probe, "path_aware": True}, root, ["x.py"], False)["rc"] == 3, ""))
+        # availability probe uses shutil.which (offline, no side effects) — a missing bin is unavailable
+        results.append(("PROBE a missing tool is unavailable (shutil.which, no side effects)",
+                        _available({"name": "nope", "bin": "definitely-not-a-real-binary-xyz"}) is False, ""))
+        # cross-audit: a code-EXECUTING tool (cargo clippy) is skipped unless --trust-repo
+        _real_avail = _available
+        globals()["_available"] = lambda s: True  # pretend everything is installed
+        try:
+            det_untrusted = detect(root, langs={"rust"}, trust=False)
+            det_trusted = detect(root, langs={"rust"}, trust=True)
+        finally:
+            globals()["_available"] = _real_avail
+        results.append(("DETECT skips a repo-code-executing tool unless --trust-repo",
+                        det_untrusted["rust"] is None and det_trusted["rust"] is not None
+                        and det_trusted["rust"]["name"] == "clippy", str(det_untrusted)))
+        # detect(): with a fake langs set + no real linters installed in the sandbox → all None,
+        # and that is reported (not fabricated as present)
+        det = detect(root, langs={"python"})
+        results.append(("DETECT reports an uninstalled linter as None (honest, not fabricated)",
+                        "python" in det and (det["python"] is None or det["python"]["name"] == "ruff"), str(det)))
+        # gate honesty: a repo whose only lang has no installed linter PASSES (nothing to run),
+        # never a false failure — simulate by monkeypatching _available to always-false
+        import builtins
+        orig = globals()["_available"]
+        globals()["_available"] = lambda s: False
+        try:
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc_none = check_cmd(["sb"])
+            results.append(("GATE passes (rc 0) + reports when no linter is installed, never false-fails",
+                            rc_none == 0 and "PASSES" in buf.getvalue(), buf.getvalue()[-50:]))
+            # gate fail: force a failing mock linter for python
+            globals()["_available"] = lambda s: s["name"] == "MOCKFAIL"
+            LINTERS["python"].insert(0, {"name": "MOCKFAIL", "probe": ["true"], "check": ["bash", "-c", "exit 1"]})
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc_fail = check_cmd(["sb"])
+            LINTERS["python"].pop(0)
+            results.append(("GATE fails (rc 2) when an installed linter is unhappy",
+                            rc_fail == 2 and "unhappy" in buf.getvalue(), buf.getvalue()[-50:]))
+        finally:
+            globals()["_available"] = orig
+
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        print(f"  {'OK  ' if okv else 'FAIL'}  {label}" + ("" if okv else f" — {detail}"))
+    print(f"\n  ratchet-delint selftest: {passed}/{len(results)}")
+    return 0 if passed == len(results) else 2
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    verb = {"detect": detect_cmd, "check": check_cmd, "selftest": selftest}.get(args[0])
+    if not verb:
+        print(f"ratchet-delint: unknown verb '{args[0]}'", file=sys.stderr); return 1
+    return verb(args[1:])
+
+if __name__ == "__main__":
+    sys.exit(main())

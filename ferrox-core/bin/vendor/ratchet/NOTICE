@@ -1,0 +1,41 @@
+NOTICE
+======
+
+This directory contains third party source code vendored verbatim into Ferrox
+Factory. It is not Ferrox authored code and it is not modified to satisfy this
+project's lint rules or its editorial rules.
+
+Origin
+------
+
+  repository: https://github.com/FerroxLabs/ratchet.git
+  commit:     5b4bbb4bce23ab512ead3dfadbf4328b7d6cbaee
+  captured:   2026-07-26
+
+The full lineage record, including the commit date and the verbatim commit
+subject, is in UPSTREAM-MANIFEST.json. The byte level pin for every vendored
+file is in that same manifest. See PROVENANCE.md for the complete account.
+
+Licence position, stated as a fact rather than assumed
+------------------------------------------------------
+
+The source repository ships NO licence file. There is no LICENSE, no COPYING
+and no NOTICE at its root, and its README carries no licence statement. This
+was checked directly at the pinned commit on 2026-07-26 and the result was 0
+licence artifacts of any kind.
+
+That means the standing requirement to preserve upstream licence and
+attribution cannot be satisfied literally here, because there is no licence
+artifact to preserve. It is satisfied in substance by recording the origin, the
+pinned commit and the absence itself.
+
+No licence has been invented for this code. No licence header has been written
+into any vendored file, and the token LICENSE occurs 0 times across all 15
+vendored entrypoints. Nothing has been written back into the source repository,
+which is read only for this project.
+
+Both repositories are under the same owner, FerroxLabs. Until an upstream
+licence exists, the vendored copy travels with this package and this package is
+MIT. That is a position, not a grant found upstream, and it is recorded here so
+a later reader can see exactly which part is evidence and which part is
+inference. The row tracking the gap is FF-B96 in .planning/BACKLOG.md.

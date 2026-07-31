@@ -78,9 +78,10 @@ blocks direct STATE.md writes):
    (Adjust field names to whatever pointers STATE.md exposes — the handler
    reports which fields it matched.)
 
-2. Append a Roadmap Evolution entry via the dedicated handler. It creates the
-   `### Roadmap Evolution` subsection under `## Accumulated Context` if missing
-   and dedupes identical entries:
+2. Append a Roadmap Evolution entry via the dedicated handler. Since phase 14.1
+   D3d it writes the machine-owned `## Roadmap Evolution` section of the single
+   `lifecycle: active` milestone artifact, creates that section if missing, and
+   dedupes identical entries (a replay still reports `reason: duplicate`):
 
    ```bash
    ferrox_run query state.add-roadmap-evolution \

@@ -1,6 +1,6 @@
 ---
 name: ferrox:update
-description: Update Ferrox to latest version with changelog display
+description: "You want the latest Ferrox, with the changelog shown before anything changes"
 argument-hint: "[--sync | --reapply | --next | --rc]"
 allowed-tools:
   - Read

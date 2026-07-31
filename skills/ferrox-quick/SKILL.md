@@ -1,6 +1,6 @@
 ---
 name: ferrox-quick
-description: "Execute a quick task with Ferrox guarantees (atomic commits, state tracking) but skip optional agents"
+description: "A small self contained task, with atomic commits and state tracking but no planning ceremony"
 argument-hint: "[list | status <slug> | resume <slug> | --full] [--validate] [--discuss] [--research] [task description]"
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: ferrox-review-backlog
-description: "Review and promote backlog items to active milestone"
+description: "You have parked items and want to decide which ones join the current milestone"
 allowed-tools:
   - Read
   - Write

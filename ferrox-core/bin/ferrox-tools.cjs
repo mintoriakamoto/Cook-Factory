@@ -308,6 +308,9 @@ const { routeCoverageCommand } = require('./lib/coverage-command-router.cjs');
 const { routeCoordCommand } = require('./lib/coord-command-router.cjs');
 // Phase 7 memory-layer verbs (Plan 04): three locked-name dispatchable verbs.
 const { routeMemoryCommand } = require('./lib/memory-command-router.cjs');
+// Phase 15 anti-loop verbs (Plan 02): four locked-name dispatchable verbs that
+// give the plan-01 append-only log a writer. No flag resets, forces or continues.
+const { routeAntiloopCommand } = require('./lib/antiloop-command-router.cjs');
 // Phase 5 strength-layer verbs (Plan 07): eight locked-name dispatchable verbs.
 const { routeStrengthCommand } = require('./lib/strength-command-router.cjs');
 // Phase 6 model-tiering verbs (Plan 05): three locked-name dispatchable verbs.
@@ -734,7 +737,7 @@ async function main() {
   const TOP_LEVEL_USAGE = 'Usage: ferrox-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, ' +
-    'current-timestamp, detect-custom-files, docs-init, doctor, drift-guard, effort, extract-messages, find-phase, ' +
+    'current-timestamp, detect-custom-files, docs-init, doctor, drift-guard, effort, extract-messages, find-phase, fleet, ' +
     'from-ferrox2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
@@ -1238,6 +1241,17 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
+    // ─── Phase 15 anti-loop verbs (Plan 02) ────────────────────────────────
+    // One `antiloop` family, 4 locked-name subcommands forwarding explicit
+    // flags into the hermetic Phase-15 plan-01 fold: antiloop.declare-budget,
+    // antiloop.open-round, antiloop.file-finding, antiloop.status. The router
+    // does the IO and the fold makes every decision; an unrecognised flag exits
+    // non-zero naming the accepted set, so no argument buys another round.
+    case 'antiloop': {
+      routeAntiloopCommand({ args, cwd, raw, error });
+      break;
+    }
+
     // ─── Phase 5 strength-layer verbs (Plan 07) ────────────────────────────
     // One `strength` family, eight locked-name subcommands forwarding explicit
     // flags + config-resolved store paths to the tested Phase-5 cores:
@@ -1496,9 +1510,96 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         } else {
           lines.push('shadowing: no');
         }
+        // FF-B514: doctor printed both versions but never COMPARED them, so a
+        // global/project skew (the shape of the 2026-07-23 js-yaml outage) was
+        // left for the reader to spot. State the verdict.
+        const globalVersion = fs.existsSync(globalCli) ? readVersion(globalCore) : null;
+        const projectVersion = fs.existsSync(localCli) ? readVersion(localCore) : null;
+        if (globalVersion && projectVersion) {
+          lines.push(globalVersion === projectVersion
+            ? `version skew: no (both ${globalVersion})`
+            : `version skew: YES. global ${globalVersion} vs project ${projectVersion}. Reinstall the stale copy or remove it.`);
+        }
       } else {
         lines.push('project install: no project root found from cwd');
       }
+
+      // FF-B513: doctor reported install paths and versions but never verified
+      // that the hooks those installs REGISTERED still exist on disk. An
+      // uninstall that deleted the hook files while leaving the registrations
+      // behind (FF-B511) produced projects where every tool call invoked a
+      // missing path, and doctor still reported all-clear. Defensive
+      // throughout: an absent or unparseable settings file contributes no
+      // findings and can never take doctor down, matching the neighbouring
+      // guard lines. Reports and never fails, so doctor still exits 0.
+      const hookRegistrationLines = (() => {
+        const out = [];
+        // Resolve a hook script token to an on-disk path. Quotes are stripped
+        // wholesale (the anchored form embeds them mid-token, e.g.
+        // `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.js`) and the leading shell
+        // variable is expanded.
+        const resolveHookToken = (token, projectRoot) => {
+          const bare = String(token).replace(/["']/g, '');
+          if (bare.startsWith('$CLAUDE_PROJECT_DIR')) {
+            if (!projectRoot) return null;
+            return path.join(projectRoot, bare.slice('$CLAUDE_PROJECT_DIR'.length));
+          }
+          if (bare.startsWith('$HOME')) return path.join(os.homedir(), bare.slice('$HOME'.length));
+          if (bare.startsWith('$USERPROFILE')) return path.join(os.homedir(), bare.slice('$USERPROFILE'.length));
+          if (bare.startsWith('~')) return path.join(os.homedir(), bare.slice(1));
+          return path.isAbsolute(bare) ? bare : null;
+        };
+        const scanSettingsFile = (settingsFile, projectRoot, label) => {
+          let parsed;
+          try {
+            parsed = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+          } catch {
+            return; // absent, empty or malformed — nothing to verify, not an error here
+          }
+          if (!parsed || typeof parsed !== 'object' || !parsed.hooks) return;
+          for (const [event, entries] of Object.entries(parsed.hooks)) {
+            if (!Array.isArray(entries)) continue;
+            for (const entry of entries) {
+              for (const hook of ((entry && entry.hooks) || [])) {
+                const command = hook && typeof hook.command === 'string' ? hook.command : '';
+                for (const token of command.split(/\s+/)) {
+                  if (!/hooks[/\\][^/\\]+\.(?:js|cjs|sh|cmd)$/.test(token.replace(/["']/g, ''))) continue;
+                  const resolved = resolveHookToken(token, projectRoot);
+                  if (!resolved) continue;
+                  checked++;
+                  if (!fs.existsSync(resolved)) missing.push(`${label} ${event}: ${resolved}`);
+                }
+              }
+            }
+          }
+        };
+        let checked = 0;
+        const missing = [];
+        try {
+          if (docRoot) {
+            scanSettingsFile(path.join(docRoot, '.claude', 'settings.local.json'), docRoot, 'project settings.local.json');
+            scanSettingsFile(path.join(docRoot, '.claude', 'settings.json'), docRoot, 'project settings.json');
+          }
+          scanSettingsFile(path.join(os.homedir(), '.claude', 'settings.json'), docRoot, 'global settings.json');
+        } catch (e) {
+          return [`hook registrations: unavailable (${e && e.message ? e.message.split('\n')[0] : 'unknown error'})`];
+        }
+        if (checked === 0) {
+          out.push('hook registrations: none found to verify');
+          return out;
+        }
+        if (missing.length === 0) {
+          out.push(`hook registrations: ok (${checked} verified, all present on disk)`);
+          return out;
+        }
+        out.push(`hook registrations: ${missing.length} of ${checked} point at MISSING files.`);
+        for (const m of missing) out.push(`  missing: ${m}`);
+        out.push('fix: reinstall to restore the files, or uninstall to remove the registrations:');
+        out.push('  reinstall: npx -y ferrox-factory --claude --local (use --global for the global install)');
+        out.push('  uninstall: npx -y ferrox-factory --claude --local --uninstall');
+        return out;
+      })();
+      for (const l of hookRegistrationLines) lines.push(l);
       try {
         require('./lib/gate-seal.cjs');
         lines.push('dependency self-check: ok (sealed framework loads, vendored yaml resolves)');
@@ -1512,6 +1613,24 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         } catch { return 'unavailable'; }
       })();
       lines.push(`config domain: ${domainVal}`);
+      // FF-B29 (Phase 15 SC2): 1 loop-generator config guard line. Defensive
+      // require + read so a missing built lib or an unreadable config can never
+      // take doctor down, matching the domain line above and the team line below.
+      // The guard WARNS and never fails: doctor exits 0 in the firing case too,
+      // because an existing project holding the combination is told, not stopped.
+      // The single 3-path resolver lives in lib/antiloop-config-resolve.cjs and
+      // the plan-phase init command calls the same one, so the 2 surfaces cannot
+      // drift apart.
+      const loopGuardLine = (() => {
+        try {
+          const resolve = require('./lib/antiloop-config-resolve.cjs');
+          const root = docRoot || process.cwd();
+          return resolve.formatLoopConfigDoctorLine(resolve.evaluateProjectLoopConfig(root));
+        } catch (e) {
+          return `config guard: unavailable (${e && e.message ? e.message.split('\n')[0] : 'unknown error'})`;
+        }
+      })();
+      lines.push(loopGuardLine);
       // v1.13 P2 W0 (A14): 1 team-manifest line. Defensive require + read so a
       // missing lib or unreadable TEAM.md can never take doctor down.
       const teamVal = (() => {
@@ -1535,7 +1654,175 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         } catch { return 'team manifest: unavailable'; }
       })();
       lines.push(teamVal);
+      // Phase 18 plan 02 (SC2): 1 fleet readiness line. Defensive require + read
+      // so a missing built lib, an unreadable config or an absent vendored tree
+      // can never take doctor down. Doctor still exits 0 in the firing case, the
+      // same standing rule the 2 blocks above carry: a fleet line is
+      // information, never a failure.
+      //
+      // The formatter returns null when the capability is INACTIVE and this
+      // block pushes NOTHING in that case. That is deliberate and it is the
+      // mechanism by which the inactive arm holds: an inactive capability has no
+      // line to suppress, rather than a line that says nothing. An edit that
+      // deletes the null branch leaks readiness into the inactive arm and breaks
+      // a committed test in tests/fleet-doctor.test.cjs.
+      const fleetLine = (() => {
+        try {
+          const fleet = require('./lib/fleet-capability.cjs');
+          const root = docRoot || process.cwd();
+          // The generated registry supplies the schema-default level of the
+          // precedence walk, so this surface and the capability state resolver
+          // cannot disagree about whether the capability is on.
+          let reg = {};
+          try { reg = require('./lib/capability-registry.cjs'); } catch { /* schema level degrades to absent */ }
+          return fleet.formatFleetDoctorLine(fleet.assessFleetReadiness({ cwd: root, registry: reg }));
+        } catch { return null; }
+      })();
+      if (fleetLine !== null) lines.push(fleetLine);
       output(lines.join('\n'));
+      break;
+    }
+
+    // Phase 20 plan 04 (SC2): `fleet doctor` probes every CONFIGURED adapter with
+    // a REAL prompt carrying a nonce and refuses on anything short of a real
+    // answer. CONTEXT D6 records why a presence probe is not a probe: in this
+    // milestone's own 3 lineage audit, a bad model alias, an exhausted budget and
+    // a hard 429 all answered `--version` correctly.
+    //
+    // 3 constraints, each enforced by a committed test rather than by this
+    // comment.
+    //
+    // 1. `doctor` above is NOT touched. It is a lookup that executes nothing and
+    //    always exits 0, and tests/fleet-doctor.test.cjs asserts a project with no
+    //    fleet configuration gets zero fleet tokens out of it. A prompt probe
+    //    behind that verb would put an execution surface on a verb that runs
+    //    constantly.
+    // 2. This is a CASE here, not a `commands` entry in
+    //    capabilities/fleet/capability.json. That file's 7 contribution arrays are
+    //    asserted empty at tests/fleet-doctor.test.cjs:449-457, because phase 18
+    //    SC3 holds by that count rather than by argument. A commands entry would
+    //    change the base install for every user who never enables the fleet.
+    // 3. An empty roster EXITS NON ZERO. "Every adapter passed" is vacuously true
+    //    of 0 adapters, and this repository already shipped that exact shape once.
+    case 'fleet': {
+      const fleetSub = args[1];
+      if (fleetSub !== 'doctor') {
+        error(
+          `Unknown fleet subcommand: ${fleetSub || '(none)'}\nUsage: ferrox-tools fleet doctor`,
+          ERROR_REASON.USAGE,
+        );
+      }
+      const fleetProbe = require('./lib/fleet-probe.cjs');
+      let fleetRegistry = {};
+      try {
+        // The generated registry supplies the schema-default level of the
+        // precedence walk, so this surface and the capability state resolver
+        // cannot disagree about what the roster is.
+        fleetRegistry = require('./lib/capability-registry.cjs');
+      } catch { /* the schema level degrades to absent, which is an empty roster */ }
+      const { resolveConfigKey } = require('./lib/capability-activation.cjs');
+      const rosterResolved = resolveConfigKey('fleet.adapters', {
+        config: {},
+        cwd,
+        registry: fleetRegistry,
+      });
+      const roster = Array.isArray(rosterResolved.value)
+        ? rosterResolved.value.filter((entry) => typeof entry === 'string' && entry !== '')
+        : [];
+
+      // Candidate binary NAMES come from the shipped alias manifest WHERE IT
+      // CARRIES THE IDENTITY, and the identity is its own sole candidate where it
+      // does not. That fallback is a CORRECTION found by verification rather than
+      // a convenience: the manifest carries 15 identities including kimi and
+      // carries NEITHER gemini NOR wayland-core, both of which the engine CAN
+      // dispatch to. So it is a source of binary names for the runtimes Ferrox
+      // installs into, and it is not the dispatchable adapter set. The
+      // dispatchable set is the engine's own PROFILES table, and
+      // tests/fleet-probe.test.cjs reads that file on every run.
+      //
+      // Bare binary names only. The seam resolves them through PATH with
+      // `shell: false`, and no absolute path is ever named.
+      let aliasManifest = {};
+      try {
+        aliasManifest = require('./shared/runtime-aliases.manifest.json');
+      } catch { /* every identity is then its own sole candidate */ }
+
+      // The nonce is minted HERE, once per invocation. src/fleet-probe.cts holds
+      // no source of entropy on purpose, so its arms are deterministic.
+      const fleetNonce = 'FXP-' + require('node:crypto').randomBytes(12).toString('hex');
+      const REASON_HINTS = {
+        [fleetProbe.PROBE_REASONS.ABSENT]:
+          ': not found on PATH, or it did not answer inside the bounded timeout',
+        [fleetProbe.PROBE_REASONS.EXIT]:
+          ': the adapter exited non zero, which is the shape of a rate limit and of an auth refusal',
+        [fleetProbe.PROBE_REASONS.EMPTY]:
+          ': the adapter exited 0 and emitted nothing, which is the shape of an exhausted budget',
+        [fleetProbe.PROBE_REASONS.NO_NONCE]:
+          ': the adapter answered WITHOUT the token it was asked to return, which is the shape of a banner '
+          + 'and of a bad model alias',
+        [fleetProbe.PROBE_REASONS.NOT_DISPATCHABLE]:
+          ': the vendored engine cannot dispatch to this adapter, so no call was made. Enabling it needs an '
+          + 'entry in ferrox-core/bin/vendor/ratchet/DIVERGENCES.json and a re pin of the vendored tree. '
+          + 'Recorded as FF-B225',
+      };
+
+      const fleetLines = [];
+      const fleetVerdicts = [];
+      for (const identity of roster) {
+        // The manifest supplies a candidate ONLY where it carries the identity.
+        // Where it does not, the argv profile's own head stands, which is a
+        // SECOND correction on top of the one recorded above: the plan's stated
+        // fallback was "the identity itself", and that is right for every real
+        // adapter, because for claude, codex and gemini the identity, the
+        // manifest head and the profile head are all the same string. It is wrong
+        // for `mock`, whose identity is a lane name and whose binary is not. The
+        // profile head is therefore the fallback, and it coincides with the
+        // identity in all 3 metered lanes.
+        const candidates = aliasManifest[identity];
+        const candidateBin = Array.isArray(candidates) && typeof candidates[0] === 'string'
+          ? candidates[0]
+          : undefined;
+        const verdict = fleetProbe.runProbe({ identity, nonce: fleetNonce, bin: candidateBin, cwd });
+        fleetVerdicts.push(verdict);
+        fleetLines.push(verdict.reason === null
+          ? `${identity}: ${verdict.verdict}`
+          : `${identity}: ${verdict.verdict} (${verdict.reason}${REASON_HINTS[verdict.reason] || ''})`);
+      }
+
+      const fleetOverall = fleetProbe.evaluateRoster({ roster, verdicts: fleetVerdicts });
+
+      if (fleetOverall.reason === fleetProbe.PROBE_REASONS.EMPTY_ROSTER) {
+        fleetLines.push(`fleet: ${fleetOverall.verdict} (${fleetOverall.reason})`);
+        fleetLines.push(
+          'no adapters are configured. Set fleet.adapters in .planning/config.json to the adapter '
+          + 'identities this project probes, for example {"fleet": {"adapters": ["claude", "codex"]}}.',
+        );
+        fleetLines.push(
+          'An empty roster is refused rather than reported READY, because "every adapter passed" is '
+          + 'vacuously true of 0 adapters.',
+        );
+        output(fleetLines.join('\n'));
+        // ExitError, NOT error(). `error()` calls process.exit directly, and the
+        // stdout interception at :838 only flushes its capture on a THROW, so an
+        // exit here would discard every per adapter line this verb just produced.
+        // The refusal has to carry its evidence or it is not diagnostic.
+        throw new ExitError(
+          1,
+          'fleet doctor: fleet.adapters is empty, so there is nothing to probe (empty-roster)',
+        );
+      }
+
+      fleetLines.push(fleetOverall.verdict === fleetProbe.PROBE_VERDICTS.READY
+        ? `fleet: READY (${roster.length} configured adapters answered with the nonce)`
+        : `fleet: ${fleetOverall.verdict} (not ready: ${fleetOverall.not_ready.join(', ')})`);
+      output(fleetLines.join('\n'));
+      if (fleetOverall.verdict !== fleetProbe.PROBE_VERDICTS.READY) {
+        throw new ExitError(
+          1,
+          `fleet doctor: ${fleetOverall.not_ready.length} of ${roster.length} configured adapters are not `
+          + `ready: ${fleetOverall.not_ready.join(', ')}`,
+        );
+      }
       break;
     }
 

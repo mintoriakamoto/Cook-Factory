@@ -297,6 +297,18 @@ claude-test-command.md
 .planning/coord/
 .planning/rescope-state.json
 
+# STATE.md rebuild audit trail (phase 14.1 D3d): append-only, local run evidence,
+# same class as the trace log and the halting log above. It lives OUTSIDE the file
+# it audits so a versionless claim a rebuild deletes cannot survive inside it.
+.planning/state-rebuild-log.jsonl
+.ferrox/state-rebuild-log.jsonl
+
+# Anti-loop event log (phase 15 D6): append-only local run evidence, the same class
+# as the halting log and the state rebuild log above. Every review budget and every
+# round counter is derived by folding it, so it is run state and never a commit.
+.planning/antiloop-log.jsonl
+.ferrox/antiloop-log.jsonl
+
 # Visual companion runtime state (pid, log, events; per-session, never committed).
 # The committed brainstorm record is BRAINSTORM.md + research/ + screens/ only.
 .planning/brainstorms/*/state/
@@ -314,3 +326,10 @@ reports/mutation/
 # Memtrace local daemon/runtime state (per-machine; never committed)
 .memdb/
 .memtrace/
+
+# Offer-layer local state. Per-project and per-machine: which offers have been
+# shown or answered, and the decision log the acceptance/miss counters fold. It
+# describes one person's sessions, so committing it would carry one machine's
+# suppression state to everybody who clones.
+.planning/.ferrox-offers.json
+.planning/.ferrox-offers.jsonl

@@ -1,0 +1,856 @@
+#!/usr/bin/env python3
+"""ratchet-maintain — inbound repo maintenance: issue + PR triage boards and a PR GATE.
+
+Ratchet governs OUTBOUND work (take -> land -> release). Once a repo is live, work also comes IN:
+issues get filed, contributors open PRs, things go stale. This companion wires those inbound streams
+into the SAME discipline. It is gh-backed, holds NO state-mutating verb (boards are read-only glass;
+merging/closing stays a human/gated action), and makes NO model calls.
+
+Verbs:
+  issues <repo> [--stale-days N]        read-only triage board of open issues (columns = triage state)
+  prs <repo>    [--stale-days N]        read-only board of open PRs (columns = review state)
+  snapshot <repo>|--all                 persist the boards to the kernel cache (triage-<repo>.json) so
+                                        the glass renders a snapshot, never a live gh call; the prior
+                                        snapshot rotates to triage-<repo>.prev.json for deltas
+  gate <repo> (--pr N | --ref BRANCH)   run a contributor PR through Ratchet's gate: fetch it into a
+                                        throwaway worktree, run the repo's suite + secret scan, print a
+                                        PASS/FAIL verdict. READ-ONLY: it never merges (that stays gated).
+  selftest
+"""
+import importlib.machinery, importlib.util
+import json, os, re, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel",
+        importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+K = _kernel()
+
+
+def _exec_mod():
+    """Load ratchet-exec AS A LIBRARY so the gate reuses the ONE governed sandbox spine
+    (guarded_suite) instead of duplicating containment. Lazy — only the gate verb needs it."""
+    spec = importlib.util.spec_from_loader(
+        "ratchet_exec",
+        importlib.machinery.SourceFileLoader("ratchet_exec", os.path.join(HERE, "ratchet-exec")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# every git call we make in the canonical repo AFTER an untrusted suite has run shares the common
+# gitdir with the throwaway worktree — neutralize injected hooks / core.fsmonitor so our own git
+# can't be turned into code-exec (guarded_suite already reverts them; this is defense in depth).
+_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+def _ng(path, *args, **kw):
+    return K.git(path, *(_SAFE + list(args)), **kw)
+
+
+_CELLW = 24
+_GUTTER = "  "
+
+ISSUE_COLUMNS = [("triage", "TRIAGE"), ("active", "ACTIVE"), ("blocked", "BLOCKED"), ("stale", "STALE")]
+PR_COLUMNS = [("review", "REVIEW"), ("ready", "READY"), ("checks-fail", "CHECKS-FAIL"),
+              ("draft", "DRAFT"), ("stale", "STALE")]
+
+# Python mirror of the git-history secret token set (kept in step with the kernel's _SECRET_ERE): a
+# contributor PR that adds a secret must FAIL the gate, same as a first-party commit would be blocked.
+_SECRET_RE = re.compile(
+    r"sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[ousr]_[A-Za-z0-9]{20,}"
+    r"|glpat-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9]{30,}|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}"
+    r"|eyJ[A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}[.][A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY")
+
+
+def _age_days(iso, now_ts):
+    """Whole days since an ISO-8601 timestamp (gh emits e.g. 2026-07-01T10:00:00Z); None if unparseable."""
+    if not isinstance(iso, str) or not iso:
+        return None
+    s = iso.strip().replace("Z", "").split(".")[0].split("+")[0]
+    try:
+        t = time.mktime(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError):
+        return None
+    return max(0, int((now_ts - t) // 86400))
+
+
+def _labels(item):
+    out = []
+    for l in (item.get("labels") or []):
+        if isinstance(l, dict):
+            n = l.get("name")
+        else:
+            n = l
+        if isinstance(n, str):
+            out.append(n.lower())
+    return out
+
+
+def classify_issue(iss, now_ts, stale_days=30):
+    """Pure: which triage column an open issue belongs to. Precedence: blocked > stale > triage > active."""
+    labels = _labels(iss)
+    if any(l in ("blocked", "needs-info", "waiting", "on-hold") for l in labels):
+        return "blocked"
+    age = _age_days(iss.get("updatedAt"), now_ts)
+    if age is not None and age > stale_days:
+        return "stale"
+    if not labels:
+        return "triage"   # untriaged: nobody has categorized it yet
+    return "active"
+
+
+def _rollup_state(rollup):
+    """gh statusCheckRollup -> 'failing' | 'pending' | 'passing' | 'none'."""
+    if not isinstance(rollup, list) or not rollup:
+        return "none"
+    states = []
+    for c in rollup:
+        if not isinstance(c, dict):
+            continue
+        s = (c.get("conclusion") or c.get("state") or c.get("status") or "").upper()
+        states.append(s)
+    if any(s in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT") for s in states):
+        return "failing"
+    if any(s in ("IN_PROGRESS", "QUEUED", "PENDING", "") for s in states):
+        return "pending"
+    return "passing"
+
+
+def classify_pr(pr, now_ts, stale_days=14):
+    """Pure: which column an open PR belongs to. Precedence: draft > checks-fail > ready > stale > review."""
+    if pr.get("isDraft"):
+        return "draft"
+    if _rollup_state(pr.get("statusCheckRollup")) == "failing":
+        return "checks-fail"
+    if pr.get("reviewDecision") == "APPROVED" and str(pr.get("mergeable", "")).upper() == "MERGEABLE":
+        return "ready"
+    age = _age_days(pr.get("updatedAt"), now_ts)
+    if age is not None and age > stale_days:
+        return "stale"
+    return "review"
+
+
+def _cell(item, now_ts):
+    num = item.get("number")
+    title = str(item.get("title") or "").strip()
+    age = _age_days(item.get("updatedAt"), now_ts)
+    head = ("#%s" % num) if num is not None else "?"
+    label = "%s %s" % (head, title)
+    label = "".join(ch for ch in label if ch >= " " and ch != "\x7f")  # strip control bytes
+    if age is not None:
+        label = label + "  " + ("%dd" % age)
+    if len(label) > _CELLW:
+        label = label[:_CELLW - 1] + "…"
+    return label
+
+
+def render_board(kind, items, columns, now_ts, stale_days):
+    """Pure: list of gh items -> a text board grouped into `columns`. kind = 'issues' | 'prs'."""
+    items = [x for x in items if isinstance(x, dict)]
+    classify = classify_issue if kind == "issues" else classify_pr
+    groups = {}
+    for it in items:
+        col = classify(it, now_ts, stale_days)
+        groups.setdefault(col, []).append(it)
+    out = ["RATCHET MAINTAIN · %s" % kind, ""]
+    if not items:
+        out.append("  no open %s" % kind)
+        return "\n".join(out) + "\n"
+    headers, rules, cols = [], [], []
+    for key, hdr in columns:
+        col_items = groups.get(key, [])
+        headers.append(("%s (%d)" % (hdr, len(col_items))).ljust(_CELLW))
+        rules.append(("─" * 14).ljust(_CELLW))
+        cols.append([_cell(it, now_ts) for it in col_items] or ["—"])
+    out.append(_GUTTER.join(headers).rstrip())
+    out.append(_GUTTER.join(rules).rstrip())
+    for row in range(max(len(c) for c in cols)):
+        out.append(_GUTTER.join((c[row] if row < len(c) else "").ljust(_CELLW) for c in cols).rstrip())
+    out.append("")
+    stale_n = len(groups.get("stale", []))
+    out.append("%d open · %d stale (>%dd)" % (len(items), stale_n, stale_days))
+    return "\n".join(out) + "\n"
+
+
+def _snap_top(items, now_ts, n=8):
+    """Pure: the rows a snapshot keeps per column — number/title/age only, control bytes stripped
+    (titles are attacker-controlled; the persisted file must already be clean)."""
+    rows = []
+    for it in items[:n]:
+        title = "".join(ch for ch in str(it.get("title") or "").strip() if ch >= " " and ch != "\x7f")
+        rows.append({"number": it.get("number"), "title": title[:80],
+                     "age_days": _age_days(it.get("updatedAt"), now_ts)})
+    return rows
+
+
+def snap_board(kind, items, columns, now_ts, stale_days):
+    """Pure: gh items -> {total, counts, top} — the persisted form the glass renders. Same
+    classification as render_board; kind = 'issues' | 'prs'."""
+    items = [x for x in items if isinstance(x, dict)]
+    classify = classify_issue if kind == "issues" else classify_pr
+    groups = {}
+    for it in items:
+        groups.setdefault(classify(it, now_ts, stale_days), []).append(it)
+    return {"total": len(items),
+            "counts": {key: len(groups.get(key, [])) for key, _ in columns},
+            "top": {key: _snap_top(groups.get(key, []), now_ts) for key, _ in columns}}
+
+
+def gate_verdict(checks):
+    """Pure: [(name, ok, detail)] -> ('PASS'|'FAIL', [failed names]). Any failing check fails the PR."""
+    failed = [c[0] for c in checks if not c[1]]
+    return ("PASS" if not failed else "FAIL", failed)
+
+
+# ---------- IO wrappers ----------
+
+def _resolve(repo):
+    m = K.load_manifest()
+    r = m["repos"].get(repo)
+    if not r:
+        sys.stderr.write("ratchet-maintain: unknown repo %r (have: %s)\n" % (repo, ", ".join(m["repos"])))
+        return None, None, None
+    return m, r, K.expand(r["path"])
+
+
+def _gh_json(slug, kind, fields, limit=200):
+    # statusCheckRollup on up to `limit` PRs fans out server-side and can exceed the kernel's 45s
+    # default, failing a live board in the SAFE direction but spuriously; give it real headroom.
+    rc, out, err = K.run(["gh", kind, "list", "--repo", slug, "--state", "open",
+                          "--json", ",".join(fields), "--limit", str(limit)], timeout=180)
+    if rc != 0:
+        sys.stderr.write("ratchet-maintain: gh %s list failed: %s\n" % (kind, (err or out)[-160:]))
+        return None
+    try:
+        return json.loads(out)
+    except (ValueError, TypeError):
+        return None
+
+
+def issues(argv):
+    repo, stale = _args(argv, default_stale=30)
+    if repo is None:
+        return 2
+    m, r, path = _resolve(repo)
+    if not r:
+        return 2
+    items = _gh_json(K.pr_repo(r), "issue", ["number", "title", "labels", "updatedAt"])
+    if items is None:
+        return 2
+    sys.stdout.write(render_board("issues", items, ISSUE_COLUMNS, time.time(), stale))
+    return 0
+
+
+def prs(argv):
+    repo, stale = _args(argv, default_stale=14)
+    if repo is None:
+        return 2
+    m, r, path = _resolve(repo)
+    if not r:
+        return 2
+    items = _gh_json(K.pr_repo(r), "pr",
+                     ["number", "title", "isDraft", "labels", "updatedAt", "statusCheckRollup",
+                      "mergeable", "reviewDecision"])
+    if items is None:
+        return 2
+    sys.stdout.write(render_board("prs", items, PR_COLUMNS, time.time(), stale))
+    return 0
+
+
+def snapshot(argv):
+    """Persist the SAME board data issues/prs render into the kernel cache, so the glass reads a
+    file instead of making live gh calls on page view (slow + rate-limited = disqualified there).
+    The current snapshot rotates to triage-<repo>.prev.json first — yesterday's truth survives one
+    generation so the glass can compute deltas. Rotation happens ONLY after a good fetch: a gh
+    failure must never eat the last good snapshot."""
+    repos = [a for a in argv if not a.startswith("-")]
+    if "--all" in argv:
+        repos = list(K.load_manifest()["repos"])
+    if not repos:
+        sys.stderr.write("usage: ratchet-maintain snapshot <repo>|--all\n")
+        return 2
+    rc_all = 0
+    for repo in repos:
+        m, r, path = _resolve(repo)
+        if not r:
+            rc_all = 2
+            continue
+        now_ts = time.time()
+        iss = _gh_json(K.pr_repo(r), "issue", ["number", "title", "labels", "updatedAt"])
+        pr_items = _gh_json(K.pr_repo(r), "pr",
+                            ["number", "title", "isDraft", "labels", "updatedAt", "statusCheckRollup",
+                             "mergeable", "reviewDecision"])
+        if iss is None or pr_items is None:
+            rc_all = 2   # _gh_json already reported the failure; last good snapshot stays intact
+            continue
+        snap = {"ts": K.now_iso(),
+                "issues": snap_board("issues", iss, ISSUE_COLUMNS, now_ts, 30),
+                "prs": snap_board("prs", pr_items, PR_COLUMNS, now_ts, 14)}
+        cur = os.path.join(K.CACHE_DIR, "triage-%s.json" % repo)
+        os.makedirs(K.CACHE_DIR, exist_ok=True)
+        if os.path.exists(cur):
+            os.replace(cur, cur[:-len(".json")] + ".prev.json")
+        K.cache_put("triage-%s" % repo, snap)   # kernel's atomic tmp+rename write
+        sys.stdout.write("[%s] snapshot: %d issues · %d prs -> %s\n"
+                         % (repo, snap["issues"]["total"], snap["prs"]["total"], cur))
+    return rc_all
+
+
+def _diff_has_secret(path, base_ref, head_ref):
+    """Scan the PR's whole contribution (base..head) for a secret, FAIL CLOSED. Covers every vector
+    a token can reach merged history by:
+      • per-commit added lines (`git log -p`) — catches add-then-remove that a net diff misses;
+      • MERGE-commit resolutions (`--cc`) — an 'evil merge' introducing a file present in neither
+        parent still produces combined-diff `++`/`+ ` lines and is scanned;
+      • commit MESSAGES (`--format=%B`) — a token pasted into a message can't slip through;
+      • `--text` forces binary blobs to diff textually so a smuggled secret still surfaces.
+    Decodes leniently (errors='replace') so a binary / invalid-UTF-8 blob can't crash the scan, and
+    treats ANY git error (bad ref, no merge-base) as leaked → human review. Hook-neutralized."""
+    rng = "%s..%s" % (base_ref, head_ref)
+    safe = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    MAX_BYTES = 64 * 1024 * 1024   # a diff bigger than this is unscannable in bounded RAM -> FAIL CLOSED
+    OVERLAP = 512                  # carry a tail across reads so a token split at a boundary still matches
+    # STREAM the patch (do NOT buffer it whole): `--text` expands binary blobs to full content, so a PR
+    # that adds a huge/hostile file would OOM-kill an unattended gate if captured entirely. We read fixed
+    # chunks and regex-scan a sliding window. We scan the WHOLE combined-diff text, not just '+'-prefixed
+    # lines: the old str.splitlines() filter broke on \v \f U+2028 U+2029 NEL etc. (more separators than
+    # git uses), letting a token placed after such a byte lose its '+' and evade the scan. Scanning the
+    # raw window closes that bypass; a token on a removed/context line just fails closed to human review.
+    try:
+        p = subprocess.Popen(["git", "-C", path, *safe, "log", "-p", "--cc", "--text", "--no-color", rng],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except (OSError, ValueError) as e:
+        return True, "scan-failed (fail-closed): " + str(e)[:60]
+    total = 0; carry = ""; rc = None
+    try:
+        while True:
+            chunk = p.stdout.read(1 << 20)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_BYTES:
+                return True, "diff too large to scan safely (fail-closed, >%dMB)" % (MAX_BYTES >> 20)
+            window = carry + chunk.decode("utf-8", "replace")
+            if _SECRET_RE.search(window):
+                return True, "secret token in PR diff (base..head)"
+            carry = window[-OVERLAP:]
+    finally:
+        try:
+            p.stdout.close()
+        except OSError:
+            pass
+        p.kill()
+        try:
+            rc = p.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            rc = -1
+    if rc not in (0, None) and total == 0:
+        return True, "scan-failed (fail-closed): git log rc=%s" % rc     # bad ref / no output -> never 'clean'
+    # commit MESSAGES: a token pasted into a message must also fail (bounded; messages are small).
+    try:
+        msgs = subprocess.run(["git", "-C", path, *safe, "log", "--no-color", "--format=%B", rng],
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return True, "message-scan-failed (fail-closed): " + str(e)[:50]
+    if msgs.returncode != 0:
+        return True, "message-scan-failed (fail-closed)"
+    for ln in (msgs.stdout or "").split("\n"):
+        if _SECRET_RE.search(ln):
+            return True, "commit-message: " + ln.strip()[:66]
+    return False, ""
+
+
+def _untrusted_exec_allowed():
+    """Whether this gate may EXECUTE a PR's (untrusted) test suite. FENCED OFF by default.
+
+    guarded_suite contains repo WRITES (worktree + shared-gitdir config/hooks/refs are snapshotted and
+    reverted, escapes rejected) but the suite still runs with the operator's real $HOME and open network,
+    so untrusted contributor code can READ credentials (~/.config/wl/*.env, ~/.ssh, gh token) and exfil
+    them, or poison global git/shell config for host RCE. That needs an OS-level sandbox (scrubbed HOME +
+    egress control) which is not shipped yet. Until then, executing a PR suite is opt-in and intended
+    ONLY for PRs whose author you trust. The secret scan and boards do NOT execute code and always run."""
+    return os.environ.get("RATCHET_GATE_SANDBOX") == "1" or os.environ.get("RATCHET_GATE_ALLOW_UNTRUSTED") == "1"
+
+
+def gate(argv):
+    """Run a contributor PR through the repo's gate: suite + secret scan against a throwaway worktree.
+    READ-ONLY — prints a verdict, never merges. --pr fetches pull/N/head; --ref uses a local branch.
+    The secret scan runs on the PINNED base..head SHAs (no code execution) and always runs. The suite is
+    UNTRUSTED contributor code: guarded_suite isolates its WRITES (own process group + wall-clock cap,
+    byte-for-byte worktree restore, .git-tamper/escape rejection) but NOT its $HOME/network reads, so it
+    is FENCED OFF by default (see _untrusted_exec_allowed) until the containerized runner ships."""
+    repo = None
+    pr_num = ref = None
+    a = list(argv)
+    i = 0
+    while i < len(a):
+        if a[i] == "--pr" and i + 1 < len(a):
+            pr_num = a[i + 1]; i += 2
+        elif a[i] == "--ref" and i + 1 < len(a):
+            ref = a[i + 1]; i += 2
+        elif not a[i].startswith("-") and repo is None:
+            repo = a[i]; i += 1
+        else:
+            i += 1
+    if repo is None or (pr_num is None and ref is None):
+        sys.stderr.write("usage: ratchet-maintain gate <repo> (--pr N | --ref BRANCH)\n")
+        return 2
+    if pr_num is not None and not re.fullmatch(r"\d+", str(pr_num)):
+        sys.stderr.write("ratchet-maintain: --pr must be a number\n")
+        return 2
+    # --ref flows into `git fetch` / `git worktree add`: reject option-injection and exotic ref
+    # names (leading dash, spaces, control bytes) — allow only a sane git-ref charset.
+    if ref is not None and not re.fullmatch(r"[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}", ref):
+        sys.stderr.write("ratchet-maintain: --ref is not a valid branch/ref name\n")
+        return 2
+    m, r, path = _resolve(repo)
+    if not r:
+        return 2
+    mainline = r["mainline"]
+    fetch_remote = r["fetch_remote"]
+    tmp_branch = None
+    wt = None
+    checks = []
+    # fetch + worktree add live INSIDE the try so a failure after the branch is created still hits
+    # the finally and deletes it — no leaked ratchet-pr-N branch on a mid-setup failure.
+    # per-invocation suffix: two concurrent gate runs of the same PR must not share a worktree path
+    # or tmp branch (best-effort `worktree remove` would otherwise pull the rug out mid-suite).
+    tag = "%d-%d" % (os.getpid(), int(time.time()) % 100000)
+    try:
+        if pr_num is not None:
+            tmp_branch = "ratchet-pr-%s-%s" % (pr_num, tag)
+            rc, _, err = _ng(path, "fetch", fetch_remote, "pull/%s/head:%s" % (pr_num, tmp_branch), timeout=120)
+            if rc != 0:
+                sys.stderr.write("ratchet-maintain: could not fetch PR #%s: %s\n" % (pr_num, err[-160:]))
+                return 2
+            head_ref = tmp_branch
+        else:
+            head_ref = ref
+        # PIN the endpoints to SHAs up front, BEFORE any untrusted code runs. guarded_suite already
+        # reverts ref tamper, but pinning means the secret scan diffs immutable commits regardless.
+        rc, head_sha, err = _ng(path, "rev-parse", "--verify", "--quiet", head_ref + "^{commit}")
+        head_sha = head_sha.strip()
+        if rc != 0 or not head_sha:
+            sys.stderr.write("ratchet-maintain: ref %r does not resolve to a commit\n" % head_ref)
+            return 2
+        base = "%s/%s" % (fetch_remote, mainline)
+        rc_b, base_sha, _ = _ng(path, "rev-parse", "--verify", "--quiet", base + "^{commit}")
+        if rc_b != 0:
+            rc_b, base_sha, _ = _ng(path, "rev-parse", "--verify", "--quiet", mainline + "^{commit}")
+        base_sha = base_sha.strip()
+        root = K.expand(r["worktree_root"])
+        os.makedirs(root, exist_ok=True)
+        wt = os.path.join(root, "gate-%s-%s" % ((pr_num or re.sub(r"[^a-zA-Z0-9]", "-", head_ref))[:40], tag))
+        _ng(path, "worktree", "remove", "--force", wt)  # best-effort clean of a stale one
+        rc, _, err = _ng(path, "worktree", "add", "--detach", wt, head_sha)
+        if rc != 0:
+            sys.stderr.write("ratchet-maintain: worktree add failed: %s\n" % err[-160:])
+            return 2
+        suite = r.get("suite_cmd")
+        if not suite:
+            # No suite = the gate cannot certify the tests. Fail CLOSED, never a silent PASS (a mistyped
+            # `suite_cmd` key must not rubber-stamp unverified contributor code).
+            checks.append(("suite", False, "no suite_cmd configured — cannot certify tests (fail-closed)"))
+        elif not _untrusted_exec_allowed():
+            # FENCED: running the PR's suite means executing untrusted code with the operator's $HOME +
+            # network. Refuse by default; the secret scan below still runs. Opt in per-run for TRUSTED
+            # authors with RATCHET_GATE_ALLOW_UNTRUSTED=1 until the containerized runner ships.
+            checks.append(("suite", False, "FENCED — untrusted suite not executed (no OS sandbox; "
+                           "set RATCHET_GATE_ALLOW_UNTRUSTED=1 for a trusted author's PR)"))
+        else:
+            X = _exec_mod()
+            try:
+                to = int(r.get("gate_timeout_s", 600))
+            except (TypeError, ValueError):
+                to = 600
+            res = X.guarded_suite(wt, suite, timeout=to)
+            if res["violations"]:
+                checks.append(("suite", False, "CONTAINMENT breach: " + ", ".join(res["violations"])[:80]))
+            elif res["reaped"]:
+                checks.append(("suite", False, "reaped (%s) after %ss" % (res["reaped"], res["duration_s"])))
+            else:
+                checks.append(("suite", res["rc"] == 0, "exit %d (sandboxed, %ss)" % (res["rc"], res["duration_s"])))
+            # A failed containment RESTORE means the canonical repo may still carry attacker hooks/config;
+            # surface it as a hard FAIL instead of silently discarding res["restore_ok"].
+            if not res.get("restore_ok", True):
+                checks.append(("containment-restore", False,
+                               "SANDBOX RESTORE FAILED — canonical repo may be dirty; inspect before trusting"))
+        # secret scan over the PINNED commit range (immutable SHAs, never the just-executed worktree),
+        # per-commit patches, fail-closed + --text (all handled inside _diff_has_secret).
+        if not base_sha:
+            checks.append(("secret-scan", False, "no base commit to diff against (fail-closed)"))
+        else:
+            leaked, sample = _diff_has_secret(path, base_sha, head_sha)
+            checks.append(("secret-scan", not leaked, ("clean" if not leaked else "SECRET: " + sample)))
+    finally:
+        if wt:
+            _ng(path, "worktree", "remove", "--force", wt)
+        if tmp_branch:
+            _ng(path, "branch", "-D", tmp_branch)
+    verdict, failed = gate_verdict(checks)
+    for name, ok, detail in checks:
+        sys.stdout.write("  %s  %s — %s\n" % ("PASS" if ok else "FAIL", name, detail))
+    sys.stdout.write("\n  ratchet-maintain gate: %s%s\n"
+                     % (verdict, ("" if verdict == "PASS" else " (" + ", ".join(failed) + ")")))
+    sys.stdout.write("  (read-only: merge stays a gated/human action — this never merges)\n")
+    return 0 if verdict == "PASS" else 1
+
+
+def _args(argv, default_stale):
+    repo = None
+    stale = default_stale
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--stale-days" and i + 1 < len(argv):
+            try:
+                stale = int(argv[i + 1])
+            except ValueError:
+                pass
+            i += 2
+        elif not argv[i].startswith("-") and repo is None:
+            repo = argv[i]; i += 1
+        else:
+            i += 1
+    if repo is None:
+        sys.stderr.write("usage: ratchet-maintain <issues|prs> <repo> [--stale-days N]\n")
+    return repo, stale
+
+
+def selftest(argv):
+    NOW = 1_700_000_000  # fixed clock so age math is deterministic
+    day = 86400
+    results = []
+
+    def check(label, ok, detail=""):
+        results.append((label, bool(ok), str(detail)[:200]))
+
+    # 1. issue classification precedence
+    check("issue no-label -> triage", classify_issue({"updatedAt": _iso(NOW - day)}, NOW) == "triage")
+    check("issue labelled recent -> active",
+          classify_issue({"labels": ["bug"], "updatedAt": _iso(NOW - day)}, NOW) == "active")
+    check("issue blocked label -> blocked (beats stale)",
+          classify_issue({"labels": ["blocked"], "updatedAt": _iso(NOW - 99 * day)}, NOW) == "blocked")
+    check("issue old -> stale", classify_issue({"labels": ["bug"], "updatedAt": _iso(NOW - 40 * day)}, NOW) == "stale")
+
+    # 2. PR classification precedence
+    check("pr draft -> draft", classify_pr({"isDraft": True}, NOW) == "draft")
+    check("pr failing checks -> checks-fail",
+          classify_pr({"statusCheckRollup": [{"conclusion": "FAILURE"}]}, NOW) == "checks-fail")
+    check("pr approved+mergeable -> ready",
+          classify_pr({"reviewDecision": "APPROVED", "mergeable": "MERGEABLE",
+                       "statusCheckRollup": [{"conclusion": "SUCCESS"}]}, NOW) == "ready")
+    check("pr old open -> stale", classify_pr({"updatedAt": _iso(NOW - 30 * day)}, NOW) == "stale")
+    check("pr default -> review", classify_pr({"updatedAt": _iso(NOW - day)}, NOW) == "review")
+
+    # 3. board renders + groups + empty
+    iss = [{"number": 1, "title": "untriaged", "updatedAt": _iso(NOW - day)},
+           {"number": 2, "title": "old bug", "labels": ["bug"], "updatedAt": _iso(NOW - 40 * day)}]
+    b = render_board("issues", iss, ISSUE_COLUMNS, NOW, 30)
+    check("board groups into columns + counts", "TRIAGE (1)" in b and "STALE (1)" in b, b)
+    check("board shows an item by number", "#1" in b and "untriaged" in b)
+    check("empty board is graceful", "no open issues" in render_board("issues", [], ISSUE_COLUMNS, NOW, 30))
+    check("non-dict / junk items don't crash",
+          "RATCHET MAINTAIN" in render_board("prs", [{"number": 9, "title": "ok"}, "junk", {}], PR_COLUMNS, NOW, 14))
+    check("control bytes stripped from a title",
+          "\x1b" not in render_board("issues", [{"number": 3, "title": "\x1b[31mx\x1b[0m", "updatedAt": _iso(NOW)}], ISSUE_COLUMNS, NOW, 30))
+
+    # 4. gate verdict aggregation
+    check("gate PASS when all checks pass", gate_verdict([("suite", True, ""), ("secret-scan", True, "")]) == ("PASS", []))
+    check("gate FAIL names the failing check", gate_verdict([("suite", False, "exit 1"), ("secret-scan", True, "")]) == ("FAIL", ["suite"]))
+
+    # 5. secret regex catches the classes the hooks now catch
+    for tok in ("gho_" + "a" * 36, "glpat-" + "b" * 22, "AKIA" + "C" * 16):
+        check("secret regex catches %s..." % tok[:6], bool(_SECRET_RE.search("+  key = '" + tok + "'")))
+    check("secret regex ignores a benign added line", not _SECRET_RE.search("+  return a + b"))
+
+    # 6. LIVE gate on a local throwaway repo (no gh): a clean PR ref PASSES, a secret-bearing one FAILS
+    import tempfile, subprocess, shutil
+    tmp = tempfile.mkdtemp(prefix="rm-st-")
+    try:
+        proj = os.path.join(tmp, "proj")
+        subprocess.run(["git", "init", "-q", proj], check=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        def g(*a):
+            return subprocess.run(["git", "-C", proj, *a], capture_output=True, text=True, env=env)
+        open(os.path.join(proj, "app.py"), "w").write("x = 1\n")
+        g("add", "-A"); g("commit", "-qm", "init"); g("branch", "-M", "main")
+        # clean contributor branch
+        g("checkout", "-qb", "pr-clean")
+        open(os.path.join(proj, "app.py"), "w").write("x = 1\ny = 2\n")
+        g("commit", "-qam", "feat: add y")
+        # secret-bearing contributor branch
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-secret")
+        open(os.path.join(proj, "cfg.py"), "w").write("TOKEN = 'ghp_" + "z" * 30 + "'\n")
+        g("add", "-A"); g("commit", "-qam", "add config")
+        g("checkout", "-q", "main")
+        manifest = os.path.join(tmp, "workspace.json")
+        json.dump({"schema_version": 1, "repos": {"p": {
+            "path": proj, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "x", "remotes": {"origin": proj}, "worktree_root": os.path.join(tmp, "wt"),
+            "suite_cmd": "python3 -c \"import ast; ast.parse(open('app.py').read())\""}}}, open(manifest, "w"))
+        # The suite-EXECUTION cases drive guarded_suite (a real process sandbox). They pass locally but
+        # the sandbox's process-group/pipe reaping is not yet portable to headless Linux CI (it can hang),
+        # and the shipped gate is fenced anyway — so CI (RATCHET_SELFTEST_NO_EXEC=1) proves the LIVE
+        # surface (boards, every secret-scan vector, the fence itself) and skips the exec-containment
+        # cases, which run in full locally until the containerized runner brings a CI-portable harness.
+        EXEC_OK = os.environ.get("RATCHET_SELFTEST_NO_EXEC") != "1"
+        def run_gate(ref, allow_untrusted=None):
+            au = EXEC_OK if allow_untrusted is None else allow_untrusted
+            env = dict(os.environ, RATCHET_MANIFEST=manifest)
+            if au:
+                env["RATCHET_GATE_ALLOW_UNTRUSTED"] = "1"
+            else:
+                env.pop("RATCHET_GATE_ALLOW_UNTRUSTED", None)
+            return subprocess.run([sys.executable, os.path.abspath(__file__), "gate", "p", "--ref", ref],
+                                  capture_output=True, text=True, env=env, timeout=60)
+        rc_clean = run_gate("pr-clean")
+        rc_secret = run_gate("pr-secret")
+        if EXEC_OK:
+            check("LIVE gate PASSES a clean contributor branch",
+                  rc_clean.returncode == 0 and "gate: PASS" in rc_clean.stdout, rc_clean.stdout[-120:])
+        else:
+            check("LIVE gate fences the suite on a clean branch (no OS sandbox in CI)",
+                  "FENCED" in rc_clean.stdout, rc_clean.stdout[-120:])
+        check("LIVE gate FAILS a branch that adds a secret (secret-scan)",
+              rc_secret.returncode == 1 and "gate: FAIL" in rc_secret.stdout and "secret-scan" in rc_secret.stdout,
+              rc_secret.stdout[-140:])
+        check("gate is read-only (prints the never-merges note)", "never merges" in rc_clean.stdout)
+
+        # 6b. FENCE: with no opt-in, an untrusted suite is NOT executed — it is fenced and the gate does
+        #     not PASS on it (secret scan still runs). Untrusted PR code must not run by default.
+        rc_fenced = run_gate("pr-clean", allow_untrusted=False)
+        check("suite is FENCED by default (untrusted code not executed without opt-in)",
+              "FENCED" in rc_fenced.stdout and "gate: PASS" not in rc_fenced.stdout, rc_fenced.stdout[-140:])
+
+        # 7. secret-scan FAILS CLOSED on an uncomputable diff (no-merge-base / bad ref)
+        leaked_fc, _ = _diff_has_secret(proj, "no-such-base-ref", "also-nonexistent")
+        check("secret-scan fails CLOSED on an uncomputable diff (no silent 'clean')", leaked_fc)
+
+        # 8. a secret smuggled inside a BINARY blob is still caught (--text scan)
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-binary")
+        with open(os.path.join(proj, "blob.bin"), "wb") as fb:
+            fb.write(b"\x00\x01ghp_" + b"z" * 36 + b"\x02\x00")
+        g("add", "-A"); g("commit", "-qam", "add blob")
+        g("checkout", "-q", "main")
+        rc_bin = run_gate("pr-binary")
+        check("gate FAILS a secret smuggled in a BINARY blob (--text scan)",
+              rc_bin.returncode == 1 and "secret-scan" in rc_bin.stdout, rc_bin.stdout[-140:])
+
+        # 8b. SEPARATOR BYPASS regression: a token placed after an in-line control byte (\x0c form-feed,
+        #     also \v, U+2028/2029, NEL) must still be caught. The old str.splitlines() diff filter broke
+        #     on these and dropped the '+' prefix, yielding a false 'clean'. The windowed scan closes it.
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-sep")
+        open(os.path.join(proj, "sep.py"), "w").write("SAFE=1\x0cKEY = 'ghp_" + "z" * 30 + "'\n")
+        g("add", "-A"); g("commit", "-qam", "add sep")
+        g("checkout", "-q", "main")
+        rc_sep = run_gate("pr-sep")
+        check("gate FAILS a secret hidden after an in-line control byte (separator-bypass regression)",
+              rc_sep.returncode == 1 and "secret-scan" in rc_sep.stdout, rc_sep.stdout[-140:])
+
+        # 9. ref-guard: an option-injecting --ref is rejected before it reaches git
+        rc_inj = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "gate", "p", "--ref", "--upload-pack=evil"],
+            capture_output=True, text=True, env=dict(os.environ, RATCHET_MANIFEST=manifest), timeout=60)
+        check("gate rejects an option-injecting --ref",
+              rc_inj.returncode == 2 and "valid branch" in (rc_inj.stderr + rc_inj.stdout), rc_inj.stderr[-100:])
+
+        # 10. CONTAINMENT: a suite that injects a .git hook (RCE) FAILS the gate as a breach, and the
+        #     hook does NOT survive into the canonical repo (shared common gitdir is reverted).
+        mal = os.path.join(tmp, "ws-mal.json")
+        json.dump({"schema_version": 1, "repos": {"p": {
+            "path": proj, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "x", "remotes": {"origin": proj}, "worktree_root": os.path.join(tmp, "wt-mal"),
+            "suite_cmd": 'HD=$(git rev-parse --git-path hooks); mkdir -p "$HD"; '
+                        'printf "#!/bin/sh\\necho PWN\\n" > "$HD/pre-commit"; chmod +x "$HD/pre-commit"; true'}}},
+            open(mal, "w"))
+        if EXEC_OK:
+            mal_env = dict(os.environ, RATCHET_MANIFEST=mal, RATCHET_GATE_ALLOW_UNTRUSTED="1")
+            rc_mal = subprocess.run([sys.executable, os.path.abspath(__file__), "gate", "p", "--ref", "pr-clean"],
+                                    capture_output=True, text=True, env=mal_env, timeout=90)
+            hookf = os.path.join(proj, ".git", "hooks", "pre-commit")
+            hook_absent = (not os.path.exists(hookf)) or ("PWN" not in open(hookf).read())
+            check("gate FAILS + contains a suite that injects a .git hook (RCE surface)",
+                  rc_mal.returncode == 1 and "CONTAINMENT" in rc_mal.stdout and hook_absent, rc_mal.stdout[-160:])
+
+        # 11. branch cleanup on a mid-setup failure: fetch creates the tmp branch, then worktree add
+        #     fails (read-only worktree root, independent of the per-run name suffix) -> no leak.
+        g("remote", "add", "origin", proj)
+        g("update-ref", "refs/pull/1/head", "pr-clean")
+        wtroot2 = os.path.join(tmp, "wt-leak")
+        os.makedirs(wtroot2, exist_ok=True)
+        os.chmod(wtroot2, 0o500)  # read-only: `git worktree add` can't create its child dir -> rc!=0
+        mleak = os.path.join(tmp, "ws-leak.json")
+        json.dump({"schema_version": 1, "repos": {"p": {
+            "path": proj, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "x", "remotes": {"origin": proj}, "worktree_root": wtroot2}}}, open(mleak, "w"))
+        rc_leak = subprocess.run([sys.executable, os.path.abspath(__file__), "gate", "p", "--pr", "1"],
+                                 capture_output=True, text=True,
+                                 env=dict(os.environ, RATCHET_MANIFEST=mleak), timeout=60)
+        os.chmod(wtroot2, 0o700)  # restore so the temp dir can be cleaned up
+        # no ratchet-pr-1* branch may survive (the name carries a per-run suffix now)
+        _rc_h, heads, _ = K.git(proj, "for-each-ref", "--format=%(refname)", "refs/heads/ratchet-pr-1*")
+        check("gate cleans up ratchet-pr-N when worktree setup fails (no branch leak)",
+              rc_leak.returncode == 2 and not heads.strip(), "leaked=%r" % heads.strip()[:80])
+
+        # 12. CRITICAL end-to-end: a suite that moves the canonical mainline onto the PR head (to
+        #     blind the secret diff) FAILS the gate as a containment breach AND cannot poison main.
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-refmove")
+        open(os.path.join(proj, "leak.py"), "w").write("KEY = 'ghp_" + "y" * 36 + "'\n")
+        g("add", "-A"); g("commit", "-qam", "add leak")
+        g("checkout", "-q", "main")
+        main_before = subprocess.run(["git", "-C", proj, "rev-parse", "main"],
+                                     capture_output=True, text=True, env=env).stdout.strip()
+        mref = os.path.join(tmp, "ws-refmove.json")
+        json.dump({"schema_version": 1, "repos": {"p": {
+            "path": proj, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "x", "remotes": {"origin": proj}, "worktree_root": os.path.join(tmp, "wt-rm"),
+            "suite_cmd": "git update-ref refs/heads/main HEAD; "
+                        "git update-ref refs/remotes/origin/main HEAD; true"}}}, open(mref, "w"))
+        if EXEC_OK:
+            rm_env = dict(os.environ, RATCHET_MANIFEST=mref, RATCHET_GATE_ALLOW_UNTRUSTED="1")
+            rc_rm = subprocess.run([sys.executable, os.path.abspath(__file__), "gate", "p", "--ref", "pr-refmove"],
+                                   capture_output=True, text=True, env=rm_env, timeout=90)
+            main_after = subprocess.run(["git", "-C", proj, "rev-parse", "main"],
+                                        capture_output=True, text=True, env=env).stdout.strip()
+            check("gate FAILS a suite that moves mainline onto the PR head (ref-tamper containment)",
+                  rc_rm.returncode == 1 and "CONTAINMENT" in rc_rm.stdout, rc_rm.stdout[-160:])
+            check("canonical mainline is NOT poisoned by the ref-tamper attack",
+                  main_after == main_before and bool(main_before), "before=%s after=%s" % (main_before[:8], main_after[:8]))
+
+        # 13. add-then-remove secret: commit 1 adds a token, commit 2 deletes it -> still in the PR's
+        #     history; the per-commit range scan catches it where a net three-dot diff passes 'clean'.
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-addremove")
+        open(os.path.join(proj, "tmpcfg.py"), "w").write("KEY = 'ghp_" + "w" * 36 + "'\n")
+        g("add", "-A"); g("commit", "-qam", "add token")
+        os.remove(os.path.join(proj, "tmpcfg.py"))
+        g("add", "-A"); g("commit", "-qam", "move token to env")
+        g("checkout", "-q", "main")
+        rc_ar = run_gate("pr-addremove")
+        check("gate FAILS a secret added then removed within the PR (history range scan)",
+              rc_ar.returncode == 1 and "secret-scan" in rc_ar.stdout, rc_ar.stdout[-160:])
+
+        # 14. evil-merge: a secret introduced ONLY in a MERGE resolution (present in neither parent)
+        #     is caught by the combined-diff (--cc) scan.
+        g("checkout", "-q", "main"); g("checkout", "-qb", "em-side")
+        open(os.path.join(proj, "side.py"), "w").write("s = 1\n"); g("add", "-A"); g("commit", "-qam", "side")
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-evilmerge")
+        g("merge", "--no-commit", "--no-ff", "em-side")
+        open(os.path.join(proj, "evil.py"), "w").write("K = 'ghp_" + "e" * 36 + "'\n")
+        g("add", "evil.py"); g("commit", "-qm", "merge em-side")
+        g("checkout", "-q", "main")
+        rc_em = run_gate("pr-evilmerge")
+        check("gate FAILS an evil-merge secret (merge-resolution add, --cc scan)",
+              rc_em.returncode == 1 and "secret-scan" in rc_em.stdout, rc_em.stdout[-160:])
+
+        # 15. a secret pasted into a commit MESSAGE (not the diff) is caught
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-msgsecret")
+        open(os.path.join(proj, "okk.py"), "w").write("ok = 1\n"); g("add", "-A")
+        g("commit", "-qm", "chore: rotate key ghp_" + "m" * 36)
+        g("checkout", "-q", "main")
+        rc_ms = run_gate("pr-msgsecret")
+        check("gate FAILS a secret pasted into a commit MESSAGE",
+              rc_ms.returncode == 1 and "secret-scan" in rc_ms.stdout, rc_ms.stdout[-160:])
+
+        # 16. a binary / non-UTF-8 blob (no secret) must NOT crash the scan (lenient decode)
+        g("checkout", "-q", "main"); g("checkout", "-qb", "pr-binclean")
+        with open(os.path.join(proj, "data.bin"), "wb") as fb:
+            fb.write(bytes(range(256)) * 8)     # invalid UTF-8, no secret token
+        g("add", "-A"); g("commit", "-qam", "add binary")
+        g("checkout", "-q", "main")
+        rc_bc = run_gate("pr-binclean")
+        check("gate does not crash on a binary / non-UTF-8 blob (lenient decode)",
+              rc_bc.returncode in (0, 1) and "gate:" in rc_bc.stdout
+              and "Traceback" not in (rc_bc.stderr + rc_bc.stdout), (rc_bc.stderr or rc_bc.stdout)[-120:])
+
+        # 17. snapshot: boards persisted to the kernel cache (glass v4 prereq). gh is stubbed —
+        #     the classification is proven pure above; what's under test HERE is the file contract:
+        #     write, prev-rotation, and no-rotation-on-failed-fetch.
+        import contextlib, io
+        nowr = time.time()
+        sb = snap_board("issues", [{"number": 1, "title": "fresh", "updatedAt": _iso(nowr - day)},
+                                   {"number": 2, "title": "old\x1bbug", "labels": ["bug"],
+                                    "updatedAt": _iso(nowr - 40 * day)}], ISSUE_COLUMNS, nowr, 30)
+        check("snap_board mirrors board classification (counts + clean top rows)",
+              sb["total"] == 2 and sb["counts"]["triage"] == 1 and sb["counts"]["stale"] == 1
+              and sb["top"]["triage"][0]["number"] == 1 and "\x1b" not in json.dumps(sb),
+              json.dumps(sb)[:120])
+        _g = globals()
+        saved = (_g["_gh_json"], K.CACHE_DIR, K.MANIFEST_PATH)
+        snapc = os.path.join(tmp, "snapcache")
+        fake = {"issue": [{"number": 7, "title": "first", "updatedAt": _iso(nowr)}],
+                "pr": [{"number": 8, "title": "wip", "isDraft": True}]}
+        _g["_gh_json"] = lambda slug, kind, fields, limit=200: fake[kind]
+        K.CACHE_DIR, K.MANIFEST_PATH = snapc, manifest
+        try:
+            quiet = io.StringIO()
+            with contextlib.redirect_stdout(quiet):
+                rc_s1 = snapshot(["p"])
+            s1 = json.load(open(os.path.join(snapc, "triage-p.json")))
+            check("snapshot writes triage-<repo>.json (ts + issue/pr counts + top rows)",
+                  rc_s1 == 0 and bool(s1.get("ts")) and s1["issues"]["counts"]["triage"] == 1
+                  and s1["prs"]["counts"]["draft"] == 1, json.dumps(s1)[:140])
+            fake["issue"] = []
+            with contextlib.redirect_stdout(quiet):
+                rc_s2 = snapshot(["p"])
+            s2 = json.load(open(os.path.join(snapc, "triage-p.json")))
+            sp = json.load(open(os.path.join(snapc, "triage-p.prev.json")))
+            check("snapshot rotates the PREVIOUS snapshot for delta computation",
+                  rc_s2 == 0 and s2["issues"]["total"] == 0 and sp["issues"]["counts"]["triage"] == 1,
+                  "cur=%d prev=%d" % (s2["issues"]["total"], sp["issues"]["counts"].get("triage", -1)))
+            fake["pr"] = None   # gh failure: the last good snapshot must NOT be eaten by the rotation
+            with contextlib.redirect_stdout(quiet):
+                rc_s3 = snapshot(["p"])
+            s3 = json.load(open(os.path.join(snapc, "triage-p.json")))
+            check("snapshot on a failed fetch keeps both files untouched (fail loud, rc!=0)",
+                  rc_s3 == 2 and s3 == s2 and os.path.exists(os.path.join(snapc, "triage-p.prev.json")),
+                  "rc=%d" % rc_s3)
+        finally:
+            _g["_gh_json"], K.CACHE_DIR, K.MANIFEST_PATH = saved
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    passed = sum(1 for _, ok, _ in results if ok)
+    for label, ok, detail in results:
+        sys.stdout.write(("  OK    " if ok else "  FAIL  ") + label + ("" if ok else "  -- " + detail) + "\n")
+    sys.stdout.write("\n  ratchet-maintain selftest: %d/%d\n" % (passed, len(results)))
+    return 0 if passed == len(results) else 2
+
+
+def _iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+_USAGE = ("usage:\n"
+          "  ratchet-maintain issues <repo> [--stale-days N]\n"
+          "  ratchet-maintain prs <repo> [--stale-days N]\n"
+          "  ratchet-maintain snapshot <repo>|--all\n"
+          "  ratchet-maintain gate <repo> (--pr N | --ref BRANCH)\n"
+          "  ratchet-maintain selftest\n")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        sys.stdout.write(_USAGE)
+        return 2
+    verb, rest = argv[0], argv[1:]
+    fn = {"issues": issues, "prs": prs, "snapshot": snapshot, "gate": gate, "selftest": selftest}.get(verb)
+    if fn:
+        return fn(rest)
+    if verb in ("-h", "--help"):
+        sys.stdout.write(_USAGE)
+        return 0
+    sys.stderr.write("ratchet-maintain: unknown verb %r\n%s" % (verb, _USAGE))
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

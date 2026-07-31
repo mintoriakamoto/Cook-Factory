@@ -1,0 +1,38 @@
+{
+  "id": "fleet",
+  "role": "feature",
+  "version": "1.16.0",
+  "title": "Fleet engine",
+  "description": "Registers the vendored fleet engine under `ferrox-core/bin/vendor/ratchet/`. Off by default. Contributes 0 commands, 0 skills, 0 agents and 0 hooks in phase 18, so a project that never enables it installs exactly what it installed before. Requires a Python 3 interpreter on PATH when enabled; the default inline execution path never needs one.",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "ferrox": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "activationKey": "fleet.enabled",
+  "config": {
+    "fleet.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the vendored fleet engine. Requires a Python 3 interpreter on PATH. The default inline execution path does not."
+    },
+    "fleet.adapters": {
+      "type": "array",
+      "default": [],
+      "description": "The adapter identities `ferrox fleet doctor` probes before a fleet run. Each is probed with a real prompt carrying a nonce, and only an adapter that returns that nonce on exit 0 is READY. The default is empty, which is a project that has not configured a fleet, and the verb refuses on an empty roster rather than reporting that nothing failed. Adding a key here contributes no command, no skill, no agent and no hook, so a project that never enables the fleet installs exactly what it installed before."
+    }
+  },
+  "commands": [],
+  "hooks": [],
+  "steps": [],
+  "contributions": [],
+  "gates": []
+}

@@ -10,7 +10,7 @@ const capabilities = {
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "AI design contract",
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
@@ -95,7 +95,7 @@ const capabilities = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -196,7 +196,7 @@ const capabilities = {
   "assumption-delta": {
     "id": "assumption-delta",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Assumption-delta architecture checkpoint",
     "description": "Rarely-firing advisory checkpoint that triggers when a phase makes something plural, optional, or chosen that used to be singular, required, or derived. Surfaces one identity-model question (promote the new general representation to primary, or add it alongside?) so a silent primary-key drift does not accumulate into a later user-facing bug. Non-blocking; fires only on a detected signal.",
     "tier": "full",
@@ -242,7 +242,7 @@ const capabilities = {
   "audit": {
     "id": "audit",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Audit",
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `ferrox-tools audit-uat` (cross-phase UAT outstanding items) and `ferrox-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
@@ -279,7 +279,7 @@ const capabilities = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -386,7 +386,7 @@ const capabilities = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -446,7 +446,8 @@ const capabilities = {
         "SubagentStop",
         "Stop",
         "PreCompact",
-        "FileChanged"
+        "FileChanged",
+        "UserPromptSubmit"
       ],
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -491,7 +492,7 @@ const capabilities = {
   "claude-orchestration": {
     "id": "claude-orchestration",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Claude orchestration (Workflow backend)",
     "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the Ferrox loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'ferrox-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME ferrox-executor agent and worktree isolation the inline path uses, restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in ferrox-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing ferrox-ultraplan-phase BETA-isolation posture.",
     "tier": "full",
@@ -531,10 +532,11 @@ const capabilities = {
         "values": [
           "auto",
           "workflow",
-          "inline"
+          "inline",
+          "fleet"
         ],
         "default": "auto",
-        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability. 'fleet' (phase 21 SC2) dispatches the wave to a fleet of worker command-line-interface processes instead of in-process subagents; it is runtime-independent (a fleet needs no Workflow tool) but it is OBSERVED rather than trusted, so it fails closed to inline unless fleet.enabled is true AND the interpreter the fleet engine declares resolves on PATH AND every fleet runtime artifact is present on disk, and the resolved reason names the specific artifact that was missing."
       },
       "claude_orchestration.min_agent_sdk_version": {
         "type": "string",
@@ -549,7 +551,7 @@ const capabilities = {
         "into": "executor",
         "fragment": {
           "path": "fragments/execute-wave-post.md",
-          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=ferrox-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → one or more sequential `parallel()` barriers** — each wave is a\n  barrier group; when plans within a wave share `files_modified`, they are split\n  into separate sequential stages within that wave's barrier (the next wave\n  still waits for the previous wave to complete).\n- **plans → `agent(brief, { agentType: 'ferrox-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('ferrox-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Detection is resolved by the orchestrator calling the pure\n`detectWorkflowBackend` with the LIVE host descriptor (the CLI\n`ferrox-tools claude-orchestration detect-backend` is a simulation harness that\nassumes a capable host unless `--no-nested-dispatch` is passed — it does not probe\nthe real runtime; the orchestrator supplies the real descriptor).\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nor the capability disabled), execute-phase MUST proceed with the standard inline\nwave dispatch. The executor MUST NOT assume parallelism, a shared budget, or\nresume-from-run-id semantics in that mode.\n"
+          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=ferrox-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → one or more sequential `parallel()` barriers** — each wave is a\n  barrier group; when plans within a wave share `files_modified`, they are split\n  into separate sequential stages within that wave's barrier (the next wave\n  still waits for the previous wave to complete).\n- **plans → `agent(brief, { agentType: 'ferrox-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('ferrox-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Detection is resolved by the orchestrator calling the pure\n`detectWorkflowBackend` with the LIVE host descriptor (the CLI\n`ferrox-tools claude-orchestration detect-backend` is a simulation harness that\nassumes a capable host unless `--no-nested-dispatch` is passed — it does not probe\nthe real runtime; the orchestrator supplies the real descriptor).\n\n## The fleet execution backend (phase 21 SC2)\n\n`claude_orchestration.execution_backend` accepts a fourth value, `fleet`. It\ndispatches the wave to a fleet of worker command line interface PROCESSES rather\nthan to in process subagents. The same team roster binds to inline, workflow or\nfleet; the mode decides only whether that team is 5 subagents or 5 operating\nsystem processes, and nothing about planning changes between them.\n\n**The fleet rung is runtime independent.** It is evaluated BEFORE the Claude\nspecific rungs, because a fleet of worker command line interfaces runs as separate\nprocesses and needs no Workflow tool. Gating it behind the Claude runtime check\nwould refuse it on every other runtime for a reason that does not apply to it.\n\n**The fleet rung OBSERVES rather than trusts.** A configuration value is not\nevidence that a fleet can run, and a backend selected on a false premise is a\nfleet dispatched against a runtime that is not there. The ladder is, first miss\nwins, every miss resolving to inline with its own named reason:\n\n1. `capability_disabled` when `claude_orchestration.enabled` is not true.\n2. `backend_not_fleet` when `execution_backend` is not exactly `fleet`.\n3. `fleet_capability_disabled` when the fleet engine's own `fleet.enabled` key is\n   not true.\n4. `fleet_interpreter_unavailable:<name>` when the interpreter the fleet engine\n   declares does not resolve on PATH. OBSERVED by scanning PATH directly, with no\n   shell, no `which` and no subprocess.\n5. `fleet_artifact_missing:<path>` when a required fleet runtime artifact is\n   absent, NAMING the specific artifact so a reader of the result learns what to\n   fix. OBSERVED on the filesystem, rooted at the resolved project root.\n\nOnly with every rung observed open does it return\n`{ available: true, backend: 'fleet', reason: 'fleet_backend_active' }`.\n\nWhen the fleet backend is active, the executor emits a fleet DISPATCH MANIFEST\nrather than a script:\n\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json>\n--run-id <id> --backend fleet`\n\nThe manifest partitions each wave through the SAME `partitionStages` function the\nWorkflow emitter uses and validates through the SAME refusal ladder, so 2 plans\nsharing a `files_modified` entry can never be placed in the same stage under one\nbackend and different stages under the other. A second overlap rule is how a plan\npair that is unsafe under one backend becomes safe under the other.\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nthe fleet runtime absent, or the capability disabled), execute-phase MUST proceed\nwith the standard inline wave dispatch. The executor MUST NOT assume parallelism,\na shared budget, or resume-from-run-id semantics in that mode.\n\n**This is unconditional and it applies to the fleet backend exactly as it applies\nto the workflow backend.** A backend switch that can break an existing build is\nworse than no switch. Every fleet miss above is a refusal that leaves today's\ninline path intact, and the proof of it is a real child process run against a\nscratch tree with the fleet artifacts genuinely absent and the interpreter\ngenuinely scrubbed from PATH, in which `emit-workflow` still emits a working\nscript. See `tests/claude-orchestration-failclosed.test.cjs`.\n"
         },
         "produces": [],
         "consumes": [
@@ -578,7 +580,7 @@ const capabilities = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -647,7 +649,7 @@ const capabilities = {
   "code-review": {
     "id": "code-review",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Code review",
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
@@ -708,7 +710,7 @@ const capabilities = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -819,7 +821,7 @@ const capabilities = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -904,7 +906,7 @@ const capabilities = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -997,7 +999,7 @@ const capabilities = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -1118,7 +1120,7 @@ const capabilities = {
   "drift": {
     "id": "drift",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Drift detection gates",
     "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
@@ -1196,7 +1198,7 @@ const capabilities = {
   "external-job": {
     "id": "external-job",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Async external-job scheduler adapter",
     "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it. NOTE on contribution point: #1164 specifies execute:wave:pre, but execute-phase.md only dispatches execute:wave:post today (wave:pre is declared in the loop host contract but not rendered); wiring wave:pre dispatch is a core-loop change #1164 explicitly puts out of scope, so this capability registers at wave:post and the executor honors the runtime_budget classification guidance before running any tagged task. The adapter (scripts/slurm-adapter.cjs) reads external_job.submit_timeout_ms / poll_timeout_ms / artifact_dir through the canonical capability-config seam (env override > config > registry default).",
     "tier": "full",
@@ -1276,10 +1278,48 @@ const capabilities = {
     ],
     "gates": []
   },
+  "fleet": {
+    "id": "fleet",
+    "role": "feature",
+    "version": "1.16.0",
+    "title": "Fleet engine",
+    "description": "Registers the vendored fleet engine under `ferrox-core/bin/vendor/ratchet/`. Off by default. Contributes 0 commands, 0 skills, 0 agents and 0 hooks in phase 18, so a project that never enables it installs exactly what it installed before. Requires a Python 3 interpreter on PATH when enabled; the default inline execution path never needs one.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "ferrox": ">=1.6.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "activationKey": "fleet.enabled",
+    "config": {
+      "fleet.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the vendored fleet engine. Requires a Python 3 interpreter on PATH. The default inline execution path does not."
+      },
+      "fleet.adapters": {
+        "type": "array",
+        "default": [],
+        "description": "The adapter identities `ferrox fleet doctor` probes before a fleet run. Each is probed with a real prompt carrying a nonce, and only an adapter that returns that nonce on exit 0 is READY. The default is empty, which is a project that has not configured a fleet, and the verb refuses on an empty roster rather than reporting that nothing failed. Adding a key here contributes no command, no skill, no agent and no hook, so a project that never enables the fleet installs exactly what it installed before."
+      }
+    },
+    "commands": [],
+    "hooks": [],
+    "steps": [],
+    "contributions": [],
+    "gates": []
+  },
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Post-planning gap analysis",
     "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
     "tier": "standard",
@@ -1320,7 +1360,7 @@ const capabilities = {
   "graphify": {
     "id": "graphify",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Knowledge graph",
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /ferrox-graphify skill.",
     "tier": "full",
@@ -1361,7 +1401,7 @@ const capabilities = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/ferrox/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1450,7 +1490,7 @@ const capabilities = {
   "intel": {
     "id": "intel",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Codebase intelligence",
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `ferrox-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/ferrox-map-codebase` and `ferrox-intel-updater`.",
     "tier": "full",
@@ -1502,7 +1542,7 @@ const capabilities = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -1610,7 +1650,7 @@ const capabilities = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
@@ -1698,7 +1738,7 @@ const capabilities = {
   "mempalace": {
     "id": "mempalace",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "MemPalace memory",
     "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
     "tier": "full",
@@ -1872,7 +1912,7 @@ const capabilities = {
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Nyquist validation",
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
@@ -1922,7 +1962,7 @@ const capabilities = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -2028,7 +2068,7 @@ const capabilities = {
   "pattern-mapper": {
     "id": "pattern-mapper",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Pattern mapping",
     "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
     "tier": "full",
@@ -2082,7 +2122,7 @@ const capabilities = {
   "pi": {
     "id": "pi",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "pi",
     "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/ferrox.cjs; no shared-settings hook surface; tier-2 support.",
     "tier": "core",
@@ -2142,7 +2182,7 @@ const capabilities = {
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Developer profiling pipeline",
     "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `ferrox-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /ferrox-profile-user skill and ferrox-user-profiler agent.",
     "tier": "full",
@@ -2219,7 +2259,7 @@ const capabilities = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -2324,7 +2364,7 @@ const capabilities = {
   "research": {
     "id": "research",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Phase research",
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
@@ -2376,7 +2416,7 @@ const capabilities = {
   "schema-gate": {
     "id": "schema-gate",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Schema push detection gate",
     "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
     "tier": "full",
@@ -2422,7 +2462,7 @@ const capabilities = {
   "security": {
     "id": "security",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Security enforcement",
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
@@ -2521,7 +2561,7 @@ const capabilities = {
   "tdd": {
     "id": "tdd",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Test-driven development",
     "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
     "tier": "full",
@@ -2574,7 +2614,7 @@ const capabilities = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -2664,7 +2704,7 @@ const capabilities = {
   "ui": {
     "id": "ui",
     "role": "feature",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
@@ -2762,7 +2802,7 @@ const capabilities = {
   "vscode": {
     "id": "vscode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "VS Code",
     "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
     "tier": "core",
@@ -2813,7 +2853,7 @@ const capabilities = {
   "wayland-core": {
     "id": "wayland-core",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Wayland Core",
     "description": "Wayland Core — a Rust-native agent engine that owns its own loop with a Claude-Code-shaped skin (markdown skills, AGENTS.md, Claude model aliases, MCP client+server). Tier-2 support: the strength merge-gate attaches via pre_tool_use, but the hook surface is limited to 3 events (pre_tool_use/post_tool_use/stop) vs Claude's ~8, and the node CLI runs as skills/MCP-bridge, not the orchestrator (wcore owns the loop). Install verification against ~/dev/waylandcore is deferred (active repo — never modified); see REACH-WCORE-01 / FF-B25.",
     "tier": "core",
@@ -2903,7 +2943,7 @@ const capabilities = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; Cascade native hooks.json blocking hook bus (pre_write_code, pre_run_command); tier-2 support.",
     "tier": "core",
@@ -2988,7 +3028,7 @@ const capabilities = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",
@@ -3442,7 +3482,7 @@ const byLoopPoint = {
         "into": "executor",
         "fragment": {
           "path": "fragments/execute-wave-post.md",
-          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=ferrox-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → one or more sequential `parallel()` barriers** — each wave is a\n  barrier group; when plans within a wave share `files_modified`, they are split\n  into separate sequential stages within that wave's barrier (the next wave\n  still waits for the previous wave to complete).\n- **plans → `agent(brief, { agentType: 'ferrox-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('ferrox-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Detection is resolved by the orchestrator calling the pure\n`detectWorkflowBackend` with the LIVE host descriptor (the CLI\n`ferrox-tools claude-orchestration detect-backend` is a simulation harness that\nassumes a capable host unless `--no-nested-dispatch` is passed — it does not probe\nthe real runtime; the orchestrator supplies the real descriptor).\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nor the capability disabled), execute-phase MUST proceed with the standard inline\nwave dispatch. The executor MUST NOT assume parallelism, a shared budget, or\nresume-from-run-id semantics in that mode.\n"
+          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=ferrox-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → one or more sequential `parallel()` barriers** — each wave is a\n  barrier group; when plans within a wave share `files_modified`, they are split\n  into separate sequential stages within that wave's barrier (the next wave\n  still waits for the previous wave to complete).\n- **plans → `agent(brief, { agentType: 'ferrox-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('ferrox-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Detection is resolved by the orchestrator calling the pure\n`detectWorkflowBackend` with the LIVE host descriptor (the CLI\n`ferrox-tools claude-orchestration detect-backend` is a simulation harness that\nassumes a capable host unless `--no-nested-dispatch` is passed — it does not probe\nthe real runtime; the orchestrator supplies the real descriptor).\n\n## The fleet execution backend (phase 21 SC2)\n\n`claude_orchestration.execution_backend` accepts a fourth value, `fleet`. It\ndispatches the wave to a fleet of worker command line interface PROCESSES rather\nthan to in process subagents. The same team roster binds to inline, workflow or\nfleet; the mode decides only whether that team is 5 subagents or 5 operating\nsystem processes, and nothing about planning changes between them.\n\n**The fleet rung is runtime independent.** It is evaluated BEFORE the Claude\nspecific rungs, because a fleet of worker command line interfaces runs as separate\nprocesses and needs no Workflow tool. Gating it behind the Claude runtime check\nwould refuse it on every other runtime for a reason that does not apply to it.\n\n**The fleet rung OBSERVES rather than trusts.** A configuration value is not\nevidence that a fleet can run, and a backend selected on a false premise is a\nfleet dispatched against a runtime that is not there. The ladder is, first miss\nwins, every miss resolving to inline with its own named reason:\n\n1. `capability_disabled` when `claude_orchestration.enabled` is not true.\n2. `backend_not_fleet` when `execution_backend` is not exactly `fleet`.\n3. `fleet_capability_disabled` when the fleet engine's own `fleet.enabled` key is\n   not true.\n4. `fleet_interpreter_unavailable:<name>` when the interpreter the fleet engine\n   declares does not resolve on PATH. OBSERVED by scanning PATH directly, with no\n   shell, no `which` and no subprocess.\n5. `fleet_artifact_missing:<path>` when a required fleet runtime artifact is\n   absent, NAMING the specific artifact so a reader of the result learns what to\n   fix. OBSERVED on the filesystem, rooted at the resolved project root.\n\nOnly with every rung observed open does it return\n`{ available: true, backend: 'fleet', reason: 'fleet_backend_active' }`.\n\nWhen the fleet backend is active, the executor emits a fleet DISPATCH MANIFEST\nrather than a script:\n\n`ferrox-tools claude-orchestration emit-workflow --waves <manifest.json>\n--run-id <id> --backend fleet`\n\nThe manifest partitions each wave through the SAME `partitionStages` function the\nWorkflow emitter uses and validates through the SAME refusal ladder, so 2 plans\nsharing a `files_modified` entry can never be placed in the same stage under one\nbackend and different stages under the other. A second overlap rule is how a plan\npair that is unsafe under one backend becomes safe under the other.\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nthe fleet runtime absent, or the capability disabled), execute-phase MUST proceed\nwith the standard inline wave dispatch. The executor MUST NOT assume parallelism,\na shared budget, or resume-from-run-id semantics in that mode.\n\n**This is unconditional and it applies to the fleet backend exactly as it applies\nto the workflow backend.** A backend switch that can break an existing build is\nworse than no switch. Every fleet miss above is a refusal that leaves today's\ninline path intact, and the proof of it is a real child process run against a\nscratch tree with the fleet artifacts genuinely absent and the interpreter\ngenuinely scrubbed from PATH, in which `emit-workflow` still emits a working\nscript. See `tests/claude-orchestration-failclosed.test.cjs`.\n"
         },
         "produces": [],
         "consumes": [
@@ -3687,6 +3727,8 @@ const configKeys = {
   "external_job.artifact_dir": "external-job",
   "external_job.submit_timeout_ms": "external-job",
   "external_job.poll_timeout_ms": "external-job",
+  "fleet.enabled": "fleet",
+  "fleet.adapters": "fleet",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -3743,11 +3785,12 @@ const configSchema = {
     "owner": "claude-orchestration",
     "type": "enum",
     "default": "auto",
-    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability.",
+    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability. 'fleet' (phase 21 SC2) dispatches the wave to a fleet of worker command-line-interface processes instead of in-process subagents; it is runtime-independent (a fleet needs no Workflow tool) but it is OBSERVED rather than trusted, so it fails closed to inline unless fleet.enabled is true AND the interpreter the fleet engine declares resolves on PATH AND every fleet runtime artifact is present on disk, and the resolved reason names the specific artifact that was missing.",
     "values": [
       "auto",
       "workflow",
-      "inline"
+      "inline",
+      "fleet"
     ]
   },
   "claude_orchestration.min_agent_sdk_version": {
@@ -3833,6 +3876,18 @@ const configSchema = {
     "type": "number",
     "default": 15000,
     "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback). Read by the adapter (env FERROX_SLURM_POLL_TIMEOUT_MS overrides)."
+  },
+  "fleet.enabled": {
+    "owner": "fleet",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the vendored fleet engine. Requires a Python 3 interpreter on PATH. The default inline execution path does not."
+  },
+  "fleet.adapters": {
+    "owner": "fleet",
+    "type": "array",
+    "default": [],
+    "description": "The adapter identities `ferrox fleet doctor` probes before a fleet run. Each is probed with a real prompt carrying a nonce, and only an adapter that returns that nonce on exit 0 is READY. The default is empty, which is a project that has not configured a fleet, and the verb refuses on an empty roster rather than reporting that nothing failed. Adding a key here contributes no command, no skill, no agent and no hook, so a project that never enables the fleet installs exactly what it installed before."
   },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
@@ -4002,7 +4057,7 @@ const runtimes = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -4103,7 +4158,7 @@ const runtimes = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4210,7 +4265,7 @@ const runtimes = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -4270,7 +4325,8 @@ const runtimes = {
         "SubagentStop",
         "Stop",
         "PreCompact",
-        "FileChanged"
+        "FileChanged",
+        "UserPromptSubmit"
       ],
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -4315,7 +4371,7 @@ const runtimes = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -4384,7 +4440,7 @@ const runtimes = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4495,7 +4551,7 @@ const runtimes = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -4580,7 +4636,7 @@ const runtimes = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -4673,7 +4729,7 @@ const runtimes = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -4794,7 +4850,7 @@ const runtimes = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/ferrox/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4883,7 +4939,7 @@ const runtimes = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -4991,7 +5047,7 @@ const runtimes = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
@@ -5079,7 +5135,7 @@ const runtimes = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -5185,7 +5241,7 @@ const runtimes = {
   "pi": {
     "id": "pi",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "pi",
     "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/ferrox.cjs; no shared-settings hook surface; tier-2 support.",
     "tier": "core",
@@ -5245,7 +5301,7 @@ const runtimes = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -5350,7 +5406,7 @@ const runtimes = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -5440,7 +5496,7 @@ const runtimes = {
   "vscode": {
     "id": "vscode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "VS Code",
     "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
     "tier": "core",
@@ -5491,7 +5547,7 @@ const runtimes = {
   "wayland-core": {
     "id": "wayland-core",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Wayland Core",
     "description": "Wayland Core — a Rust-native agent engine that owns its own loop with a Claude-Code-shaped skin (markdown skills, AGENTS.md, Claude model aliases, MCP client+server). Tier-2 support: the strength merge-gate attaches via pre_tool_use, but the hook surface is limited to 3 events (pre_tool_use/post_tool_use/stop) vs Claude's ~8, and the node CLI runs as skills/MCP-bridge, not the orchestrator (wcore owns the loop). Install verification against ~/dev/waylandcore is deferred (active repo — never modified); see REACH-WCORE-01 / FF-B25.",
     "tier": "core",
@@ -5581,7 +5637,7 @@ const runtimes = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; Cascade native hooks.json blocking hook bus (pre_write_code, pre_run_command); tier-2 support.",
     "tier": "core",
@@ -5666,7 +5722,7 @@ const runtimes = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.13.1",
+    "version": "1.16.0",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",
@@ -5934,6 +5990,7 @@ const _requiresGraph = {
   "cursor": [],
   "drift": [],
   "external-job": [],
+  "fleet": [],
   "gap-analysis": [],
   "graphify": [],
   "hermes": [],

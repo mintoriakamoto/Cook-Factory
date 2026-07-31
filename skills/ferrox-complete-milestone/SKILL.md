@@ -1,6 +1,6 @@
 ---
 name: ferrox-complete-milestone
-description: "Archive completed milestone and prepare for next version"
+description: "A milestone is finished and you want it archived and the next version prepared"
 argument-hint: "<version>"
 allowed-tools:
   - Read

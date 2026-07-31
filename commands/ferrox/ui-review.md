@@ -1,6 +1,6 @@
 ---
 name: ferrox:ui-review
-description: Retroactive 7-pillar visual audit of implemented frontend code
+description: "Frontend work is built and you want it audited on look, layout and accessibility"
 argument-hint: "[phase]"
 allowed-tools:
   - Read

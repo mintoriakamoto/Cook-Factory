@@ -38,6 +38,43 @@ const {
  * Composition: --profile=core,audit resolves to union(closure(core), closure(audit)).
  */
 const PROFILES = Object.freeze({
+  /**
+   * The set that carries somebody who has never built software END TO END.
+   *
+   * `core` looks like this set and is not. It ships `phase`, which is an expert
+   * command, and it omits `verify-work`, `ship`, `debug` and `undo`, so a user on
+   * `core` can plan and execute and then cannot confirm it worked, send it
+   * anywhere, investigate it when it breaks, or reverse it. A profile that can
+   * build and cannot ship is not a beginner profile, it is a demo.
+   *
+   * Every member below answers a question a first-time user actually asks:
+   *   new-project    what do you want to build
+   *   next           what now, and the carrier for "build it all"
+   *   plan-phase     work out the next step
+   *   execute-phase  build it
+   *   verify-work    did it work
+   *   ship           send it
+   *   debug          it broke
+   *   undo           put it back
+   *   help           what can I even type
+   *
+   * THE BASE IS 9 AND THE INSTALLED SET IS 18. That is not a discrepancy, it is
+   * how profiles work: the effective set is CLOSURE(base, requires:), so a base
+   * member that declares `requires:` pulls its dependency in whether or not a
+   * beginner would ever type it. Any plan that promises "a profile of exactly 9"
+   * is describing the base and will be read as the install size.
+   */
+  beginner: Object.freeze([
+    'new-project',
+    'next',
+    'plan-phase',
+    'execute-phase',
+    'verify-work',
+    'ship',
+    'debug',
+    'undo',
+    'help',
+  ]),
   core: Object.freeze([
     'new-project',
     'discuss-phase',
@@ -47,6 +84,14 @@ const PROFILES = Object.freeze({
     'help',
     'update',
     'surface',
+    // `core` used to stop above this line, which made it unshippable by
+    // construction: it could plan and build and then not confirm, send, debug or
+    // reverse anything. Prefer `beginner` for a first install; `core` is kept as
+    // the documented back-compat target of --minimal and --core-only.
+    'verify-work',
+    'ship',
+    'debug',
+    'undo',
   ]),
   standard: Object.freeze([
     // Core loop
@@ -63,10 +108,22 @@ const PROFILES = Object.freeze({
     'review',
     'config',
     'progress',
+    // The state aware front door. `progress` is the advancement ENGINE and `next` is
+    // the menu that reads project state and offers the right door, so a profile with
+    // the engine and not the door tells a returning user nothing about where they are.
+    'next',
     // Workspace / state
     'resume-work',
     'pause-work',
     'workspace',
+    // The confirm/send/recover set. These are listed explicitly because the header
+    // above states "standard is a superset of core", and once `core` gained them
+    // that sentence became false. An invariant asserted in a comment and nowhere
+    // else is a comment.
+    'verify-work',
+    'ship',
+    'debug',
+    'undo',
   ]),
   full: '*' as const,
 } as const);
@@ -734,7 +791,7 @@ function writeActiveProfile(runtimeConfigDir: string, profileName: string): void
  * Rank ordering for profiles (lower index = more restrictive / smaller skill set).
  * Unknown profiles default to the permissive end (treated as 'full').
  */
-const PROFILE_RANK = Object.freeze(['core', 'standard', 'full'] as const);
+const PROFILE_RANK = Object.freeze(['beginner', 'core', 'standard', 'full'] as const);
 
 /**
  * Given an array of profile names (one per runtime), return the most-restrictive

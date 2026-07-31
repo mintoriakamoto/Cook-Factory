@@ -1,6 +1,6 @@
 ---
 name: ferrox:ai-integration-phase
-description: Generate an AI-SPEC.md design contract for phases that involve building AI systems.
+description: "A step involves building an AI system and you want its design and evals pinned down first"
 argument-hint: "[phase number]"
 allowed-tools:
   - Read

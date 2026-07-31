@@ -25,6 +25,12 @@ const frontmatter = require("./frontmatter.cjs");
 const state_document_cjs_1 = require("./state-document.cjs");
 const state_document_cjs_2 = require("./state-document.cjs");
 const markdown_sectionizer_cjs_1 = require("./markdown-sectionizer.cjs");
+// Phase 14.1 D3c: the roadmap progress derivation this file used to import is
+// RETIRED, not merely unused. It read the ROADMAP progress table to produce
+// state counters, and that table is generated now, so keeping an exported
+// reader of it around is a cycle waiting to be rewired. completePhase derives
+// its counters from the phase directories through the disk-backed
+// progressProvider. The percent clamp below is the surviving half.
 const phase_lifecycle_cjs_1 = require("./phase-lifecycle.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const phaseIdMod = require("./phase-id.cjs");
@@ -144,20 +150,21 @@ function applyStatePreservation(input) {
 // ----------------------------------------------------------------------------
 /**
  * Top-level STATE.md section headings (H2). Aligned byte-for-byte with the
- * canonical template at `ferrox-core/templates/state.md`. Sub-headings (H3) like
- * `### Decisions` / `### Pending Todos` / `### Blockers/Concerns` live under
- * `## Accumulated Context` and are not mutated by any Phase 1–7 transition;
- * they will be added here if a future transition needs them.
+ * canonical template at `ferrox-core/templates/state.md`.
  *
- * Verified against `ferrox-core/templates/state.md` (codex Phase 1 review).
+ * Phase 14.1 D3d deleted the 4 free-prose entries this map used to carry. The
+ * references were inspected before removal: every remaining use is one of the 2
+ * entries below, so nothing was left dangling. No heading of level 3 exists in
+ * STATE.md any more, which is why the old note about `### Decisions` and friends
+ * living under `## Accumulated Context` went with them.
+ *
+ * The closed set the structural guard admits is a 3-entry set: these 2 plus
+ * `## Operator Next Steps`, which the milestone-close writer creates on demand
+ * and never addresses through this map.
  */
 exports.STATE_MD_SECTIONS = {
-    projectReference: '## Project Reference',
     currentPosition: '## Current Position',
     performanceMetrics: '## Performance Metrics',
-    accumulatedContext: '## Accumulated Context',
-    deferredItems: '## Deferred Items',
-    sessionContinuity: '## Session Continuity',
 };
 // ----------------------------------------------------------------------------
 // transitionCore — pure dispatch (ADR-1769 §3)
@@ -589,7 +596,7 @@ function advancePlanCore(content, deps) {
  * Current Phase Name, Status (`All phases complete` on the last phase, else
  * `Ready to plan` per ADR-2207), Current Plan (`Not started`), Last Activity + Description,
  * and the Completed/Total Phases + Progress percent block (re-derived from the
- * roadmap via the injected `roadmapProvider`).
+ * PHASE DIRECTORIES via the injected `progressProvider`, phase 14.1 D3c).
  *
  * The adapter (`cmdPhaseComplete`) retains two concerns that are NOT pure field
  * updates: `updatePerformanceMetricsSection` (a section table upsert) and
@@ -704,20 +711,27 @@ function completePhaseCore(content, intent, deps) {
         body = ladAfter;
         updated.push('Last Activity Description');
     }
-    // Progress block — re-derive completed/total phases from the roadmap when
-    // available (milestone-wide source of truth), then recompute the percent.
-    // Only runs when a Completed Phases field exists (the existing guard).
+    // Progress block — re-derive completed/total phases from the injected
+    // progress provider, then recompute the percent. Only runs when a Completed
+    // Phases field exists (the existing guard).
+    //
+    // Phase 14.1 D3c: the provider is backed by the PHASE DIRECTORIES on disk, not
+    // by ROADMAP.md. The roadmap read was the second half of a cycle, because
+    // roadmap scoping reads STATE.md's `milestone:` frontmatter key
+    // (src/roadmap-parser.cts:51-64) to decide which region to parse. Disk plus
+    // the milestone artifacts are the only roots, which makes the graph a DAG.
     const completedRaw = (0, state_document_cjs_1.stateExtractField)(body, 'Completed Phases');
     if (completedRaw !== null) {
         let newCompleted = parseInt(completedRaw, 10);
         let derivedTotalPhases = null;
-        const roadmapContent = deps.roadmapProvider ? deps.roadmapProvider() : null;
-        if (roadmapContent) {
-            const derived = (0, phase_lifecycle_cjs_1.deriveProgressFromRoadmap)(roadmapContent);
-            if (derived.completedPhases !== null)
-                newCompleted = derived.completedPhases;
-            if (derived.totalPhases !== null)
-                derivedTotalPhases = derived.totalPhases;
+        const derived = deps.progressProvider();
+        if (derived) {
+            const dc = derived['completed_phases'];
+            const dt = derived['total_phases'];
+            if (typeof dc === 'number')
+                newCompleted = dc;
+            if (typeof dt === 'number')
+                derivedTotalPhases = dt;
         }
         const completedAfter = (0, state_document_cjs_1.stateReplaceField)(body, 'Completed Phases', String(newCompleted));
         if (completedAfter) {
@@ -1103,18 +1117,18 @@ function updateCore(content, intent) {
     return { content: reassembled, updated: [intent.field], data: { updated: true } };
 }
 // Stop predicate for prune section slicing: a level-2 OR level-3 heading ends
-// the section (mirrors state.cts STOP_H2_H3 — Decisions / Recently Completed /
-// Blockers / Performance Metrics live at H2 or H3).
+// the section. Phase 14.1 D3d left Performance Metrics as the only prune
+// target and it is a level 2 heading; the level-3 arm is retained so the
+// pruner still terminates correctly on a legacy file that predates D3d.
 const STOP_H2_H3 = (lv) => lv === 2 || lv === 3;
 /**
  * Apply a `prune` transition to STATE.md content.
  *
  * Migrates the section-pruning half of `cmdStatePrune` (state.cts) onto the
  * substrate. Pure `content → {content, archivedSections}` given a cutoff phase:
- * archives Decisions / Recently Completed / resolved Blockers / Performance
- * Metrics table rows whose phase number is <= cutoff. ADR-1372 T6
- * tokenizeHeadings + untrimmed-span splicing, byte-identical to the pre-migration
- * `prunePass`.
+ * archives Performance Metrics table rows whose phase number is <= cutoff. ADR-1372 T6
+ * tokenizeHeadings + untrimmed-span splicing. Phase 14.1 D3d narrowed the target
+ * list to Performance Metrics, the only one of the original 4 that still exists.
  *
  * The adapter owns currentPhase derivation (with the #1760 `Phase` / `Current
  * Phase` fallback), keepRecent/dryRun, and STATE-ARCHIVE.md writes.
@@ -1148,46 +1162,12 @@ function pruneCore(content, intent) {
             c = c.slice(0, bs) + keep.join('\n') + c.slice(se);
         }
     };
-    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text), (body) => {
-        const keep = [], archive = [];
-        for (const line of body.split('\n')) {
-            const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
-            if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-                archive.push(line);
-            }
-            else {
-                keep.push(line);
-            }
-        }
-        return { keep, archive };
-    }, 'Decisions');
-    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text), (body) => {
-        const keep = [], archive = [];
-        for (const line of body.split('\n')) {
-            const phaseMatch = line.match(/Phase\s+(\d+)/i);
-            if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-                archive.push(line);
-            }
-            else {
-                keep.push(line);
-            }
-        }
-        return { keep, archive };
-    }, 'Recently Completed');
-    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text), (body) => {
-        const keep = [], archive = [];
-        for (const line of body.split('\n')) {
-            const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
-            const phaseMatch = line.match(/Phase\s+(\d+)/i);
-            if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
-                archive.push(line);
-            }
-            else {
-                keep.push(line);
-            }
-        }
-        return { keep, archive };
-    }, 'Blockers (resolved)');
+    // NARROWED by phase 14.1 D3d. The 3 other prune targets — Decisions, Recently
+    // Completed, and resolved Blockers — lived in sections this phase deleted, so
+    // their spans can never be located again. They are removed rather than left as
+    // permanent no-ops: a target that can never match is a claim about a surface
+    // that no longer exists. A prune run simply reports zero archived for them by
+    // never listing them, and never fails.
     pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text), (body) => {
         const keep = [], archive = [];
         for (const line of body.split('\n')) {
@@ -1280,11 +1260,19 @@ function syncCore(content, intent, deps) {
 //
 // Implements the body-structure derivability contract (ADR-1817 §2–§6):
 //   - §2  re-derives derived sections (## Current Position prose, By Phase table
-//         inside ## Performance Metrics), preserves curated sections verbatim
-//         (## Accumulated Context, ## Deferred Items, ## Project Reference, ##
-//         Session Continuity's prose fields) and unknown sections.
-//   - §3  every mutation appends a structured entry to ## Rebuild Log
-//         (ADR-1411 provenance principle — never drop silently).
+//         inside ## Performance Metrics) and preserves unknown sections. The 4
+//         curated sections it used to preserve verbatim (## Accumulated Context,
+//         ## Deferred Items, ## Project Reference, ## Session Continuity) were
+//         DELETED by phase 14.1 D3d, so there is nothing left to preserve.
+//   - §3  every mutation is returned as a structured entry in `data.log`
+//         (ADR-1411 provenance principle — never drop silently). Phase 14.1
+//         plan 02 moved the DESTINATION of those entries out of STATE.md and
+//         into an append-only sidecar written by the impure caller: the entry's
+//         `before` field carries the drifted prose the rebuild just deleted,
+//         verbatim, so leaving it inside the guarded file would let a
+//         versionless false claim survive with the structural guard green.
+//         An audit log records what changed; it is not a statement of current
+//         state, so under D3d it does not belong in the file at all.
 //   - §4  idempotency: a no-mutation rebuild appends NO log entry, so two
 //         successive runs on a clean file are byte-identical.
 //   - §5  non-overlapping with sync (sync = 3 frontmatter fields, lightweight,
@@ -1292,10 +1280,10 @@ function syncCore(content, intent, deps) {
 //   - §6  orthogonal to auto_prune_state (rebuild reconciles with current
 //         canonical sources; prune removes by retention policy).
 //
-// Section ordering is invariant: rebuild rewrites content IN PLACE; it does
-// not reorder, insert (other than ## Rebuild Log when absent), or remove
-// sections.
-const REBUILD_LOG_SECTION = '## Rebuild Log';
+// Section ordering is invariant: rebuild rewrites content IN PLACE; it does not
+// reorder, insert, or remove sections. Since phase 14.1 plan 02 it inserts NO
+// section at all: the audit-log section constant and its section writer are
+// RETIRED, not merely bypassed. See the retirement note further down this file.
 const REBUILD_LOG_TRUNCATION_LIMIT = 512;
 /**
  * Truncate a string for inclusion in a rebuild log entry. Per ADR-1817 §3 the
@@ -1321,13 +1309,10 @@ function rebuildCore(content, _intent, deps) {
     modified = reconcileCurrentPosition(modified, timestamp, log);
     modified = reconcileByPhaseTable(modified, deps, timestamp, log);
     modified = stripTemplatePlaceholders(modified, timestamp, log);
-    modified = deduplicateSessionArchive(modified, timestamp, log);
-    // §3 + §4: append the audit log ONLY when mutations occurred. The
-    // log-appends-only-on-mutation rule is what makes idempotency byte-identical
-    // (without it, the second invocation would always append a no-op entry).
-    if (log.length > 0) {
-        modified = appendRebuildLogSection(modified, log);
-    }
+    // §3 + §4: the entries leave through `data.log` below and the impure caller
+    // appends them to the sidecar. The append-only-ON-MUTATION rule is preserved
+    // there: a rebuild that found no drift produces an empty log and writes no
+    // sidecar line, which is what keeps the verb idempotent.
     const updated = log.length > 0 ? ['rebuild'] : [];
     return {
         content: modified,
@@ -1532,127 +1517,20 @@ function stripTemplatePlaceholders(content, timestamp, log) {
     }
     return lines.join('\n');
 }
-/**
- * §2 + epic-#1817 drift class — duplicate `## Session Continuity Archive`
- * blocks from repeated `state record-session` calls on a corrupt file. The
- * canonical template has one `## Session Continuity` section; archived blocks
- * may accumulate as `### Session — <timestamp>` H3 sub-sections under it.
- * Rebuild keeps the most-recent N (default 3) and drops older duplicates,
- * logging each drop.
- *
- * Conservative scope: only acts when the section has more than 3 H3
- * `### Session —` sub-headings; otherwise it's a no-op (preserve verbatim).
- */
-const DEFAULT_MAX_SESSION_ARCHIVES = 3;
-// `tokenizeHeadings` strips leading `#` markers — `h.text` for `### Session — X`
-// is just `Session — X`. Match the bare heading text.
-const SESSION_ARCHIVE_H3 = /^Session\s+—/;
-function deduplicateSessionArchive(content, timestamp, log) {
-    const hs = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(content);
-    // Find `## Session Continuity` H2.
-    const sectionIdx = hs.findIndex((h) => h.level === 2 && h.text === 'Session Continuity');
-    if (sectionIdx === -1)
-        return content;
-    // Find the section span: from this H2's offset to the next H2 (or EOF).
-    const sectionStart = hs[sectionIdx].offset;
-    let sectionEnd = content.length;
-    for (let i = sectionIdx + 1; i < hs.length; i++) {
-        if (hs[i].level === 2) {
-            sectionEnd = hs[i].offset;
-            break;
-        }
-    }
-    // Count `### Session — …` H3 sub-headings inside the section.
-    const archiveHeadings = hs.filter((h) => h.level === 3 && h.offset >= sectionStart && h.offset < sectionEnd && SESSION_ARCHIVE_H3.test(h.text));
-    if (archiveHeadings.length <= DEFAULT_MAX_SESSION_ARCHIVES)
-        return content;
-    // Keep the most-recent N by offset (last N in document order; if timestamps
-    // in the H3 text are in chronological order — the template convention —
-    // last-N == most-recent-N).
-    const dropCount = archiveHeadings.length - DEFAULT_MAX_SESSION_ARCHIVES;
-    const toDrop = archiveHeadings.slice(0, dropCount);
-    // Compute the byte spans to drop: each archived H3 spans from its offset to
-    // the next H3 (or to sectionEnd). Drop with one preceding blank line so we
-    // don't leave a dangling separator.
-    let mutated = content;
-    // Process from the bottom up so offsets don't shift mid-edit.
-    for (let i = toDrop.length - 1; i >= 0; i--) {
-        const h = toDrop[i];
-        let spanEnd = sectionEnd;
-        // Find next H3 at-or-after h.offset (within the section).
-        for (const candidate of hs) {
-            if (candidate.level === 3 && candidate.offset > h.offset && candidate.offset < sectionEnd) {
-                spanEnd = candidate.offset;
-                break;
-            }
-        }
-        const dropStart = h.offset;
-        const before = mutated.slice(0, dropStart);
-        const after = mutated.slice(spanEnd);
-        const droppedText = mutated.slice(dropStart, spanEnd);
-        mutated = before + after;
-        log.push({
-            timestamp,
-            kind: 'session-archive-deduplicated',
-            section: exports.STATE_MD_SECTIONS.sessionContinuity,
-            before: truncateForLog(droppedText),
-            after: '',
-            reason: `archived session ${JSON.stringify(h.text)} exceeded the ${DEFAULT_MAX_SESSION_ARCHIVES}-most-recent retention; dropped`,
-        });
-    }
-    return mutated;
-}
-/**
- * §3 — append a structured audit entry to `## Rebuild Log`. Per ADR-1817 §3
- * the section is created if absent; existing entries are preserved verbatim
- * (append-only).
- *
- * Format (yaml-ish, human-readable, machine-parseable):
- *
- *   ## Rebuild Log
- *
- *   - timestamp: 2026-06-29T19:30:00Z
- *     kind: placeholder-removed
- *     section: ## Current Position
- *     before: ...
- *     after: ...
- *     reason: ...
- */
-function appendRebuildLogSection(content, entries) {
-    const lines = content.split('\n');
-    // Render the new entry block.
-    const rendered = [];
-    for (const e of entries) {
-        rendered.push(`- timestamp: ${e.timestamp}`);
-        rendered.push(`  kind: ${e.kind}`);
-        rendered.push(`  section: ${e.section}`);
-        rendered.push(`  before: ${e.before.replace(/\n/g, ' \\n ')}`);
-        rendered.push(`  after: ${e.after.replace(/\n/g, ' \\n ')}`);
-        rendered.push(`  reason: ${e.reason.replace(/\n/g, ' \\n ')}`);
-    }
-    // Locate an existing `## Rebuild Log` section.
-    const sectionHeaderIdx = lines.findIndex((l) => l.trim() === REBUILD_LOG_SECTION);
-    if (sectionHeaderIdx === -1) {
-        // Create the section at end-of-file, separated by a blank line.
-        const needsLeadingBlank = lines.length > 0 && lines[lines.length - 1].trim() !== '';
-        const trailer = needsLeadingBlank ? ['', REBUILD_LOG_SECTION, '', ...rendered] : [REBUILD_LOG_SECTION, '', ...rendered];
-        return [...lines, ...trailer].join('\n');
-    }
-    // Append to the existing section. Find the end of the existing log entries
-    // (walk forward until the next H2 or EOF). Insert before that boundary.
-    let insertAt = sectionHeaderIdx + 1;
-    while (insertAt < lines.length) {
-        const l = lines[insertAt];
-        if (/^##\s/.test(l))
-            break;
-        insertAt++;
-    }
-    // Preserve a blank-line separator before the new entries if the prior line
-    // is non-blank and non-header.
-    const sep = [];
-    if (insertAt > 0 && lines[insertAt - 1].trim() !== '' && lines[insertAt - 1].trim() !== REBUILD_LOG_SECTION) {
-        sep.push('');
-    }
-    const next = [...lines.slice(0, insertAt), ...sep, ...rendered, ...lines.slice(insertAt)];
-    return next.join('\n');
-}
+// TWO FUNCTIONS RETIRED HERE by phase 14.1 plan 02.
+//
+// The session-archive reconciler deduplicated repeated `### Session —`
+// sub-headings inside `## Session Continuity`. D3d deleted that section, so the
+// reconciler could never fire again; a permanently dead reconciler is a claim
+// about a surface that no longer exists, which is the defect class this phase
+// closes.
+//
+// The audit-log section writer rendered the rebuild entries into a level 2
+// section of the very file they audit, with the `before` field carrying the
+// drifted prose verbatim and newlines escaped. That let a versionless false
+// claim survive the deletion with the structural guard green. The entries still
+// leave `rebuildCore` through `data.log`; `cmdStateRebuild` (src/state.cts)
+// appends them to an append-only JSON Lines sidecar instead. `RebuildLogEntry`,
+// `REBUILD_LOG_TRUNCATION_LIMIT` and `truncateForLog` are RETAINED unchanged:
+// the entries still need their 6 fields and still need bounding, only their
+// destination changed.

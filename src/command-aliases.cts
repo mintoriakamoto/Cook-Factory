@@ -1261,3 +1261,43 @@ export const MEMORY_COMMAND_ALIASES: CommandAlias[] = [
 ];
 
 export const MEMORY_SUBCOMMANDS: string[] = MEMORY_COMMAND_ALIASES.map((entry) => entry.subcommand);
+
+// ─── Phase 15 anti-loop family (Plan 02) ───────────────────────────────────────
+// One `antiloop` family, 4 locked-name subcommands registering the tested
+// Phase-15 plan-01 fold into the dispatch layer: declare-budget (MUTATION —
+// appends the budget event, refuses a second declaration), open-round
+// (MUTATION — appends only when the fold permits the open), file-finding
+// (MUTATION — records a finding with the fold's blocking verdict, never the
+// requested one), status (read-only).
+//
+// There is deliberately no verb and no flag that supplies a round count, clears
+// a counter, overrides a refusal, or carries a review past a spent budget.
+
+export const ANTILOOP_COMMAND_ALIASES: CommandAlias[] = [
+  {
+    "canonical": "antiloop.declare-budget",
+    "aliases": ["antiloop declare-budget"],
+    "subcommand": "declare-budget",
+    "mutation": true
+  },
+  {
+    "canonical": "antiloop.open-round",
+    "aliases": ["antiloop open-round"],
+    "subcommand": "open-round",
+    "mutation": true
+  },
+  {
+    "canonical": "antiloop.file-finding",
+    "aliases": ["antiloop file-finding"],
+    "subcommand": "file-finding",
+    "mutation": true
+  },
+  {
+    "canonical": "antiloop.status",
+    "aliases": ["antiloop status"],
+    "subcommand": "status",
+    "mutation": false
+  }
+];
+
+export const ANTILOOP_SUBCOMMANDS: string[] = ANTILOOP_COMMAND_ALIASES.map((entry) => entry.subcommand);

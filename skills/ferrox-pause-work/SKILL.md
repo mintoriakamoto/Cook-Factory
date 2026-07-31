@@ -1,6 +1,6 @@
 ---
 name: ferrox-pause-work
-description: "Create context handoff when pausing work mid-phase"
+description: "You are stopping mid step and want to come back to it. Writes a handoff you can resume"
 argument-hint: "[--report]"
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: ferrox-onboard
-description: "Guide existing codebase onboarding through mapping, doc ingest, and planning setup"
+description: "You have an existing codebase and want Ferrox on it. Maps, ingests docs, sets up planning"
 argument-hint: "[--fast] [--text]"
 allowed-tools:
   - Read

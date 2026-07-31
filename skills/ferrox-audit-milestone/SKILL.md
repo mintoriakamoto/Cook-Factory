@@ -1,6 +1,6 @@
 ---
 name: ferrox-audit-milestone
-description: "Audit milestone completion against original intent before archiving"
+description: "A milestone looks done and you want it checked against what you originally asked for"
 argument-hint: "[version]"
 allowed-tools:
   - Read

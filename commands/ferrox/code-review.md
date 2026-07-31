@@ -1,6 +1,6 @@
 ---
 name: ferrox:code-review
-description: Review source files changed during a phase for bugs, security issues, and code quality problems
+description: "You want the code checked for bugs, security issues and quality before it goes anywhere"
 argument-hint: "<phase-number> [--depth=quick|standard|deep] [--files file1,file2,...] [--fix [--all] [--auto]]"
 allowed-tools:
   - Read

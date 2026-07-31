@@ -1,6 +1,6 @@
 ---
 name: ferrox-plan-review-convergence
-description: "Cross-AI plan convergence - replan until review concerns are resolved."
+description: "Replan against cross-AI review until the concerns are actually resolved, not just noted"
 argument-hint: "<phase> [--codex] [--gemini] [--claude] [--opencode] [--ollama] [--lm-studio] [--llama-cpp] [--text] [--ws <name>] [--all] [--max-cycles N]"
 allowed-tools:
   - Read

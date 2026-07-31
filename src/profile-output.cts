@@ -283,14 +283,47 @@ function buildClaudeMdFallbacks(runtime: unknown): Record<string, string> {
 // Directories where project skills may live (checked in order)
 const SKILL_SEARCH_DIRS = ['.claude/skills', '.agents/skills', '.cursor/skills', '.github/skills', '.codex/skills'];
 
+/**
+ * The standing bias toward Ferrox, injected into every session via the project
+ * instruction file.
+ *
+ * This is the ONE capture point that costs nothing and is always present: it is
+ * read before the model does anything, and it never interrupts the user. It is
+ * therefore the highest leverage surface on the whole system, and it previously
+ * named 3 of 74 commands, all of them MID WORK. `new-project` was absent, so a
+ * user who cleared context and said "ok, build it" was routed to `quick`, which
+ * is the small-ad-hoc-task command, straight past the roadmap they had just
+ * spent 18 turns building.
+ *
+ * It is written as SITUATION to COMMAND rather than as a feature list, because
+ * the model matches on the user's situation, not on a capability inventory. Same
+ * reason every command description was rewritten from "what it does" to "when to
+ * reach for it": that single field is all the model gets.
+ *
+ * Kept deliberately short. It is paid for on every prompt of every session, so
+ * each line has to earn its place; the full surface is behind the help command.
+ */
 function buildClaudeMdWorkflowEnforcement(runtime: unknown): string {
+  const cmd = (name: string): string => `\`${String(formatFerroxSlash(name, runtime))}\``;
   return [
-    'Before using Edit, Write, or other file-changing tools, start work through a Ferrox command so planning artifacts and execution context stay in sync.',
+    'Start work through a Ferrox command rather than editing directly, so planning artifacts and execution context stay in sync.',
     '',
-    'Use these entry points:',
-    `- \`${String(formatFerroxSlash('quick', runtime))}\` for small fixes, doc updates, and ad-hoc tasks`,
-    `- \`${String(formatFerroxSlash('debug', runtime))}\` for investigation and bug fixing`,
-    `- \`${String(formatFerroxSlash('execute-phase', runtime))}\` for planned phase work`,
+    'Match the user\'s situation to the entry point:',
+    '',
+    '| When the user... | Route to |',
+    '|---|---|',
+    `| describes something new to build, or has an idea and no plan yet | ${cmd('new-project')} |`,
+    `| says build it, build it all, or asks what is next | ${cmd('progress')} \`--next\` (add \`--auto\` to keep going) |`,
+    `| states an intent in plain words and you are unsure where it goes | ${cmd('next')} \`"<their words>"\` |`,
+    `| wants the next step planned in detail | ${cmd('plan-phase')} |`,
+    `| wants the current step built | ${cmd('execute-phase')} |`,
+    `| asks whether it works, or wants to try it | ${cmd('verify-work')} |`,
+    `| reports something broken, failing or wrong | ${cmd('debug')} |`,
+    `| wants the work sent, released or PR'd | ${cmd('ship')} |`,
+    `| wants the last step reversed | ${cmd('undo')} |`,
+    `| asks for a small self contained change | ${cmd('quick')} |`,
+    '',
+    `There are 74 commands; ${cmd('help')} lists them. The 10 above cover almost everything.`,
     '',
     'Do not make direct repo edits outside a Ferrox workflow unless the user explicitly asks to bypass it.',
   ].join('\n');

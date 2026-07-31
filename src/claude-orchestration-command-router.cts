@@ -11,16 +11,23 @@
  * routers; discovered by dispatchCapabilityCommand via the registry's
  * commandFamilies index.
  *
- * Subcommands:
+ * Subcommands (phase 21 SC2 adds 2 FLAGS and 0 subcommands — a third subcommand
+ * would change the capability's declared subcommand list and drag a registry
+ * surface behind it for no gain):
  *   detect-backend [--runtime <id>] [--agent-sdk-version <ver>] [--no-nested-dispatch]
- *       Resolves whether the Workflow backend should activate. `--runtime`
+ *                  [--backend <auto|workflow|inline|fleet>]
+ *       Resolves which execution backend should activate. `--runtime`
  *       defaults to the FERROX_RUNTIME env var (or 'unknown'). Reads the
- *       `claude_orchestration.*` keys from .planning/config.json. Emits
- *       { available, backend, reason }.
+ *       `claude_orchestration.*` AND `fleet.*` keys from .planning/config.json;
+ *       `--backend` overrides the configured execution_backend for this call.
+ *       Emits { available, backend, reason }. The fleet rung OBSERVES the project
+ *       tree at `cwd`, so this is the seam a fail-closed proof drives.
  *
  *   emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]
- *       Reads a wave/plan manifest JSON file and emits the generated Workflow
- *       script + summary. The manifest shape matches emitWorkflowScript's input:
+ *                 [--backend <workflow|fleet>]
+ *       Reads a wave/plan manifest JSON file and emits either the generated
+ *       Workflow script + summary (default) or, with `--backend fleet`, the fleet
+ *       dispatch manifest + the SAME summary. The input shape is unchanged:
  *       { waves: [{ id, plans: [{ id, brief, files_modified: string[] }] }] }.
  */
 
@@ -34,7 +41,7 @@ import core = require('./claude-orchestration.cjs');
 import configLoader = require('./config-loader.cjs');
 
 const { output } = io;
-const { detectWorkflowBackend, emitWorkflowScript } = core;
+const { detectWorkflowBackend, emitWorkflowScript, emitFleetManifest, FLEET_BACKEND, BACKEND_VALUES } = core;
 
 const CAPABLE_HOST = { dispatch: { nested: true, background: true } };
 
@@ -49,7 +56,9 @@ function usage(error: (msg: string, reason?: string) => void): void {
   error(
     'Usage: ferrox-tools claude-orchestration <detect-backend|emit-workflow> [...]\n' +
     '  detect-backend [--runtime <id>] [--agent-sdk-version <ver>] [--no-nested-dispatch]\n' +
-    '  emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]',
+    '                 [--backend <auto|workflow|inline|fleet>]\n' +
+    '  emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]\n' +
+    '                [--backend <workflow|fleet>]',
   );
 }
 
@@ -69,27 +78,51 @@ function cmdDetectBackend(args: string[], cwd: string, raw: boolean): void {
   const noNested = args.includes('--no-nested-dispatch');
   const hostIntegration = noNested ? { dispatch: { nested: false, background: true } } : CAPABLE_HOST;
 
-  // Resolve the claude_orchestration.* slice from the project config (federated
-  // keys are merged by loadConfig as a nested object). A config read failure
-  // degrades to inline — it must not break the core loop.
-  let claudeSlice: Record<string, unknown> = {};
+  // Resolve the claude_orchestration.* and fleet.* slices from the project config
+  // (federated keys are merged by loadConfig as nested objects). A config read
+  // failure degrades to inline — it must not break the core loop. The fleet slice
+  // is read because the fleet rung consults the fleet engine's OWN activation key;
+  // reading it out of the fleet capability rather than mirroring it into a second
+  // claude_orchestration key keeps 1 switch for 1 engine.
+  const slices: Record<string, unknown> = {};
   try {
     const loaded = configLoader.loadConfig(cwd);
-    const slice = loaded['claude_orchestration'];
-    if (slice && typeof slice === 'object' && !Array.isArray(slice)) {
-      claudeSlice = slice as Record<string, unknown>;
+    for (const family of ['claude_orchestration', 'fleet']) {
+      const slice = loaded[family];
+      if (slice && typeof slice === 'object' && !Array.isArray(slice)) {
+        slices[family] = slice;
+      }
     }
   } catch {
-    claudeSlice = {};
+    // leave slices empty — every downstream rung then fails closed to inline.
   }
 
-  // Flatten the nested slice into the dotted-key shape detectWorkflowBackend expects.
+  // Flatten the nested slices into the dotted-key shape detectWorkflowBackend expects.
   const flatConfig: Record<string, unknown> = {};
-  for (const k of Object.keys(claudeSlice)) {
-    flatConfig['claude_orchestration.' + k] = claudeSlice[k];
+  for (const family of Object.keys(slices)) {
+    const slice = slices[family] as Record<string, unknown>;
+    for (const k of Object.keys(slice)) {
+      flatConfig[family + '.' + k] = slice[k];
+    }
   }
 
-  const result = detectWorkflowBackend({ runtimeId, hostIntegration, config: flatConfig, agentSdkVersion });
+  // --backend overrides the configured execution_backend for this call only. An
+  // unrecognised value is IGNORED rather than accepted: the enum is closed, and a
+  // typo silently selecting a backend is the class of defect the enum exists for.
+  const backendOverride = argValue(args, '--backend');
+  if (backendOverride !== undefined && BACKEND_VALUES.has(backendOverride)) {
+    flatConfig['claude_orchestration.execution_backend'] = backendOverride;
+  }
+
+  const result = detectWorkflowBackend({
+    runtimeId,
+    hostIntegration,
+    config: flatConfig,
+    agentSdkVersion,
+    // The fleet rung observes THIS tree. Passing cwd rather than process.cwd() is
+    // what lets a scratch project be probed as itself.
+    projectRoot: cwd,
+  });
   output(result, raw);
 }
 
@@ -124,12 +157,27 @@ function cmdEmitWorkflow(args: string[], _cwd: string, raw: boolean, error: (msg
   const budgetTokens = budgetRaw !== undefined ? parseInt(budgetRaw, 10) : undefined;
   const budget = (typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)) ? budgetTokens : undefined;
 
-  const result = emitWorkflowScript({
+  const emitInput = {
     phaseDir,
     runId,
     waves: waves as EmitInput['waves'],
     budgetTokens: budget,
-  });
+  };
+
+  // --backend fleet selects the manifest emitter. Both emitters share ONE
+  // validation ladder and ONE overlap rule, so this flag changes the dispatch
+  // vehicle and nothing about which plans may run together.
+  if (argValue(args, '--backend') === FLEET_BACKEND) {
+    const fleetResult = emitFleetManifest(emitInput);
+    if (!fleetResult.ok) {
+      error('emit-workflow: ' + fleetResult.reason);
+      return;
+    }
+    output({ manifest: fleetResult.manifest, summary: fleetResult.summary }, raw);
+    return;
+  }
+
+  const result = emitWorkflowScript(emitInput);
 
   if (!result.ok) {
     error('emit-workflow: ' + result.reason);

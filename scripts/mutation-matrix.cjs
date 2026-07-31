@@ -183,6 +183,122 @@ const COVERED = {
   },
 };
 
+// ── Single source of truth: the guard surface roster ──────────────────────────
+// Phase 20 / requirement 20-SC3. Consumed by scripts/gate-mutation.cjs.
+//
+// WHAT THIS TABLE IS FOR:
+//   COVERED (above) answers "which module shards does CI run when src changes".
+//   GUARD_SURFACE answers "which guard modules must keep killing their mutants".
+//   Both live in this file because this file's header already declares itself the
+//   single source of truth for mutation scope, and 2 scope tables in 2 files are
+//   2 answers to 1 question.
+//
+// SHAPE: every entry carries `cjs` (the built artifact) and `tests` (existing
+// test files), plus EXACTLY 1 of:
+//   minScore  a number 1-100, the floor the module must stay at or above
+//   excluded  a non-empty reason string naming why it cannot be mutated
+// An entry with both, or with neither, is malformed and the roster battery in
+// tests/gate-mutation.test.cjs refuses it.
+//
+// FLOORS ARE MEASURED, NEVER ASPIRED TO. Live run on this machine 2026-07-26
+// with @stryker-mutator/core 9.6.1 (phase 20 CONTEXT.md D4):
+//   gate-cap                 93.18  ->  floor 91
+//   strength-severity-route  80.00  ->  floor 78
+//   fleet-capability         72.99  ->  floor 70   (corrected, see its entry)
+//   governance-manifest      46.03  ->  floor 44
+//
+// Re-measured through the gate itself on 2026-07-26. gate-cap (41/44),
+// strength-severity-route (36/45) and governance-manifest (452/982) reproduced
+// their D4 numbers to the hundredth. fleet-capability did not, for a reason
+// recorded in its entry, and its floor is the observed value rather than the
+// planned one.
+// Margin is 2 points for run-to-run variance, matching the calibration rule the
+// COVERED comment block above already states. A floor set ABOVE its measurement
+// is a gate that fires on day 1 for a reason unrelated to any change, and a gate
+// that fires for the wrong reason gets switched off. This table is a RATCHET:
+// raising a floor after improving tests is the intended motion; lowering one is
+// a decision, not a fix.
+//
+// SCOPE DECISION, recorded as a decision and not an oversight: the `scripts/*.cjs`
+// lint checkers are OUT of the first roster. Stryker's `mutate` list and this
+// repository's ADR-457 convention both address built bin/lib artifacts, and
+// pulling in a second tree is a second problem with its own test wiring.
+// Extending the roster later is a 1 line edit, which is the point of the table
+// being explicit rather than a glob.
+const GUARD_SURFACE = {
+  'gate-cap': {
+    cjs: 'ferrox-core/bin/lib/gate-cap.cjs',
+    tests: [
+      'tests/gate-cap.test.cjs',
+      'tests/gate-cap-enum-failsafe.test.cjs',
+    ],
+    // Measured 93.18 (44 mutants, 41 killed, 3 survived). The 3 survivors are
+    // real defects, not equivalent mutants: the cap boundary `>=` mutated to `>`,
+    // `(nowMs - startMs)` mutated to `+`, and a typeof guard mutated to `true`.
+    minScore: 91,
+  },
+  'strength-severity-route': {
+    cjs: 'ferrox-core/bin/lib/strength-severity-route.cjs',
+    tests: [
+      'tests/strength-severity-route.test.cjs',
+    ],
+    // Measured 80.00 (45 mutants, 36 killed, 9 survived).
+    minScore: 78,
+  },
+  'fleet-capability': {
+    cjs: 'ferrox-core/bin/lib/fleet-capability.cjs',
+    tests: [
+      'tests/fleet-capability.test.cjs',
+      // tests/fleet-doctor.test.cjs is DELIBERATELY NOT in this set, and this is
+      // a correction recorded rather than dropped. CONTEXT.md D4 measured this
+      // module at 77.37 (137 mutants, 106 killed) with both test files. Driving
+      // the gate for real showed that test file failing Stryker's INITIAL DRY RUN
+      // with `ConfigError: There were failed tests in the initial test run`: at
+      // tests/fleet-doctor.test.cjs:394 it runs the installer, and Stryker's
+      // sandbox never copies node_modules, so the install cannot resolve. That is
+      // the same nameable shape as the atomic-state and team-manifest exclusions
+      // below, applied to 1 test file rather than a whole module.
+      //
+      // The module STAYS under the gate on the test set that can actually run.
+      // Same 137 mutants, 100 killed: measured 72.99, floor = 72 - 2.
+      // Excluding the module instead would have been a guard leaving the surface
+      // to keep a number tidy.
+    ],
+    minScore: 70,
+  },
+  'governance-manifest': {
+    cjs: 'ferrox-core/bin/lib/governance-manifest.cjs',
+    tests: [
+      'tests/governance-manifest.test.cjs',
+    ],
+    // Measured 46.03 (982 mutants, 452 killed, 530 survived). This is the
+    // artifact phase 14.1 built so no governance file can assert a false state,
+    // and it kills fewer than half of its mutants. The floor locks in the truth;
+    // the ratchet is how it improves.
+    minScore: 44,
+  },
+  'atomic-state': {
+    cjs: 'ferrox-core/bin/lib/atomic-state.cjs',
+    tests: [
+      'tests/atomic-state-fence.test.cjs',
+    ],
+    excluded:
+      'tests/atomic-state-fence.test.cjs:206 shells to git, and the Stryker ' +
+      'command runner executes the test set inside a sandbox copy with no .git ' +
+      'directory, so the initial dry run fails before a single mutant is created',
+  },
+  'team-manifest': {
+    cjs: 'ferrox-core/bin/lib/team-manifest.cjs',
+    tests: [
+      'tests/team-manifest.test.cjs',
+    ],
+    excluded:
+      'tests/team-manifest.test.cjs:461 shells to git, and the Stryker command ' +
+      'runner executes the test set inside a sandbox copy with no .git ' +
+      'directory, so the initial dry run fails before a single mutant is created',
+  },
+};
+
 // ── Files that, when changed, invalidate ALL modules ─────────────────────────
 // Changes to the Stryker config, this script itself, or any covered test file
 // affect all mutation scores and must force a full re-run.
@@ -360,6 +476,12 @@ function resolveMutationBreak(raw) {
 
 // Export internals for programmatic use (tests/mutation-matrix-ratchet.test.cjs).
 // The require.main guard prevents main() from running when this file is require()d.
-module.exports = { COVERED, TARGET_MUTATION_SCORE, resolveMutationBreak, readStdinSync };
+module.exports = {
+  COVERED,
+  GUARD_SURFACE,
+  TARGET_MUTATION_SCORE,
+  resolveMutationBreak,
+  readStdinSync,
+};
 
 if (require.main === module) runMain(main);

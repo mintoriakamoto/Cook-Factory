@@ -1,6 +1,6 @@
 ---
 name: ferrox-forensics
-description: "Post-mortem investigation for failed Ferrox workflows — diagnoses what went wrong."
+description: "A Ferrox run failed or did something you did not expect. Post mortem on what went wrong"
 argument-hint: "[problem description]"
 allowed-tools:
   - Read

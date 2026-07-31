@@ -35,8 +35,20 @@
  *   - Fail-closed: an unknown version, a missing descriptor, or a disabled
  *     toggle all resolve to `inline`, never to `workflow`.
  *
- * Zero external dependencies. Pure functions. Never throws on bad input.
+ * Zero third-party dependencies. Never throws on bad input.
+ *
+ * Phase 21 SC2 adds a FOURTH backend, `fleet`, and one seam that is not pure:
+ * the fleet rung is an OBSERVATION of artifacts on disk and of an interpreter on
+ * PATH, never a configuration value read back out of a configuration object. The
+ * observation is injected as a `probe`, exactly as `clock.cjs` injects time and
+ * `gate-cap.cjs` injects budgets, and the DEFAULT probe does the real filesystem
+ * and PATH work rooted at an explicit project root. That is what lets both arms
+ * of the fail-closed proof be real: a scratch tree with the artifacts genuinely
+ * absent, and the same tree with every one of them genuinely planted.
  */
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -48,10 +60,48 @@
 const WORKFLOW_TOOL_FLOOR_VERSION = '0.3.149';
 
 /** Closed enum for the `claude_orchestration.execution_backend` config key. */
-const BACKEND_VALUES = new Set<string>(['auto', 'workflow', 'inline']);
+const BACKEND_VALUES = new Set<string>(['auto', 'workflow', 'inline', 'fleet']);
 
 /** Only this runtime can host the Workflow tool (Claude Code / Agent SDK). */
 const WORKFLOW_RUNTIME = 'claude';
+
+/** The fourth backend value, named once so the router and the ladder agree. */
+const FLEET_BACKEND = 'fleet';
+
+/**
+ * The interpreter the fleet engine declares as its own precondition.
+ * READ from `capabilities/fleet/capability.json`, which states "Requires a Python 3
+ * interpreter on PATH when enabled; the default inline execution path never needs
+ * one." A committed test asserts that declaration is still there, so this constant
+ * cannot silently outlive the requirement it tracks.
+ */
+const FLEET_INTERPRETER = 'python3';
+
+/**
+ * Every repository-relative artifact the fleet runtime needs before a fleet
+ * dispatch can be anything other than a promise.
+ *
+ * ONE constant, exported, and iterated by the fail-closed battery rather than
+ * transcribed into it. Two copies of a list is how a new artifact ships with no
+ * coverage.
+ *
+ * `scripts/fleet-loop.cjs` is the driver produced by plan 19-05; if that plan's
+ * driver is ever renamed or relocated, this is the single line to change and
+ * `tests/claude-orchestration.test.cjs` names which. The 7 libs below are the
+ * exact set the driver loads through its own `loadLib` at
+ * `scripts/fleet-loop.cjs:194-206`; each is a hard require, so an absent one is a
+ * fleet that cannot start.
+ */
+const FLEET_RUNTIME_ARTIFACTS: readonly string[] = Object.freeze([
+  'scripts/fleet-loop.cjs',
+  'ferrox-core/bin/lib/fleet-runlog.cjs',
+  'ferrox-core/bin/lib/fleet-runfold.cjs',
+  'ferrox-core/bin/lib/fleet-board.cjs',
+  'ferrox-core/bin/lib/fleet-landqueue.cjs',
+  'ferrox-core/bin/lib/fleet-manager.cjs',
+  'ferrox-core/bin/lib/fleet-park.cjs',
+  'ferrox-core/bin/lib/fleet-probe.cjs',
+]);
 
 // ─── Semver helpers ───────────────────────────────────────────────────────────
 
@@ -146,22 +196,159 @@ interface BackendConfig {
   [k: string]: unknown;
 }
 
+/**
+ * The observation seam. Both members answer a question about the WORLD, never
+ * about the config object. The default implementation below does the real work;
+ * a test supplies a scratch root or a deliberately empty PATH so neither arm of
+ * the fail-closed proof is a mock asserting itself.
+ */
+interface FleetProbe {
+  /** True when `relPath` (repository-relative) exists as a readable file under `root`. */
+  pathExists(root: string, relPath: string): boolean;
+  /** True when `name` resolves to an executable file on the process PATH. */
+  interpreterOnPath(name: string): boolean;
+}
+
 interface DetectInput {
   runtimeId?: string;
   hostIntegration?: HostIntegration | null;
   config?: BackendConfig | null;
   agentSdkVersion?: string;
+  /** Root the fleet artifact probe resolves against. Defaults to process.cwd(). */
+  projectRoot?: string;
+  /** Injected observation seam. Absent → the real filesystem/PATH probe. */
+  probe?: FleetProbe | null;
 }
 
 interface DetectResult {
   available: boolean;
-  backend: 'workflow' | 'inline';
+  backend: 'workflow' | 'inline' | 'fleet';
   reason: string;
 }
 
 /** Inline result shorthand. */
 function inline(reason: string, available = false): DetectResult {
   return { available, backend: 'inline', reason };
+}
+
+// ─── the default probe: real observation, no subprocess, no network ───────────
+
+/** True when `p` exists and is a regular file. Any error is "not observed". */
+function isReadableFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve `name` against the process PATH by scanning its entries directly.
+ *
+ * Deliberately NOT a subprocess: threat T-21-10 accepts the probe's cost only
+ * because it is a bounded number of local existence checks with no `which`, no
+ * shell and no network. A subprocess here would also inherit a shell builtin
+ * lookup that reports success for a command the fleet cannot actually execute.
+ */
+function resolveOnPath(name: string, env: Record<string, string | undefined>): boolean {
+  const raw = env['PATH'] || env['Path'] || '';
+  if (typeof raw !== 'string' || raw.length === 0) return false;
+  const exts = process.platform === 'win32'
+    ? (env['PATHEXT'] || '.EXE;.CMD;.BAT').split(';').filter((x) => x.length > 0)
+    : [''];
+  for (const dir of raw.split(path.delimiter)) {
+    if (dir.length === 0) continue;
+    for (const ext of exts) {
+      if (isReadableFile(path.join(dir, name + ext))) return true;
+    }
+  }
+  return false;
+}
+
+/** The default observation seam. */
+const DEFAULT_FLEET_PROBE: FleetProbe = Object.freeze({
+  pathExists(root: string, relPath: string): boolean {
+    return isReadableFile(path.join(root, relPath));
+  },
+  interpreterOnPath(name: string): boolean {
+    return resolveOnPath(name, process.env);
+  },
+});
+
+/**
+ * Resolve whether the FLEET backend should activate.
+ *
+ * Gate ladder (first miss wins, every miss resolving to `inline`):
+ *   1. capability enabled                      → capability_disabled
+ *   2. execution_backend is exactly 'fleet'     → backend_not_fleet
+ *   3. the fleet capability's activation key on  → fleet_capability_disabled
+ *   4. the declared interpreter resolves on PATH → fleet_interpreter_unavailable:<name>
+ *   5. every FLEET_RUNTIME_ARTIFACTS entry exists → fleet_artifact_missing:<relPath>
+ *
+ * Rungs 4 and 5 are OBSERVATIONS. That is the whole point of the rung: a
+ * configuration value is not evidence that a fleet can run, and a backend
+ * selected on a false premise is a fleet dispatched against a runtime that is
+ * not there (T-21-06).
+ *
+ * Deliberately independent of the Claude runtime rungs: a fleet of worker command
+ * line interfaces runs as separate operating system processes and needs no
+ * Workflow tool, so gating it behind the Claude check would refuse fleet on every
+ * other runtime for a reason that does not apply to it.
+ *
+ * Never throws. A probe that throws resolves to inline with `fleet_probe_failed`.
+ */
+function detectFleetBackend(input: DetectInput | null | undefined): DetectResult {
+  if (input === null || input === undefined || typeof input !== 'object') {
+    return inline('capability_disabled');
+  }
+  const cfg: BackendConfig =
+    (input.config !== null && input.config !== undefined && typeof input.config === 'object')
+      ? input.config
+      : {};
+
+  // 1. the capability must be opted in (default-off — ships disabled).
+  if (!cfg['claude_orchestration.enabled']) {
+    return inline('capability_disabled');
+  }
+
+  // 2. this ladder answers for the fleet backend and nothing else.
+  if (cfg['claude_orchestration.execution_backend'] !== FLEET_BACKEND) {
+    return inline('backend_not_fleet');
+  }
+
+  // 3. the fleet engine's own activation key. This is the last configuration rung;
+  //    everything below observes.
+  if (!cfg['fleet.enabled']) {
+    return inline('fleet_capability_disabled');
+  }
+
+  const probe: FleetProbe =
+    (input.probe !== null && input.probe !== undefined && typeof input.probe === 'object')
+      ? input.probe
+      : DEFAULT_FLEET_PROBE;
+  const root = typeof input.projectRoot === 'string' && input.projectRoot.length > 0
+    ? input.projectRoot
+    : process.cwd();
+
+  try {
+    // 4. the interpreter the fleet engine declares it requires.
+    if (probe.interpreterOnPath(FLEET_INTERPRETER) !== true) {
+      return inline('fleet_interpreter_unavailable:' + FLEET_INTERPRETER);
+    }
+    // 5. every runtime artifact, naming the first absent one so a reader of the
+    //    result learns what to fix rather than only that something is wrong.
+    for (const rel of FLEET_RUNTIME_ARTIFACTS) {
+      if (probe.pathExists(root, rel) !== true) {
+        return inline('fleet_artifact_missing:' + rel);
+      }
+    }
+  } catch {
+    // The module's header states it never throws on bad input; a hostile or broken
+    // probe is bad input, and it degrades to today's behaviour like every other miss.
+    return inline('fleet_probe_failed');
+  }
+
+  return { available: true, backend: 'fleet', reason: 'fleet_backend_active' };
 }
 
 /**
@@ -191,6 +378,16 @@ function detectWorkflowBackend(input: DetectInput | null | undefined): DetectRes
   // 1. capability must be opted in (default-off — ships disabled).
   if (!cfg['claude_orchestration.enabled']) {
     return inline('capability_disabled');
+  }
+
+  // 1b. FLEET ROUTE — deliberately BEFORE the Claude-specific rungs below. A fleet
+  //     of worker command line interfaces runs as separate operating system
+  //     processes and does not need the Workflow tool, so gating it behind the
+  //     Claude runtime check would refuse fleet on every other runtime for a reason
+  //     that does not apply to it. Only an EXACT 'fleet' request routes here, so the
+  //     3 pre-existing backends keep their exact rung order and their exact reasons.
+  if (cfg['claude_orchestration.execution_backend'] === FLEET_BACKEND) {
+    return detectFleetBackend(input);
   }
 
   // 2. only Claude can host the Workflow tool.
@@ -346,14 +543,35 @@ function isScriptableIdentifier(s: unknown): boolean {
   return !UNSCRIPTABLE_CHAR_RE.test(s);
 }
 
+interface FleetManifestOk {
+  ok: true;
+  manifest: {
+    kind: string;
+    phaseDir: string;
+    runId: string;
+    budgetTokens: number | null;
+    waves: Array<{
+      id: string;
+      stages: Array<{ index: number; plans: Plan[] }>;
+    }>;
+  };
+  summary: EmitOk['summary'];
+}
+
+/** Identifier of the emitted dispatch manifest shape. */
+const FLEET_MANIFEST_KIND = 'ferrox.fleet.dispatch/v1';
+
 /**
- * Emit a Workflow script mapping the phase's wave/plan model onto Workflow
- * primitives. Pure and deterministic: identical input yields an identical string.
+ * The ONE validation pass both emitters run, in ONE order, producing ONE reason
+ * per defect.
  *
- * Returns ok:false (never throws) on invalid input — empty waves, missing runId,
- * a wave with no plans, etc.
+ * Factored rather than copied on purpose. Two emitters carrying two copies of a
+ * refusal ladder is how an input that is unsafe under one backend becomes
+ * acceptable under the other, which is T-21-08 and T-21-09 in the same defect.
+ * Every reason string below is the literal the workflow emitter already shipped,
+ * so this refactor changes no observable refusal.
  */
-function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitErr {
+function validateEmitInput(input: EmitInput | null | undefined): EmitErr | { ok: true; budgetTokens: number | null } {
   if (input === null || input === undefined || typeof input !== 'object') {
     return { ok: false, reason: 'invalid_input' };
   }
@@ -405,6 +623,22 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
   const budgetTokens = (typeof input.budgetTokens === 'number' && Number.isFinite(input.budgetTokens) && input.budgetTokens > 0)
     ? Math.floor(input.budgetTokens)
     : null;
+
+  return { ok: true, budgetTokens };
+}
+
+/**
+ * Emit a Workflow script mapping the phase's wave/plan model onto Workflow
+ * primitives. Pure and deterministic: identical input yields an identical string.
+ *
+ * Returns ok:false (never throws) on invalid input — empty waves, missing runId,
+ * a wave with no plans, etc.
+ */
+function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitErr {
+  const validated = validateEmitInput(input);
+  if (!validated.ok) return validated;
+  const { budgetTokens } = validated;
+  const { phaseDir, waves, runId } = input as EmitInput;
 
   const lines: string[] = [];
   lines.push('// Ferrox Workflow script — generated by the claude-orchestration capability (#1143)');
@@ -472,14 +706,86 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
   };
 }
 
+/**
+ * Emit a FLEET dispatch manifest from the same wave/plan model.
+ *
+ * The manifest is DATA, not a script string: a fleet dispatches operating system
+ * processes, and a generated script would be a second execution vehicle to keep
+ * faithful to the first.
+ *
+ * It partitions each wave through `partitionStages`, the EXISTING function, and it
+ * validates through `validateEmitInput`, the EXISTING ladder. Neither is copied.
+ * That is the reason a plan pair that is unsafe under one backend cannot be safe
+ * under the other, and it is asserted directly by a committed case comparing the
+ * 2 summaries on identical input.
+ *
+ * Pure and deterministic. Never throws.
+ */
+function emitFleetManifest(input: EmitInput | null | undefined): FleetManifestOk | EmitErr {
+  const validated = validateEmitInput(input);
+  if (!validated.ok) return validated;
+  const { budgetTokens } = validated;
+  const { phaseDir, waves, runId } = input as EmitInput;
+
+  const stagesByWave: string[][][] = [];
+  let totalPlans = 0;
+  const manifestWaves: FleetManifestOk['manifest']['waves'] = [];
+
+  for (const wave of waves) {
+    const stages = partitionStages(wave.plans);
+    stagesByWave.push(stages);
+    totalPlans += wave.plans.length;
+    manifestWaves.push({
+      id: wave.id,
+      stages: stages.map((stagePlanIds, index) => ({
+        index,
+        // Plan ids are unique within a wave (validated above), so this resolve is total.
+        plans: stagePlanIds.map((id) => {
+          const p = wave.plans.find((c) => c.id === id) as Plan;
+          return { id: p.id, brief: p.brief, files_modified: p.files_modified.slice() };
+        }),
+      })),
+    });
+  }
+
+  return {
+    ok: true,
+    manifest: {
+      kind: FLEET_MANIFEST_KIND,
+      phaseDir,
+      runId,
+      budgetTokens,
+      waves: manifestWaves,
+    },
+    summary: {
+      waves: waves.length,
+      plans: totalPlans,
+      stagesByWave,
+      resumeRunId: runId,
+      budgetTokens,
+    },
+  };
+}
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 export = {
   detectWorkflowBackend,
+  detectFleetBackend,
   emitWorkflowScript,
+  emitFleetManifest,
   compareSemver,
   isValidSemver,
   WORKFLOW_TOOL_FLOOR_VERSION,
   BACKEND_VALUES,
   WORKFLOW_RUNTIME,
+  FLEET_BACKEND,
+  FLEET_INTERPRETER,
+  FLEET_RUNTIME_ARTIFACTS,
+  DEFAULT_FLEET_PROBE,
+  // Exported for the SAME reason FLEET_RUNTIME_ARTIFACTS is: the backend switch
+  // observes whether anything READS this kind (FF-B379), and an observer that
+  // transcribed the string would keep answering after the kind changed. Two
+  // copies of an identifier is how a gap gets reported closed while it is open.
+  FLEET_MANIFEST_KIND,
 };

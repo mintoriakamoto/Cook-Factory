@@ -491,8 +491,7 @@ Update STATE.md with session info:
 
 ```bash
 ferrox_run query state.record-session \
-  --stopped-at "Phase ${PHASE} context gathered" \
-  --resume-file "${phase_dir}/${padded_phase}-CONTEXT.md"
+  --stopped-at "Phase ${PHASE} context gathered"
 
 ferrox_run query commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
 ```

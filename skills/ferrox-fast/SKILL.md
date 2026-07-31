@@ -1,6 +1,6 @@
 ---
 name: ferrox-fast
-description: "Execute a trivial task inline — no subagents, no planning overhead"
+description: "A trivial change you could describe in one line. Runs inline, no subagents, no planning"
 argument-hint: "[task description]"
 allowed-tools:
   - Read

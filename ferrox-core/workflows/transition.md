@@ -317,30 +317,18 @@ Update the progress bar line in STATE.md with the result.
 
 </step>
 
-<step name="update_project_reference">
+<step name="review_decisions">
 
-Update Project Reference section in STATE.md.
+There is NO project-reference section and NO accumulated-context section in
+STATE.md since phase 14.1 D3d, so nothing here restates the current focus. The
+focus is derived from the single `lifecycle: active` milestone artifact.
 
-```markdown
-## Project Reference
-
-See: .planning/PROJECT.md (updated [today])
-
-**Core value:** [Current core value from PROJECT.md]
-**Current focus:** [Next phase name]
-```
-
-Update the date and current focus to reflect the transition.
-
-</step>
-
-<step name="review_accumulated_context">
-
-Review and update Accumulated Context section in STATE.md.
+Record this phase's decisions where they belong, in the machine-owned decisions
+log of that artifact:
 
 **Decisions:**
 
-- Note recent decisions from this phase (3-5 max)
+- Note recent decisions from this phase (3 to 5 max) via `state add-decision`
 - Full log lives in PROJECT.md Key Decisions table
 
 **Blockers/Concerns:**
@@ -380,20 +368,20 @@ After (if database indexing was addressed in Phase 2):
 
 <step name="update_session_continuity_after_transition">
 
-Update Session Continuity section in STATE.md to reflect transition completion.
+Record the session boundary. Since phase 14.1 D3d this writes the `stopped_at`
+and `last_activity` FRONTMATTER keys and creates no section:
 
-**Format:**
-
-```markdown
-Last session: [today]
-Stopped at: Phase [X] complete, ready to plan Phase [X+1]
-Resume file: None
+```bash
+ferrox_run query state.record-session --stopped-at "Phase [X] complete, ready to plan Phase [X+1]"
 ```
+
+Do NOT pass `--resume-file`: it is deprecated and ignored, because the active
+milestone artifact already names where to resume.
 
 **Step complete when:**
 
-- [ ] Last session timestamp updated to current date and time
-- [ ] Stopped at describes phase completion and next phase
+- [ ] `last_activity` updated to the current date
+- [ ] `stopped_at` describes phase completion and next phase
 - [ ] Resume file confirmed as None (transitions don't use resume files)
 
 </step>

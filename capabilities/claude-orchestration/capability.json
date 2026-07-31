@@ -1,7 +1,7 @@
 {
   "id": "claude-orchestration",
   "role": "feature",
-  "version": "1.13.1",
+  "version": "1.16.0",
   "title": "Claude orchestration (Workflow backend)",
   "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the Ferrox loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'ferrox-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME ferrox-executor agent and worktree isolation the inline path uses, restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in ferrox-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing ferrox-ultraplan-phase BETA-isolation posture.",
   "tier": "full",
@@ -41,10 +41,11 @@
       "values": [
         "auto",
         "workflow",
-        "inline"
+        "inline",
+        "fleet"
       ],
       "default": "auto",
-      "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+      "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability. 'fleet' (phase 21 SC2) dispatches the wave to a fleet of worker command-line-interface processes instead of in-process subagents; it is runtime-independent (a fleet needs no Workflow tool) but it is OBSERVED rather than trusted, so it fails closed to inline unless fleet.enabled is true AND the interpreter the fleet engine declares resolves on PATH AND every fleet runtime artifact is present on disk, and the resolved reason names the specific artifact that was missing."
     },
     "claude_orchestration.min_agent_sdk_version": {
       "type": "string",

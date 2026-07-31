@@ -1,6 +1,6 @@
 ---
 name: ferrox-health
-description: "Diagnose planning directory health and optionally repair issues"
+description: "Something feels wrong with the project setup. Diagnoses .planning/ and offers repairs"
 argument-hint: "[--repair] [--context]"
 allowed-tools:
   - Read

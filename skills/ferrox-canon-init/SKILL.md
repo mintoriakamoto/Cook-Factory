@@ -1,6 +1,6 @@
 ---
 name: ferrox-canon-init
-description: "Create the project's declared canon store(s), LORE.md and/or SOURCES.md, via a recommendation-first interview, a scan of existing material, or the brainstorm artifact"
+description: "Writing a book or research and you need one source of truth. Creates LORE.md or SOURCES.md"
 argument-hint: "[--from-existing | --from-brainstorm]"
 allowed-tools:
   - Read

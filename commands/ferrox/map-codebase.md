@@ -1,6 +1,6 @@
 ---
 name: ferrox:map-codebase
-description: Analyze codebase with parallel mapper agents to produce .planning/codebase/ documents
+description: "You want to understand an unfamiliar codebase. Parallel agents write .planning/codebase/"
 argument-hint: "[--fast [--focus tech|arch|quality|concerns]] [--query <term>|status|diff|refresh] [area]"
 allowed-tools:
   - Read

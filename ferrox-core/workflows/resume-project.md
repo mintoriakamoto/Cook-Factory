@@ -43,13 +43,17 @@ cat .planning/PROJECT.md
 
 **From STATE.md extract:**
 
-- **Project Reference**: Core value and current focus
-- **Current Position**: Phase X of Y, Plan A of B, Status
-- **Progress**: Visual progress bar
-- **Recent Decisions**: Key decisions affecting current work
-- **Pending Todos**: Ideas captured during sessions
-- **Blockers/Concerns**: Issues carried forward
-- **Session Continuity**: Where we left off, any resume files
+- **Frontmatter**: milestone, current phase and plan, status, `stopped_at`, `last_activity`, progress counters
+- **Current Position**: phase, plan, status, last activity, progress bar
+
+STATE.md carries nothing else since phase 14.1 D3d.
+
+**From the single `lifecycle: active` milestone artifact under `.planning` extract:**
+
+- **Decisions Log**: decisions affecting current work
+- **Blockers**: issues carried forward
+- **Roadmap Evolution**: phases added, inserted or retired
+- **Where to resume**: the active milestone artifact IS the resume pointer; STATE.md no longer stores one
 
 **From PROJECT.md extract:**
 
@@ -292,17 +296,16 @@ Resume-specific exception: do **not** emit `/clear then:` here. Resume is alread
 <step name="update_session">
 Before proceeding to routed workflow, update session continuity:
 
-Update STATE.md:
+Update STATE.md through the SDK, which writes the `stopped_at` and
+`last_activity` FRONTMATTER keys and nothing else:
 
-```markdown
-## Session Continuity
-
-Last session: [now]
-Stopped at: Session resumed, proceeding to [action]
-Resume file: [updated if applicable]
+```bash
+ferrox_run query state.record-session --stopped-at "Session resumed, proceeding to [action]"
 ```
 
-This ensures if session ends unexpectedly, next resume knows the state.
+This ensures if the session ends unexpectedly, the next resume knows the state.
+Do NOT pass `--resume-file`: the argument is deprecated and ignored since phase
+14.1, because the active milestone artifact already names where to resume.
 </step>
 
 </process>

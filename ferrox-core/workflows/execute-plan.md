@@ -194,7 +194,7 @@ Deviations are normal — handle via rules below.
      1. For each criterion: execute the grep, file check, or CLI command that proves it passes
      2. Log each result as PASS or FAIL with the command output
      3. If ANY criterion fails: fix the implementation immediately, then re-run ALL criteria
-     4. Repeat until all criteria pass — you are BLOCKED from starting the next task until this gate clears
+     4. Re-run the FULL criteria set after each fix, up to the repair budget `workflow.node_repair_budget` names in the config (default 2, the same number item 5 already carries). You are BLOCKED from starting the next task until the gate clears OR that budget is spent. Bounding item 4 on the config key deliberately makes item 5's bound config driven rather than hardcoded. When the budget is spent, item 5 below governs, and "try again" is not among the moves still available.
      5. If a criterion cannot be satisfied after 2 fix attempts, log it as a deviation with reason — do NOT silently skip it
      This is not advisory. A task with failing acceptance criteria is an incomplete task.
 3. Run `<verification>` checks
@@ -338,7 +338,20 @@ If `NODE_REPAIR` is `true`: invoke `@./.claude/ferrox-core/workflows/node-repair
 
 Node repair will attempt RETRY, DECOMPOSE, or PRUNE autonomously. Only reaches this gate again if repair budget is exhausted (ESCALATE).
 
-If `NODE_REPAIR` is `false` OR repair returns ESCALATE: STOP. Present: "Verification failed for Task [X]: [name]. Expected: [criteria]. Actual: [result]. Repair attempted: [summary of what was tried]." Options: Retry | Skip (mark incomplete) | Stop (investigate). If skipped → SUMMARY "Issues Encountered".
+If `NODE_REPAIR` is `false` OR repair returns ESCALATE: STOP. Present: "Verification failed for Task [X]: [name]. Expected: [criteria]. Actual: [result]. Repair attempted: [summary of what was tried]." Options: Skip (mark incomplete) | Stop (investigate). If skipped → SUMMARY "Issues Encountered".
+
+For a phase that declares anti-loop governance the try-again move is not offered here, because node repair has already spent its declared budget and the ratchet does not carry that move; its legal set is descope, split, change approach, fence and park. Whether a phase declares anti-loop governance is decided by running the shipped gate, which exits 0 when it does and 1 when it does not. That exit code is the source of truth for this condition, so it is never a judgement call. Resolve the gate the same way every other shipped script is resolved, because a bare `node scripts/...` is cwd relative and resolves in neither the install nor a customer project (FF-B476):
+
+```bash
+# Canonical resolver, see ferrox-core/references/ferrox-script-resolver.md.
+# RUNTIME_DIR first, then the project tree, then the install root per runtime.
+ferrox_script() { _n="$1"; _p="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; for _c in "${_p}/scripts/${_n}" "${_p}/.claude/scripts/${_n}" "${_p}/.codex/scripts/${_n}" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/${_n}" "${HERMES_HOME:-$HOME/.hermes}/scripts/${_n}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/scripts/${_n}" "${CODEX_HOME:-$HOME/.codex}/scripts/${_n}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/scripts/${_n}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/scripts/${_n}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/scripts/${_n}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/scripts/${_n}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/scripts/${_n}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/scripts/${_n}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/scripts/${_n}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/scripts/${_n}" "${GROK_AGENTS_HOME:-$HOME/.agents}/scripts/${_n}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/scripts/${_n}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/scripts/${_n}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/scripts/${_n}"; do [ -f "$_c" ] && { printf '%s\n' "$_c"; return 0; }; done; printf '%s\n' "${_p}/scripts/${_n}"; return 1; }
+ANTILOOP=$(ferrox_script lint-antiloop-gate.cjs)
+node "$ANTILOOP" --declares "${PHASE_CONTEXT_MD}"
+DECLARES_ANTILOOP=$?   # 0 = declares, 1 = does not
+```
+
+The gate resolves `.planning/` against its own install root by default, so when the phase `CONTEXT.md` lives in a different tree pass `FERROX_ANTILOOP_GATE_ROOT` to point it at the project. `--declares` reads only the path it is given, so the default root is unused on this path.
 </step>
 
 <step name="record_completion_time">
@@ -437,11 +450,15 @@ Update session info using ferrox-tools.cjs query (or legacy ferrox-tools):
 
 ```bash
 ferrox_run query state.record-session \
-  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" \
-  --resume-file "None"
+  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md"
 ```
 
-Keep STATE.md under 150 lines.
+This writes the `stopped_at` and `last_activity` FRONTMATTER keys and creates no
+section. Do NOT pass `--resume-file`: it is deprecated and ignored since phase
+14.1, because the single `lifecycle: active` milestone artifact already names
+where to resume.
+
+Keep STATE.md under 60 lines.
 </step>
 
 <step name="issues_review_gate">

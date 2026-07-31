@@ -93,12 +93,24 @@ No project skills found. Add skills to any of: `.claude/skills/`, `.agents/skill
 <!-- Ferrox:workflow-start source:Ferrox defaults -->
 ## Ferrox Workflow Enforcement
 
-Before using Edit, Write, or other file-changing tools, start work through a Ferrox command so planning artifacts and execution context stay in sync.
+Start work through a Ferrox command rather than editing directly, so planning artifacts and execution context stay in sync.
 
-Use these entry points:
-- `/ferrox:quick` for small fixes, doc updates, and ad-hoc tasks
-- `/ferrox:debug` for investigation and bug fixing
-- `/ferrox:execute-phase` for planned phase work
+Match the user's situation to the entry point:
+
+| When the user... | Route to |
+|---|---|
+| describes something new to build, or has an idea and no plan yet | `/ferrox:new-project` |
+| says build it, build it all, or asks what is next | `/ferrox:progress` `--next` (add `--auto` to keep going) |
+| states an intent in plain words and you are unsure where it goes | `/ferrox:next` `"<their words>"` |
+| wants the next step planned in detail | `/ferrox:plan-phase` |
+| wants the current step built | `/ferrox:execute-phase` |
+| asks whether it works, or wants to try it | `/ferrox:verify-work` |
+| reports something broken, failing or wrong | `/ferrox:debug` |
+| wants the work sent, released or PR'd | `/ferrox:ship` |
+| wants the last step reversed | `/ferrox:undo` |
+| asks for a small self contained change | `/ferrox:quick` |
+
+There are 74 commands; `/ferrox:help` lists them. The 10 above cover almost everything.
 
 Do not make direct repo edits outside a Ferrox workflow unless the user explicitly asks to bypass it.
 <!-- Ferrox:workflow-end -->

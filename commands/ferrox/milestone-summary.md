@@ -1,7 +1,7 @@
 ---
 type: prompt
 name: ferrox:milestone-summary
-description: Generate a comprehensive project summary from milestone artifacts for team onboarding and review
+description: "You want to explain what was built to somebody who was not here. Summary for onboarding"
 argument-hint: "[version]"
 allowed-tools:
   - Read

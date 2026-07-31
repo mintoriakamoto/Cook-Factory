@@ -1,6 +1,6 @@
 ---
 name: ferrox:workspace
-description: Manage Ferrox workspaces — create, list, or remove isolated workspace environments
+description: "You want isolated environments to work in. Create, list or remove Ferrox workspaces"
 argument-hint: "[--new | --list | --remove] [name]"
 allowed-tools:
   - Read

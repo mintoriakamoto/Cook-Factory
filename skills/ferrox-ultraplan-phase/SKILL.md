@@ -1,6 +1,6 @@
 ---
 name: ferrox-ultraplan-phase
-description: "[BETA] Offload plan phase to Claude Code's ultraplan cloud; review in browser and import back."
+description: "[BETA] You want planning offloaded to the ultraplan cloud, reviewed in a browser, imported"
 argument-hint: "[phase-number]"
 allowed-tools:
   - Read

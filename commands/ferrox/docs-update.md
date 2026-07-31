@@ -1,6 +1,6 @@
 ---
 name: ferrox:docs-update
-description: Generate or update project documentation verified against the codebase
+description: "You want project documentation written or refreshed, checked against the actual code"
 argument-hint: "[--force] [--verify-only]"
 allowed-tools:
   - Read

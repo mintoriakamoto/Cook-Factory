@@ -1,6 +1,6 @@
 ---
 name: ferrox-explore
-description: "Socratic ideation and idea routing — think through ideas before committing to plans"
+description: "You want to understand or compare options in this codebase before deciding what to build"
 allowed-tools:
   - Read
   - Write

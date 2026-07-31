@@ -1,6 +1,6 @@
 ---
 name: ferrox:eval-review
-description: Audit an executed AI phase's evaluation coverage and produce an EVAL-REVIEW.md remediation plan.
+description: "An AI feature was built and you want its evaluation coverage audited, with a fix plan"
 argument-hint: "[phase number]"
 allowed-tools:
   - Read

@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""ratchet-budget — the budget oracle. Honest, late, fail-closed.
+
+It reads the hash-chained telemetry ledger (state/telemetry.jsonl) and reports the TRUTH about
+spend, never a fiction:
+  - METERED spend = Flux-routed work priced by the oracle (councils + Wayland-Core exec carry a
+    real server-side cost_usd). This is the only spend we can honestly sum.
+  - FLAT lanes = flat-rate sub-CLI work (claude/codex/gemini subscriptions). NOT metered — governed
+    by the sandbox + wall-clock, never fake-priced. Counted and named, never summed into dollars.
+  - UNPRICED = a model call that reports usage/tokens but carries NO cost_usd. This is the dangerous
+    case (a price we failed to capture); the oracle FAILS CLOSED — flags it, and `check` blocks on it.
+
+Verbs:
+  report [--period day|week|all] [--budget <usd>] [--agent <name>]   spend + projection + verdict
+  check  <cost_usd> [--budget <usd>] [--period day]                  pre-dispatch gate (fail-closed)
+  selftest                                                            hermetic proofs
+"""
+import importlib.machinery, importlib.util
+import json, os, sys
+from datetime import datetime, timezone, timedelta
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+
+K = _kernel()
+WARN_FRAC = 0.80  # warn once projected/actual spend crosses this fraction of the budget
+
+# fields that mark an event as a MODEL CALL (so an absent price is "unpriced", not "not-a-call").
+# grounded in ratchet-think's ledger shape (model/mode/cost_usd) + exec's spawn events.
+_CALL_KEYS = ("model", "tokens", "usage", "prompt_tokens", "completion_tokens")
+
+def _telemetry_path():
+    return os.path.join(K.WL_HOME, "state", "telemetry.jsonl")
+
+def _events():
+    try:
+        lines = open(_telemetry_path()).read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in lines:
+        try:
+            out.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+def _cost_val(e):
+    """Resolve a price from top-level cost_usd OR nested usage.cost_usd. Returns a FINITE float, or
+    None when there is no usable price. A non-numeric or non-finite (nan/inf) value is treated as
+    NO price — never as $0 — so it can't silently vanish from the total (fail-closed)."""
+    import math
+    for src in (e, e.get("usage") if isinstance(e.get("usage"), dict) else {}):
+        if isinstance(src, dict) and "cost_usd" in src:
+            try:
+                v = float(src["cost_usd"])
+            except (TypeError, ValueError):
+                return None
+            # a non-finite (nan/inf) OR NEGATIVE ledger cost is treated as NO price, never summed:
+            # a negative row (refund/credit event, buggy oracle) would otherwise drag the metered
+            # total down and defeat the cap. check_cmd already refuses a negative PROPOSED cost;
+            # this makes the ledger side symmetric and fail-closed (audit).
+            return v if (math.isfinite(v) and v >= 0) else None
+    return None
+
+def classify(e):
+    """metered | unpriced | flat. metered = a resolvable price (even $0.00). unpriced = a model call
+    with NO resolvable price (the fail-closed surface). flat = a sub-CLI lane or bookkeeping event."""
+    if _cost_val(e) is not None:
+        return "metered"
+    is_call = any(k in e for k in _CALL_KEYS) or e.get("cost_basis") == "oracle"
+    flat_cli = e.get("cli") in ("claude", "codex", "gemini")  # sub-CLI lane is flat, not unpriced
+    if is_call and not flat_cli:
+        return "unpriced"
+    return "flat"
+
+def _chain_broken():
+    """A money gate must NOT trust a broken ledger. Delegate to the kernel's SHARED chain_status —
+    a prior reimplementation here walked the chain but dropped the sidecar-head anchor, so deleting
+    the NEWEST (most expensive) metered rows left a perfectly-chaining prefix and passed the gate
+    (audit HIGH). One implementation, one anchor check, no drift: tampered/truncated => broken."""
+    verdict, _detail, _n, _u = K.chain_status(_telemetry_path())
+    return verdict in ("tampered", "truncated")
+
+def _parse_ts(e):
+    ts = e.get("ts")
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)  # naive → UTC (no crash)
+
+def _period_bounds(period, now):
+    if period == "all":
+        return None, None
+    if period == "week":
+        start = now - timedelta(days=7)
+    else:  # day
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, now
+
+def _in_period(e, start):
+    if start is None:
+        return True
+    t = _parse_ts(e)
+    if t is None:
+        return True  # can't place it in time → COUNT it (fail toward the cap, never silently drop)
+    return t >= start
+
+def summarize(events, period, now, agent=None):
+    start, _ = _period_bounds(period, now)
+    metered = unpriced = 0.0
+    n_metered = n_unpriced = n_flat = 0
+    for e in events:
+        if agent and e.get("agent") != agent:
+            continue
+        if not _in_period(e, start):
+            continue
+        kind = classify(e)
+        if kind == "metered":
+            metered += (_cost_val(e) or 0); n_metered += 1
+        elif kind == "unpriced":
+            n_unpriced += 1
+        else:
+            n_flat += 1
+    proj = None
+    if period != "all" and start is not None and metered > 0:
+        elapsed = (now - start).total_seconds()
+        full = timedelta(days=1 if period == "day" else 7).total_seconds()
+        frac = max(elapsed / full, 1e-6)
+        proj = metered / frac  # linear trajectory to period end
+    return {"metered_usd": round(metered, 4), "metered_raw": metered,  # raw for GATING, rounded for display
+            "n_metered": n_metered, "n_unpriced": n_unpriced,
+            "n_flat": n_flat, "projected_usd": round(proj, 4) if proj is not None else None}
+
+def _now():
+    return datetime.now(timezone.utc)
+
+def report_cmd(args):
+    period = args[args.index("--period") + 1] if "--period" in args else "day"
+    if period not in ("day", "week", "all"):
+        print("budget: --period must be day|week|all"); return 1
+    budget = float(args[args.index("--budget") + 1]) if "--budget" in args else None
+    agent = args[args.index("--agent") + 1] if "--agent" in args else None
+    s = summarize(_events(), period, _now(), agent)
+    print(f"# budget · {period}" + (f" · agent {agent}" if agent else ""))
+    if _chain_broken():
+        print("⚠ TELEMETRY CHAIN BROKEN — the ledger was tampered/truncated; spend figures below are UNTRUSTED")
+    print(f"metered (Flux) spend: ${s['metered_usd']:.4f}  ({s['n_metered']} priced calls)")
+    print(f"flat lanes (sub-CLI, sandbox+time-governed, NOT metered): {s['n_flat']}")
+    if s["n_unpriced"]:
+        print(f"⚠ UNPRICED model calls (usage but no cost_usd — fail-closed surface): {s['n_unpriced']}")
+    verdict = "no-budget-set"
+    if budget is not None:
+        basis = s["projected_usd"] if s["projected_usd"] is not None else s["metered_usd"]
+        used = basis / budget if budget > 0 else float("inf")
+        if s["projected_usd"] is not None:
+            print(f"projected end-of-{period}: ${s['projected_usd']:.4f} of ${budget:.2f} budget "
+                  f"({used*100:.0f}%)")
+        else:
+            print(f"spend ${s['metered_usd']:.4f} of ${budget:.2f} budget ({used*100:.0f}%)")
+        verdict = "OVER" if used > 1 else ("WARN" if used >= WARN_FRAC else "UNDER")
+        print(f"verdict: {verdict}")
+    return 0
+
+def check_cmd(args):
+    """Pre-dispatch gate. Given a PROPOSED cost_usd for the next Flux call, would it breach the
+    budget for the period? Fails CLOSED: a missing/blank cost for a priced call is refused (an
+    unpriced spend must never slip past the cap)."""
+    # positional = args that are neither a flag nor the VALUE of one (so `check --period day 0.05`
+    # doesn't read "day" as the cost). --period/--budget/--agent each consume the next token.
+    valued = {"--period", "--budget", "--agent"}
+    pos, skip = [], False
+    for a in args:
+        if skip:
+            skip = False; continue
+        if a in valued:
+            skip = True; continue
+        # a flag starts with -- or -<letter>; a negative NUMBER (-1, -0.5) is a positional cost
+        is_flag = a.startswith("--") or (len(a) > 1 and a[0] == "-" and a[1].isalpha())
+        if not is_flag:
+            pos.append(a)
+    if not pos:
+        print("budget: check <cost_usd> [--budget <usd>] [--period day]"); return 1
+    import math
+    raw = pos[0]
+    if raw in ("", "none", "None", "null"):
+        print("budget: REFUSE — proposed call has no price (unpriced) — fail closed"); return 2
+    try:
+        proposed = float(raw)
+    except ValueError:
+        print(f"budget: REFUSE — unparseable cost '{raw}' — fail closed"); return 2
+    if not math.isfinite(proposed) or proposed < 0:
+        print(f"budget: REFUSE — cost '{raw}' is not a finite, non-negative number — fail closed"); return 2
+    period = args[args.index("--period") + 1] if "--period" in args else "day"
+    budget = float(args[args.index("--budget") + 1]) if "--budget" in args else None
+    if budget is None:
+        print("budget: no --budget set — cannot gate (report-only)"); return 0
+    if _chain_broken():
+        print("budget: REFUSE — telemetry chain broken (untrusted ledger) — fail closed"); return 2
+    s = summarize(_events(), period, _now())
+    if s["n_unpriced"] > 0:
+        print(f"budget: REFUSE — {s['n_unpriced']} unpriced call(s) in the {period} ledger — "
+              f"can't gate a budget the ledger can't measure — fail closed"); return 2
+    after = s["metered_raw"] + proposed  # gate on the RAW total, not the display-rounded one
+    if after > budget:
+        print(f"budget: BLOCK — ${s['metered_usd']:.4f} + ${proposed:.4f} = ${after:.4f} > "
+              f"${budget:.2f} ({period})"); return 2
+    print(f"budget: OK — ${after:.4f} of ${budget:.2f} after this call ({period})"); return 0
+
+def selftest(args):
+    """Hermetic proofs: metered/flat/unpriced classification, budget verdict, fail-closed gate."""
+    import tempfile
+    results = []
+    with tempfile.TemporaryDirectory(prefix="rbudget-st-") as tmp:
+        home = os.path.join(tmp, "home"); os.makedirs(os.path.join(home, "state"))
+        tel = os.path.join(home, "state", "telemetry.jsonl")
+        os.environ["WL_HOME"] = home; os.environ["WL_MANIFEST"] = os.path.join(tmp, "m.json")
+        os.environ["WL_INSTANCE"] = "rbudget-st"
+        json.dump({"schema_version": 1, "min_wl_plane": "0", "repos": {}, "noise_paths": [],
+                   "archive_dir": tmp, "fetch_ttl_seconds": 300, "sync_warn_behind": 1, "sync_red_behind": 50},
+                  open(os.environ["WL_MANIFEST"], "w"))
+        global K
+        K = _kernel()
+        now = datetime(2020, 1, 2, tzinfo=timezone.utc)  # fixed clock for determinism
+        import io, contextlib, hashlib
+
+        def wtel(rs):  # plain (pre-chain) rows
+            with open(tel, "w") as f:
+                for r in rs:
+                    f.write(json.dumps(r) + "\n")
+
+        def wchain(rs):  # properly hash-chained rows (the kernel's scheme)
+            head = ""
+            with open(tel, "w") as f:
+                for r in rs:
+                    h = hashlib.sha256((head + json.dumps(r, default=str)).encode()).hexdigest()[:32]
+                    f.write(json.dumps({**r, "h": h}) + "\n"); head = h
+
+        def cap(fn):
+            b = io.StringIO()
+            with contextlib.redirect_stdout(b):
+                fn()
+            return b.getvalue()
+
+        base = [
+            {"ts": "2020-01-01T00:00:00+00:00", "model": "flux-glm", "cost_usd": 0.20},          # metered
+            {"ts": "2020-01-01T00:05:00+00:00", "model": "flux-kimi", "cost_usd": 0.30},         # metered
+            {"model": "flux-nots", "cost_usd": 0.10},                                             # metered, NO ts
+            {"ts": "2020-01-01T00:06:00+00:00", "model": "flux-free", "cost_usd": 0.0},          # metered $0.00
+            {"ts": "2020-01-01T00:07:00+00:00", "model": "flux-nest", "usage": {"cost_usd": 0.05}},  # metered, nested
+            {"ts": "2020-01-01T00:08:00+00:00", "cli": "claude", "event": "exec_spawn"},         # flat (sub-CLI)
+            {"ts": "2020-01-01T00:09:00+00:00", "event": "land"},                                 # flat (bookkeeping)
+        ]
+        wtel(base)
+        s = summarize(_events(), "all", now)
+        results.append(("SUM meters real cost incl nested + $0 + no-ts (=0.65), never flat/unpriced",
+                        abs(s["metered_usd"] - 0.65) < 1e-9 and s["n_metered"] == 5, str(s)))
+        results.append(("FLAT sub-CLI + bookkeeping counted, never summed to $", s["n_flat"] == 2, str(s)))
+        results.append(("CLASSIFY $0/nested = metered; sub-CLI = flat; usage-no-cost = unpriced",
+                        classify({"model": "x", "cost_usd": 0.0}) == "metered"
+                        and classify({"model": "x", "usage": {"cost_usd": 0.05}}) == "metered"
+                        and classify({"cli": "claude"}) == "flat"
+                        and classify({"model": "x", "tokens": 9}) == "unpriced", ""))
+        results.append(("PARSE naive ISO ts → UTC (no offset-naive vs aware crash)",
+                        _parse_ts({"ts": "2020-06-01T12:00:00"}).tzinfo is not None, ""))
+        results.append(("VERDICT over budget → OVER", "verdict: OVER" in cap(lambda: report_cmd(["--period", "all", "--budget", "0.40"])), ""))
+        results.append(("VERDICT under budget → UNDER", "verdict: UNDER" in cap(lambda: report_cmd(["--period", "all", "--budget", "5.00"])), ""))
+        results.append(("CHECK rejects nan/inf/negative/blank proposed cost (fail closed)",
+                        check_cmd(["nan", "--budget", "1"]) == 2 and check_cmd(["inf", "--budget", "1"]) == 2
+                        and check_cmd(["-1", "--budget", "1"]) == 2 and check_cmd(["none", "--budget", "1"]) == 2, ""))
+        results.append(("CHECK allows a call under budget on a clean ledger",
+                        check_cmd(["0.01", "--budget", "1.00", "--period", "all"]) == 0, ""))
+        results.append(("CHECK blocks a call that would breach the budget",
+                        check_cmd(["0.50", "--budget", "1.00", "--period", "all"]) == 2, ""))
+        results.append(("CHECK parses the cost even when options precede it (no value confusion)",
+                        check_cmd(["--period", "all", "--budget", "1.00", "0.01"]) == 0, ""))
+        # unpriced-in-ledger ⇒ check fails closed (can't gate a budget the ledger can't measure)
+        wtel(base + [{"ts": "2020-01-01T00:10:00+00:00", "model": "flux-mystery", "tokens": 5}])
+        results.append(("CHECK fails closed when the ledger holds an unpriced call",
+                        summarize(_events(), "all", now)["n_unpriced"] == 1
+                        and check_cmd(["0.01", "--budget", "9.00", "--period", "all"]) == 2, ""))
+        # a valid hash chain verifies; editing a logged event breaks it → check refuses, report warns
+        wchain(base)
+        ok_before = not _chain_broken()
+        lines = open(tel).read().splitlines()
+        lines[0] = lines[0].replace("flux-glm", "flux-TAMPERED")  # body changed, h stale → chain breaks
+        open(tel, "w").write("\n".join(lines) + "\n")
+        results.append(("CHAIN a valid ledger verifies; a tampered event breaks it",
+                        ok_before and _chain_broken(), f"before={ok_before}"))
+        results.append(("CHECK fails closed on a broken telemetry chain",
+                        check_cmd(["0.01", "--budget", "9.00", "--period", "all"]) == 2, ""))
+        results.append(("REPORT warns loudly on a broken chain",
+                        "CHAIN BROKEN" in cap(lambda: report_cmd(["--period", "all", "--budget", "9.00"])), ""))
+        # B1 (audit HIGH): truncating the NEWEST (most expensive) metered rows leaves a perfectly-
+        # chaining prefix — ONLY the sidecar anchor catches it. The prior _chain_broken had no anchor
+        # (and this suite's wchain writes no .head), so the bug slipped. Now delegates to chain_status.
+        wchain(base)
+        _full = open(tel).read().splitlines()
+        open(tel + ".head", "w").write(json.loads(_full[-1])["h"])   # true head sidecar
+        full_ok = not _chain_broken()
+        open(tel, "w").write("\n".join(_full[:-1]) + "\n")           # drop newest row; head now stale
+        results.append(("CHAIN truncating newest metered rows is caught via the sidecar anchor",
+                        full_ok and _chain_broken(), f"full_ok={full_ok}"))
+        os.remove(tel + ".head")
+        # B2: a NEGATIVE ledger cost is not summed — it can't drag the metered total down (fail-closed)
+        wtel(base + [{"ts": "2020-01-01T00:11:00+00:00", "model": "flux-refund", "cost_usd": -100.0}])
+        results.append(("SUM ignores a negative ledger cost (can't shrink the metered total)",
+                        abs(summarize(_events(), "all", now)["metered_usd"] - 0.65) < 1e-9,
+                        str(summarize(_events(), "all", now))))
+
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        print(f"  {'OK  ' if okv else 'FAIL'}  {label}" + ("" if okv else f" — {detail}"))
+    print(f"\n  ratchet-budget selftest: {passed}/{len(results)}")
+    return 0 if passed == len(results) else 2
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    verb = {"report": report_cmd, "check": check_cmd, "selftest": selftest}.get(args[0])
+    if not verb:
+        print(f"ratchet-budget: unknown verb '{args[0]}'", file=sys.stderr); return 1
+    return verb(args[1:])
+
+if __name__ == "__main__":
+    sys.exit(main())

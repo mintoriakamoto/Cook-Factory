@@ -1,6 +1,6 @@
 ---
 name: ferrox:mvp-phase
-description: Plan a phase as a vertical MVP slice — user story, SPIDR splitting, then plan-phase
+description: "You want the thinnest end to end slice that works, not a layer. Plans it as a user story"
 argument-hint: "<phase-number>"
 allowed-tools:
   - Read

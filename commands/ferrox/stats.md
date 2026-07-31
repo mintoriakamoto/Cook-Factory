@@ -1,6 +1,6 @@
 ---
 name: ferrox:stats
-description: Display project statistics — phases, plans, requirements, git metrics, and timeline
+description: "You want the numbers on this project. Steps, plans, requirements, git activity, timeline"
 effort: low
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: ferrox-secure-phase
-description: "Retroactively verify threat mitigations for a completed phase"
+description: "You want to confirm a finished step's threats were actually mitigated in the code"
 argument-hint: "[phase number]"
 allowed-tools:
   - Read

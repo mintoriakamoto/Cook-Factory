@@ -1,6 +1,6 @@
 ---
 name: ferrox-mempalace-capture
-description: "File a phase artifact into MemPalace; mirror decision facts into its temporal KG"
+description: "File a finished artifact into MemPalace and mirror its decisions into the temporal graph"
 argument-hint: "[CONTEXT.md|PLAN.md|SUMMARY.md]"
 allowed-tools:
   - Read

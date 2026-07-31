@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""ratchet-index — the repo index service. Git-native, stdlib, light (no tree-sitter/native deps).
+
+It walks a repo's TRACKED files (git ls-files — respects .gitignore), extracts lightweight symbols
+and imports per language, resolves imports into an in-repo reference graph, PageRank-ranks files by
+centrality, and persists a content-hash-keyed index that re-maps incrementally. It is a SERVICE the
+rest of Ratchet consumes: `grant` computes the sandbox write-manifest for a card; `map` produces a
+token-budgeted repo map for council briefs; `deps` answers navigation. It never calls a model and
+never mutates protected state.
+
+Verbs:
+  build <repo> [--paths a,b,...]   full index, or incremental re-map of just those paths + 1-hop
+                                   dependents (full rebuild if the index is missing or >30% churn)
+  map   <repo> [--budget-tokens N] [--query kw]   ranked file map within a token budget (Aider-style)
+  deps  <repo> <file>              what <file> imports, and what imports it (1-hop each way)
+  grant <work-id>                  compute grant globs (the exec sandbox's WRITE-manifest) for a card
+  selftest                         hermetic proofs: build, rank, incremental, grant, map-budget
+"""
+import importlib.machinery, importlib.util
+import json, os, re, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _kernel():
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+
+K = _kernel()
+SCHEMA = 1
+CHURN_REBUILD = 0.30  # >30% of files changed sha ⇒ cheaper to rebuild the whole graph than patch
+
+# ── language surface (extension → lang). Graph-bearing langs get symbol + import extraction; the
+# rest are indexed for size/nav only. Kept deliberately small: our repos are python/ts/rust. ──
+LANGS = {".py": "python", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
+         ".ts": "typescript", ".tsx": "typescript", ".go": "go", ".rs": "rust",
+         ".rb": "ruby", ".java": "java", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp",
+         ".sh": "shell", ".md": "markdown", ".json": "json", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml"}
+
+SYMBOL_RE = {
+    "python": re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+([A-Za-z_]\w*)", re.M),
+    "javascript": re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|class)\s+([A-Za-z_$]\w*)", re.M),
+    "rust": re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?(?:fn|struct|enum|trait)\s+([A-Za-z_]\w*)", re.M),
+    "go": re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)|^\s*type\s+([A-Za-z_]\w*)", re.M),
+}
+SYMBOL_RE["typescript"] = SYMBOL_RE["javascript"]
+
+IMPORT_RE = {
+    "python": re.compile(r"^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([.\w]+))", re.M),
+    "javascript": re.compile(r"""(?:import\b[^;'"]*?from\s*|import\s*|require\(\s*|export\b[^;'"]*?from\s*)['"]([^'"]+)['"]""", re.M),
+    "rust": re.compile(r"^\s*(?:pub\s+)?(?:mod\s+([A-Za-z_]\w*)|use\s+((?:crate|super|self)[\w:]+))", re.M),
+    "go": re.compile(r'"([^"]+)"'),  # crude: any quoted string inside the file; go imports are paths
+}
+IMPORT_RE["typescript"] = IMPORT_RE["javascript"]
+
+def _symbols(lang, text):
+    r = SYMBOL_RE.get(lang)
+    if not r:
+        return []
+    out = []
+    for m in r.finditer(text):
+        out.append(next(g for g in m.groups() if g))
+        if len(out) >= 40:
+            break
+    return out
+
+def _raw_imports(lang, text):
+    r = IMPORT_RE.get(lang)
+    if not r:
+        return []
+    out = []
+    for m in r.finditer(text):
+        out.append(next(g for g in m.groups() if g))
+    return out
+
+# ── import resolution → in-repo target paths. Best-effort: unresolved specs are external deps and
+# simply dropped from the graph (the graph exists to RANK, so partial resolution is fine). ──
+def _resolve(spec, src, lang, fileset):
+    """Return the in-repo file path `spec` refers to from `src`, or None if external/unresolved."""
+    d = os.path.dirname(src)
+    if lang == "python":
+        if spec.startswith("."):
+            up = len(spec) - len(spec.lstrip("."))
+            base = d
+            for _ in range(up - 1):
+                base = os.path.dirname(base)
+            rest = spec.lstrip(".").replace(".", "/")
+            stem = os.path.join(base, rest) if rest else base
+        else:
+            stem = spec.replace(".", "/")
+        for cand in (stem + ".py", os.path.join(stem, "__init__.py")):
+            if cand in fileset:
+                return cand
+        # a dotted import may name a symbol inside a module — try dropping the last segment
+        parent = "/".join(stem.split("/")[:-1])
+        for cand in (parent + ".py", os.path.join(parent, "__init__.py")):
+            if parent and cand in fileset:
+                return cand
+    elif lang in ("javascript", "typescript"):
+        if not spec.startswith("."):
+            return None  # bare specifier = node_modules, external
+        import posixpath  # git paths are always '/'-separated — never let os.path inject backslashes
+        stem = posixpath.normpath(posixpath.join(d, spec))
+        exts = (".ts", ".tsx", ".js", ".jsx", ".mjs")
+        if stem in fileset:
+            return stem  # explicit, already-complete path
+        base = stem
+        for e in exts:  # TS ESM writes `import './b.js'` for a `b.ts` source — strip the written ext
+            if stem.endswith(e):
+                base = stem[:-len(e)]; break
+        for cand in [base + e for e in exts] + [posixpath.join(base, "index" + e) for e in exts]:
+            if cand in fileset:
+                return cand
+    elif lang == "rust":
+        if spec.startswith(("crate", "super", "self")):
+            # strip leading path keywords ELEMENT-WISE — never str.replace (that mangles a module
+            # literally named super_module / supervisor / self_service)
+            parts = [p for p in spec.split("::") if p and p not in ("crate", "super", "self")]
+            if parts:
+                tail = "/".join(parts)
+                for cand in (os.path.join("src", tail + ".rs"), os.path.join("src", tail, "mod.rs")):
+                    if cand in fileset:
+                        return cand
+        else:  # `mod x;` → sibling x.rs or x/mod.rs
+            for cand in (os.path.join(d, spec + ".rs"), os.path.join(d, spec, "mod.rs")):
+                if cand in fileset:
+                    return cand
+    elif lang == "go":
+        tail = spec.split("/")[-1]  # last path segment of the import = the package dir
+        # sorted for determinism (set iteration order is hash-seeded — would break the mandate)
+        for f in sorted(fileset):
+            if f.endswith(".go") and tail in f.split("/")[:-1]:  # tail is a DIR component, not substring
+                return f
+    return None
+
+def _pagerank(nodes, edges, damping=0.85, iters=25):
+    """Standard PageRank over the import graph. edges: {src: set(dst)}. Centrality = how much the
+    rest of the repo depends (transitively) on a file."""
+    n = len(nodes)
+    if n == 0:
+        return {}
+    rank = {p: 1.0 / n for p in nodes}
+    # invert: who points AT each node (importers), and out-degree per node
+    inbound = {p: [] for p in nodes}
+    outdeg = {p: 0 for p in nodes}
+    for s, dsts in edges.items():
+        real = [d for d in dsts if d in rank and d != s]
+        outdeg[s] = len(real)
+        for d in real:
+            inbound[d].append(s)
+    for _ in range(iters):
+        dangling = damping * sum(rank[p] for p in nodes if outdeg[p] == 0) / n
+        nxt = {}
+        for p in nodes:
+            s = sum(rank[q] / outdeg[q] for q in inbound[p] if outdeg[q])
+            nxt[p] = (1 - damping) / n + damping * s + dangling
+        rank = nxt
+    return rank
+
+# ── index persistence (git-native, light JSON under state/index/<repo>.json) ──
+def _index_path(repo):
+    import hashlib
+    d = os.path.join(K.WL_HOME, "state", "index")
+    os.makedirs(d, exist_ok=True)
+    # sanitized name + a hash of the exact repo string → two names that sanitize alike never collide
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", repo)
+    h = hashlib.sha1(repo.encode()).hexdigest()[:8]
+    return os.path.join(d, f"{safe}.{h}.json")
+
+def _load_index(repo):
+    p = _index_path(repo)
+    if os.path.exists(p):
+        try:
+            return json.load(open(p))
+        except (OSError, ValueError):
+            return None
+    return None
+
+def _save_index(repo, idx):
+    """Atomic: write a temp file then os.replace — a crashed/concurrent build can never leave a torn
+    index behind a `grant` (security) decision."""
+    p = _index_path(repo)
+    tmp = f"{p}.tmp.{os.getpid()}"
+    with open(tmp, "w") as f:
+        json.dump(idx, f)
+    os.replace(tmp, p)
+
+def _repo_root(repo):
+    m = K.load_manifest()
+    if repo not in m["repos"]:
+        return None
+    return K.expand(m["repos"][repo]["path"])
+
+def _ls_files(root):
+    """One robust pass: {path: blob_sha} for REGULAR tracked files only. -z is NUL-delimited so
+    paths with tabs/newlines/quoting parse correctly; submodules (160000) and symlinks (120000) are
+    skipped — they aren't source to analyze and a symlink would let open() read outside the repo."""
+    rc, out, _ = K.git(root, "ls-files", "-s", "-z")
+    files = {}
+    if rc != 0:
+        return files
+    for rec in out.split("\0"):
+        if not rec:
+            continue
+        head, _, path = rec.partition("\t")
+        meta = head.split()
+        if len(meta) < 2 or meta[0] not in ("100644", "100755"):
+            continue
+        files[path.rstrip("\r")] = meta[1]
+    return files
+
+def _shebang_lang(first):
+    if not first.startswith("#!"):
+        return None
+    if "python" in first: return "python"
+    if "node" in first: return "javascript"
+    if "ruby" in first: return "ruby"
+    if any(s in first for s in ("bash", "/sh", "zsh")): return "shell"
+    return None
+
+def _scan_file(root, path):
+    lang = LANGS.get(os.path.splitext(path)[1].lower())
+    full = os.path.join(root, path)
+    try:
+        text = open(full, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    if lang is None:  # extensionless CLI scripts (our own kernel/companions) — infer from shebang
+        lang = _shebang_lang(text[:120].split("\n", 1)[0])
+    loc = text.count("\n") + 1
+    return {"lang": lang, "loc": loc,
+            "symbols": _symbols(lang, text) if lang else [],
+            "raw_imports": _raw_imports(lang, text) if lang else []}
+
+def build_index(repo, paths=None):
+    root = _repo_root(repo)
+    if root is None:
+        print(f"index: unknown repo '{repo}' — adopt it first"); return None
+    blobs = _ls_files(root)
+    tracked = list(blobs)
+    fileset = set(tracked)
+    shas = blobs
+    _, head, _ = K.git(root, "rev-parse", "HEAD")
+    head = head.strip()
+    prior = _load_index(repo)
+
+    # decide full vs incremental. --paths is the caller's hint (e.g. land's changed files), but we
+    # NEVER trust it blindly: we always fold in every file whose blob-sha actually drifted from the
+    # cached index, so a file that changed but wasn't named can't carry stale symbols/edges. Edges
+    # are re-resolved globally below regardless, so deleted/renamed files never leave dangling edges.
+    do_full = prior is None or not prior.get("files")
+    changed = set(paths) if paths else set()
+    if prior and prior.get("files"):
+        old = {p: prior["files"][p].get("sha") for p in prior["files"]}
+        drift = {p for p in tracked if shas.get(p) != old.get(p)} | (set(tracked) ^ set(old))
+        changed |= drift
+        if tracked and len(changed) / max(1, len(tracked)) > CHURN_REBUILD:
+            do_full = True
+
+    files = {} if do_full else dict(prior["files"])
+    scan_set = set(tracked) if do_full else (changed & fileset)
+    for p in scan_set:
+        sc = _scan_file(root, p)
+        if sc is None:
+            continue
+        files[p] = {"lang": sc["lang"], "loc": sc["loc"], "symbols": sc["symbols"],
+                    "sha": shas.get(p), "_raw": sc["raw_imports"]}
+    # drop files no longer tracked
+    for p in list(files):
+        if p not in fileset:
+            del files[p]
+
+    # resolve imports → edges. A file we just scanned (has _raw) is resolved fresh. An untouched
+    # carried file REUSES its cached imports, filtered to the current fileset — so a deleted target
+    # drops its inbound edge (no dangling edges) WITHOUT re-reading every file on each incremental
+    # (the perf trap). A brand-new edge from an untouched file to a newly-added file appears on the
+    # next full rebuild (churn-triggered); ranking is advisory and grant uses direct matches, so
+    # this bounded staleness is safe.
+    edges = {}
+    for p, meta in files.items():
+        raw = meta.get("_raw")
+        if raw is None and "imports" in meta:  # untouched carried file → reuse cached, drop dangling
+            dst = {t for t in meta["imports"] if t in files}
+        else:
+            if raw is None:
+                sc = _scan_file(root, p); raw = sc["raw_imports"] if sc else []
+            dst = set()
+            for spec in raw:
+                t = _resolve(spec, p, meta["lang"], fileset)
+                if t and t in files:
+                    dst.add(t)
+        meta["imports"] = sorted(dst)
+        meta.pop("_raw", None)
+        if dst:
+            edges[p] = dst
+
+    ranks = _pagerank(set(files), edges)
+    for p, meta in files.items():
+        meta["rank"] = round(ranks.get(p, 0.0), 8)
+
+    idx = {"schema_version": SCHEMA, "repo": repo, "head": head, "built": int(time.time()),
+           "mode": "full" if do_full else "incremental", "n_files": len(files), "files": files}
+    _save_index(repo, idx)
+    return idx
+
+def _keywords(text):
+    return {w for w in re.findall(r"[a-z0-9]{3,}", text.lower())
+            if w not in {"the", "and", "for", "with", "fix", "add", "the", "card", "work", "make", "ratchet"}}
+
+# ── verbs ──
+def build_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-index build <repo> [--paths a,b,...]"); return 1
+    paths = None
+    if "--paths" in args:
+        paths = [p for p in args[args.index("--paths") + 1].split(",") if p.strip()]
+    t0 = time.time()
+    idx = build_index(pos[0], paths)
+    if idx is None:
+        return 2
+    print(f"index: {pos[0]} · {idx['mode']} · {idx['n_files']} files · {round(time.time()-t0,2)}s · {_index_path(pos[0])}")
+    return 0
+
+def map_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-index map <repo> [--budget-tokens N] [--query kw]"); return 1
+    repo = pos[0]
+    idx = _load_index(repo) or build_index(repo)
+    if not idx:
+        return 2
+    budget = int(args[args.index("--budget-tokens") + 1]) if "--budget-tokens" in args else 6000
+    query = args[args.index("--query") + 1].lower() if "--query" in args else None
+    ranked = sorted(idx["files"].items(), key=lambda kv: kv[1].get("rank", 0), reverse=True)
+    if query:
+        kws = _keywords(query)
+        def score(p, m):
+            hay = (p + " " + " ".join(m.get("symbols", []))).lower()
+            return sum(1 for k in kws if k in hay)
+        ranked = sorted(((p, m) for p, m in ranked if score(p, m) > 0),
+                        key=lambda kv: (score(*kv), kv[1].get("rank", 0)), reverse=True)
+    out, used = [], 0
+    for p, m in ranked:
+        syms = ", ".join(m.get("symbols", [])[:8])
+        line = f"{p}  ({m.get('lang') or '?'}, {m.get('loc', 0)} loc)" + (f" :: {syms}" if syms else "")
+        cost = len(line) // 4 + 1
+        if used + cost > budget:
+            break
+        out.append(line); used += cost
+    print(f"# repo map · {repo} · {len(out)}/{idx['n_files']} files · ~{used} tokens" + (f" · query '{query}'" if query else ""))
+    print("\n".join(out))
+    return 0
+
+def deps_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if len(pos) < 2:
+        print("usage: ratchet-index deps <repo> <file>"); return 1
+    repo, f = pos[0], pos[1]
+    idx = _load_index(repo) or build_index(repo)
+    if not idx:
+        return 2
+    if f not in idx["files"]:
+        print(f"index: {f} not in the index for {repo}"); return 2
+    imports = idx["files"][f].get("imports", [])
+    importers = sorted(p for p, m in idx["files"].items() if f in m.get("imports", []))
+    print(f"# {f}")
+    print(f"imports ({len(imports)}): " + (", ".join(imports) or "none"))
+    print(f"imported-by ({len(importers)}): " + (", ".join(importers) or "none"))
+    return 0
+
+def compute_grant(repo, card, max_dirs=4):
+    """The exec sandbox's WRITE-manifest for a card: the path globs an agent may touch. This feeds a
+    SECURITY boundary, so it fails toward None (ungoverned+flagged), never toward a wide grant:
+      1. An explicit scope on the card (grant/paths/files/scope) wins verbatim — trust the operator.
+      2. Otherwise, WHOLE-WORD keyword match (not substring: 'config' must not match 'reconfigure')
+         against paths + symbols; grant only the matched files' own directories. A matched test file
+         grants its own dir like any other — NO blanket tests/** (the wide-grant the cross-audit
+         flagged). If matches sprawl across more than max_dirs directories the scope isn't confident
+         ⇒ None. Agent-requested widening is the tracked open question (BUILD-PLAN-V2 §9.2)."""
+    for key in ("grant", "paths", "files", "scope"):
+        v = card.get(key)
+        if v:
+            return v if isinstance(v, list) else [v]
+    idx = _load_index(repo) or build_index(repo)
+    if not idx:
+        return None
+    kws = _keywords(card.get("title", "") + " " + card.get("slug", ""))
+    if not kws:
+        return None
+    pats = [re.compile(r"\b" + re.escape(k) + r"\b") for k in kws]
+    hits = [p for p, m in idx["files"].items()
+            if any(pat.search((p + " " + " ".join(m.get("symbols", []))).lower()) for pat in pats)]
+    if not hits:
+        return None
+    dirs = {os.path.dirname(p) for p in hits}
+    if len(dirs) > max_dirs:  # matches sprawl across the repo → not a confident scope, refuse
+        return None
+    globs = {(os.path.dirname(p) + "/**") if os.path.dirname(p) else os.path.basename(p) for p in hits}
+    return sorted(globs)
+
+def grant_cmd(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-index grant <work-id>"); return 1
+    work_id = pos[0]
+    card = next((c for c in K.state_load(K.CARDS, {"cards": []})["cards"] if c["work_id"] == work_id), None)
+    if card is None:
+        print(f"index: no card {work_id}"); return 2
+    globs = compute_grant(card["repo"], card)
+    if globs is None:
+        print(json.dumps({"work_id": work_id, "grant": None, "note": "no confident scope — ungoverned (sandbox flags it)"}))
+    else:
+        print(json.dumps({"work_id": work_id, "grant": globs}))
+    return 0
+
+def selftest(args):
+    """Hermetic proofs against a synthetic repo: build, PageRank ranks the hub, incremental re-map,
+    grant scoping, and map token-budget enforcement."""
+    import tempfile, subprocess
+    results = []
+    with tempfile.TemporaryDirectory(prefix="rindex-st-") as tmp:
+        root = os.path.join(tmp, "repo")
+        os.makedirs(os.path.join(root, "pkg"))
+        os.makedirs(os.path.join(root, "tests"))
+        subprocess.run(["git", "init", "-q", "-b", "main", root])
+        subprocess.run(["git", "-C", root, "config", "user.email", "t@t"])
+        subprocess.run(["git", "-C", root, "config", "user.name", "t"])
+        # a hub imported by three consumers → hub must rank highest
+        open(os.path.join(root, "pkg", "hub.py"), "w").write("def core():\n    return 1\n\nclass Engine:\n    pass\n")
+        for n in ("a", "b", "c"):
+            open(os.path.join(root, "pkg", f"{n}.py"), "w").write(f"from pkg.hub import core\n\ndef {n}_fn():\n    return core()\n")
+        open(os.path.join(root, "pkg", "__init__.py"), "w").write("")
+        open(os.path.join(root, "tests", "test_a.py"), "w").write("from pkg.a import a_fn\n")
+        open(os.path.join(root, "leaf.py"), "w").write("x = 1\n")
+        open(os.path.join(root, "tool"), "w").write("#!/usr/bin/env python3\ndef run():\n    return 1\n")  # extensionless
+        subprocess.run(["git", "-C", root, "add", "."])
+        subprocess.run(["git", "-C", root, "commit", "-qm", "c0"])
+
+        home = os.path.join(tmp, "home"); os.makedirs(os.path.join(home, "state"))
+        mpath = os.path.join(tmp, "m.json")
+        json.dump({"schema_version": 1, "min_wl_plane": "0", "repos": {"sb": {
+            "path": root, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "t", "forbidden_push": [], "remotes": {}, "worktree_root": os.path.join(tmp, "wts")}},
+            "noise_paths": [], "archive_dir": os.path.join(tmp, "arc"),
+            "fetch_ttl_seconds": 300, "sync_warn_behind": 1, "sync_red_behind": 50}, open(mpath, "w"))
+        os.environ["WL_HOME"] = home; os.environ["WL_MANIFEST"] = mpath; os.environ["WL_INSTANCE"] = "rindex-st"
+        # re-import kernel bound to this env
+        global K
+        K = _kernel()
+
+        idx = build_index("sb")
+        results.append(("BUILD indexes only tracked files across languages",
+                        idx is not None and idx["n_files"] == 8 and idx["mode"] == "full",
+                        f"n={idx['n_files'] if idx else '?'}"))
+        results.append(("SHEBANG detects an extensionless script as its language",
+                        idx["files"]["tool"]["lang"] == "python" and "run" in idx["files"]["tool"]["symbols"],
+                        str(idx["files"].get("tool"))))
+        # PageRank: hub (3 importers) outranks its consumers and the leaf
+        hubrank = idx["files"]["pkg/hub.py"]["rank"]
+        results.append(("RANK the import hub outranks its consumers + the leaf",
+                        hubrank > idx["files"]["pkg/a.py"]["rank"] and hubrank > idx["files"]["leaf.py"]["rank"],
+                        f"hub={hubrank}"))
+        # edges resolved: a.py imports hub.py; hub imported-by a,b,c
+        results.append(("EDGES resolve in-repo imports (a.py → hub.py)",
+                        "pkg/hub.py" in idx["files"]["pkg/a.py"]["imports"], idx["files"]["pkg/a.py"]["imports"]))
+        importers = sorted(p for p, m in idx["files"].items() if "pkg/hub.py" in m.get("imports", []))
+        results.append(("EDGES hub is imported-by a,b,c (not the leaf)",
+                        importers == ["pkg/a.py", "pkg/b.py", "pkg/c.py"], str(importers)))
+        # resolver unit proofs — the cross-audit's language-resolution fixes (no repo build needed)
+        fs = {"src/super_module/mod.rs", "src/foo.ts", "src/b.ts", "pkg/hub/x.go"}
+        results.append(("RESOLVE rust strips path-keywords element-wise (super_module survives)",
+                        _resolve("crate::super_module", "src/lib.rs", "rust", fs) == "src/super_module/mod.rs", ""))
+        results.append(("RESOLVE ts ESM '.js' specifier maps to the .ts source",
+                        _resolve("./b.js", "src/a.ts", "typescript", fs) == "src/b.ts", ""))
+        results.append(("RESOLVE go is deterministic + matched by dir component",
+                        _resolve("mod/pkg/hub", "m/main.go", "go", fs) == "pkg/hub/x.go", ""))
+        # incremental: add a new consumer, re-map just it, hub gains an importer
+        open(os.path.join(root, "pkg", "d.py"), "w").write("from pkg.hub import core\n")
+        subprocess.run(["git", "-C", root, "add", "."]); subprocess.run(["git", "-C", root, "commit", "-qm", "c1"])
+        idx2 = build_index("sb", paths=["pkg/d.py"])
+        imp2 = sorted(p for p, m in idx2["files"].items() if "pkg/hub.py" in m.get("imports", []))
+        results.append(("INCREMENTAL --paths adds the file + rewires the graph",
+                        idx2["mode"] == "incremental" and "pkg/d.py" in imp2 and idx2["n_files"] == 9,
+                        f"mode={idx2['mode']} n={idx2['n_files']}"))
+        # a file that changed but was NOT named in --paths is still refreshed via sha-drift (cross-audit)
+        with open(os.path.join(root, "pkg", "hub.py"), "a") as f:
+            f.write("\ndef added_later():\n    return 2\n")
+        subprocess.run(["git", "-C", root, "add", "."]); subprocess.run(["git", "-C", root, "commit", "-qm", "c2"])
+        idx3 = build_index("sb", paths=["leaf.py"])  # name only leaf; hub.py drifted underneath
+        results.append(("INCREMENTAL folds in sha-drifted files not named in --paths",
+                        "added_later" in idx3["files"]["pkg/hub.py"]["symbols"],
+                        str(idx3["files"]["pkg/hub.py"]["symbols"])))
+        # dangling-edge: an UNTOUCHED importer's edge to a DELETED target is dropped, not carried
+        open(os.path.join(root, "consumer.py"), "w").write("import leaf\n")
+        subprocess.run(["git", "-C", root, "add", "."]); subprocess.run(["git", "-C", root, "commit", "-qm", "c3"])
+        build_index("sb", paths=["consumer.py"])  # consumer now imports leaf.py
+        os.remove(os.path.join(root, "leaf.py"))
+        subprocess.run(["git", "-C", root, "add", "-A"]); subprocess.run(["git", "-C", root, "commit", "-qm", "c4"])
+        idx4 = build_index("sb", paths=["pkg/d.py"])  # name an UNRELATED file; consumer isn't rescanned
+        results.append(("INCREMENTAL drops a dangling edge to a deleted file (untouched importer)",
+                        "leaf.py" not in idx4["files"] and
+                        "leaf.py" not in idx4["files"].get("consumer.py", {}).get("imports", []),
+                        str(idx4["files"].get("consumer.py", {}).get("imports"))))
+        # grant: a card about "hub engine" scopes to pkg/** only — NO blanket tests/** (cross-audit)
+        g = compute_grant("sb", {"title": "refactor the hub engine", "slug": "hub-engine", "repo": "sb"})
+        results.append(("GRANT scopes to the matched dir, no blanket tests/**",
+                        g is not None and "pkg/**" in g and "tests/**" not in g, str(g)))
+        # grant honesty: no lexical match ⇒ None (ungoverned, not a false scope)
+        g2 = compute_grant("sb", {"title": "zzzznomatch qqxx", "slug": "zzz", "repo": "sb"})
+        results.append(("GRANT with no confident match returns None (honest ungoverned)", g2 is None, str(g2)))
+        # WHOLE-WORD match: 'lea' is a substring of leaf.py but not a word → no false grant (cross-audit)
+        g3 = compute_grant("sb", {"title": "lea", "slug": "lea", "repo": "sb"})
+        results.append(("GRANT matches whole words, not substrings ('lea' ≠ 'leaf')", g3 is None, str(g3)))
+        # DIR-SPRAWL cap: even a valid match refuses when it would span more dirs than allowed
+        g4 = compute_grant("sb", {"title": "hub engine", "slug": "hub", "repo": "sb"}, max_dirs=0)
+        results.append(("GRANT refuses (None) when matches sprawl past the dir cap", g4 is None, str(g4)))
+        # EXPLICIT card scope wins verbatim over the heuristic
+        g5 = compute_grant("sb", {"title": "anything", "paths": ["custom/lane/**"], "repo": "sb"})
+        results.append(("GRANT honors an explicit card scope field verbatim", g5 == ["custom/lane/**"], str(g5)))
+        # map budget: a tiny token budget truncates the map, never overflows
+        idxp = _index_path("sb")
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            map_cmd(["sb", "--budget-tokens", "20"])
+        body = buf.getvalue()
+        est = sum(len(l) // 4 + 1 for l in body.splitlines()[1:])
+        results.append(("MAP respects the token budget", est <= 20, f"~{est}t"))
+
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        print(f"  {'OK  ' if okv else 'FAIL'}  {label}" + ("" if okv else f" — {detail}"))
+    print(f"\n  ratchet-index selftest: {passed}/{len(results)}")
+    return 0 if passed == len(results) else 2
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    verb = {"build": build_cmd, "map": map_cmd, "deps": deps_cmd, "grant": grant_cmd, "selftest": selftest}.get(args[0])
+    if not verb:
+        print(f"ratchet-index: unknown verb '{args[0]}'", file=sys.stderr); return 1
+    return verb(args[1:])
+
+if __name__ == "__main__":
+    sys.exit(main())

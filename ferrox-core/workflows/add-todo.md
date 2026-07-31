@@ -115,7 +115,10 @@ files:
 If `.planning/STATE.md` exists:
 
 1. Use `todo_count` from init context (or re-run `init todos` if count changed)
-2. Update "### Pending Todos" under "## Accumulated Context"
+2. Do NOT write the count into STATE.md. Phase 14.1 D3d deleted every free-prose
+   section from that file, so there is no Pending Todos surface to update. The
+   count is reported to the user and the todos themselves stay in
+   `.planning/todos/pending/`, which is their single source.
 </step>
 
 <step name="git_commit">

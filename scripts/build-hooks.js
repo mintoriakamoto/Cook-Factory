@@ -51,6 +51,11 @@ const HOOKS_TO_COPY = [
   // .planning/config.json changes mid-session. Must ship to dist so the
   // installer can copy it to the target hooks/ dir and register FileChanged.
   'ferrox-config-reload.js',
+  // UserPromptSubmit offer hook. The ONLY Ferrox hook that sees what the user
+  // typed; every other one fires after the model already chose an action. Listed
+  // here because HOOKS_TO_COPY is the single source the uninstall set derives
+  // from (FERROX_UNINSTALL_HOOKS), so copy and removal cannot drift apart.
+  'ferrox-offer.js',
   'ferrox-prompt-guard.js',
   'ferrox-read-guard.js',
   'ferrox-read-injection-scanner.js',

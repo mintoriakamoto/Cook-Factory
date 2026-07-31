@@ -1,6 +1,6 @@
 ---
 name: ferrox-new-project
-description: "Initialize a new project with deep context gathering and PROJECT.md"
+description: "Building something new from scratch. Asks what you want, plans it, then offers to build it"
 argument-hint: "[--auto]"
 allowed-tools:
   - Read
@@ -30,7 +30,12 @@ Initialize a new project through unified flow: questioning → research (optiona
 - `.planning/ROADMAP.md` — phase structure
 - `.planning/STATE.md` — project memory
 
-**After this command:** Run `/ferrox-plan-phase 1` to start execution.
+**After this command:** it asks whether to build it now or one step at a time. "Build it now" hands
+off to `/ferrox-progress --next --auto` and needs nothing further from you. "One step at a time"
+ends on `/ferrox-discuss-phase 1`.
+
+Do not print a different next step here. This line and `workflows/new-project.md` previously
+disagreed, which is 2 contradictory next steps inside 1 command.
 </objective>
 
 <execution_context>

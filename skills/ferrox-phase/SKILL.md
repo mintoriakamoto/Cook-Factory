@@ -1,6 +1,6 @@
 ---
 name: ferrox-phase
-description: "CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases"
+description: "You want to add, insert, remove or edit steps in the roadmap itself. Expert level surgery"
 argument-hint: "[--insert | --remove | --edit] <phase-name-or-number>"
 allowed-tools:
   - Read

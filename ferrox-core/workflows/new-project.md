@@ -767,7 +767,7 @@ questions: [
     question: "How finely should scope be sliced into phases?",
     multiSelect: false,
     options: [
-      { label: "Coarse", description: "Fewer, broader phases (3-5 phases, 1-3 plans each)" },
+      { label: "Coarse (Recommended)", description: "Fewer, broader phases (3-5 phases, 1-3 plans each)" },
       { label: "Standard", description: "Balanced phase size (5-8 phases, 3-5 plans each)" },
       { label: "Fine", description: "Many focused phases (8-12 phases, 5-10 plans each)" }
     ]
@@ -1591,6 +1591,50 @@ Exit skill and invoke SlashCommand("/ferrox:discuss-phase 1 --auto")
 
 **If interactive mode:**
 
+### The chain gate
+
+A roadmap is not a working thing. Everything up to here produced 6 markdown files and 0 lines of
+the user's app, and the historical close was to print a command and stop, which left every
+beginner to hand type their way through every remaining step. Ask once, here, and then CARRY.
+
+Ask via AskUserQuestion (single question, single select):
+
+```
+header:   "Build"
+question: "Roadmap is ready. Build it now, or one step at a time?"
+options:
+  - label: "Build it now (Recommended)"
+    description: "Builds each step and keeps going. Pauses only when a real decision is needed."
+  - label: "One step at a time"
+    description: "Stops after each step so you can review before the next one starts."
+```
+
+**If "Build it now":** set the config key, then hand off to the chaining engine and stop.
+
+```bash
+ferrox_run query config-set workflow.auto_advance true
+```
+
+Display:
+
+```
+╔══════════════════════════════════════════╗
+║  BUILDING → all [N] steps                ║
+╚══════════════════════════════════════════╝
+
+Pausing only for real decisions. Stop any time with /ferrox-pause-work.
+```
+
+Then exit this skill and invoke SlashCommand("/ferrox-progress --next --auto").
+
+`/ferrox-progress --next --auto` is the ONLY legal carrier here. It owns Gates 1 to 3 and the
+Route 0 resume invariant, and dispatching `/ferrox-execute-phase` or `/ferrox-autonomous` directly
+from this seam would bypass them. That is the same divergence recorded at
+`src/smart-entry.cts` in the `executing` case, where forward motion is required to delegate to
+this one gated engine. Do not substitute a different command.
+
+**If "One step at a time":** fall through to the "Next Up" banners below, unchanged.
+
 Check if Phase 1 has UI indicators (look for `**UI hint**: yes` in Phase 1 detail section of ROADMAP.md):
 
 ```bash
@@ -1624,6 +1668,8 @@ For research/nonfiction projects, the same row offers the sources ledger instead
 **Also available:**
 - /ferrox:ui-phase 1 — generate UI design contract (recommended for frontend phases)
 - /ferrox:plan-phase 1 — skip discussion, plan directly
+- /ferrox:progress --next --auto — changed your mind: build every step without stopping
+- /ferrox:ship — once a step works, this is how it leaves your machine
 
 ───────────────────────────────────────────────────────────────
 ```
@@ -1645,6 +1691,8 @@ For research/nonfiction projects, the same row offers the sources ledger instead
 
 **Also available:**
 - /ferrox:plan-phase 1 — skip discussion, plan directly
+- /ferrox:progress --next --auto — changed your mind: build every step without stopping
+- /ferrox:ship — once a step works, this is how it leaves your machine
 
 ───────────────────────────────────────────────────────────────
 ```
@@ -1687,6 +1735,11 @@ For research/nonfiction projects, the same row offers the sources ledger instead
 - [ ] STATE.md initialized
 - [ ] REQUIREMENTS.md traceability updated
 - [ ] `$INSTRUCTION_FILE` generated with Ferrox workflow guidance (runtime-derived via the shared `getProjectInstructionFile` policy — `AGENTS.md` for codex/opencode/kilo/kimi, `.github/copilot-instructions.md` for copilot, `GEMINI.md` for gemini/antigravity, `.claude/CLAUDE.md` for claude; an existing hand-crafted file without Ferrox markers is left untouched unless `--force`)
+- [ ] Interactive mode asked the chain gate: "Build it now, or one step at a time?"
+- [ ] "Build it now" set `workflow.auto_advance true` AND dispatched `/ferrox:progress --next --auto`.
+      Setting the key without dispatching is a FAILURE: the key alone advances nothing.
+- [ ] "One step at a time" left the Next Up banner behaviour exactly as it was
+- [ ] Both termini name `/ferrox:ship`, so the user learns how work leaves the machine
 - [ ] User knows next step is `/ferrox:discuss-phase 1`
 
 **Atomic commits:** Each phase commits its artifacts immediately. If context is lost, artifacts persist.

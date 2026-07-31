@@ -1,6 +1,6 @@
 ---
 name: ferrox:validate-phase
-description: Retroactively audit and fill Nyquist validation gaps for a completed phase
+description: "You suspect a finished step has coverage gaps. Audits and fills Nyquist validation gaps"
 argument-hint: "[phase number]"
 allowed-tools:
   - Read

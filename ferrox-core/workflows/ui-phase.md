@@ -572,8 +572,7 @@ ferrox_run query commit "docs(${padded_phase}): UI design contract" --files "${P
 
 ```bash
 ferrox_run query state.record-session \
-  --stopped-at "Phase ${PHASE} UI-SPEC approved" \
-  --resume-file "${PHASE_DIR}/${PADDED_PHASE}-UI-SPEC.md"
+  --stopped-at "Phase ${PHASE} UI-SPEC approved"
 ```
 
 </process>

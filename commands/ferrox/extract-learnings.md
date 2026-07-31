@@ -1,6 +1,6 @@
 ---
 name: ferrox:extract-learnings
-description: Extract decisions, lessons, patterns, and surprises from completed phase artifacts
+description: "A step is finished and you want the decisions, lessons and surprises kept before moving on"
 argument-hint: <phase-number>
 allowed-tools:
   - Read

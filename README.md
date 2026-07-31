@@ -540,6 +540,27 @@ npm install && npm run build:lib        # once
 node bin/install.js --claude --global
 ```
 
+### How many commands you get
+
+A default install writes all 74 commands, so nothing you read about is ever missing. If that is
+more surface than you want, install a smaller set:
+
+```bash
+npx ferrox-factory --claude --global --profile=beginner   # 18: the whole loop, nothing expert
+npx ferrox-factory --claude --global --profile=standard   # 27: adds onboarding and workspaces
+npx ferrox-factory --claude --global                     # 74: everything (default)
+```
+
+`beginner` covers the 9 questions a first project raises: what to build, build it all, where am I,
+plan a step, build a step, did it work, send it, it broke, put it back. The base list is 9 names and
+the installed set is 18, because a profile resolves to the transitive closure over each command's
+declared `requires:`.
+
+`--minimal` and `--core-only` are back-compat aliases for `--profile=core`.
+
+Whichever you pick, `/ferrox-help` opens on the 9 that carry a project end to end, and the rest stay
+out of the way until you ask for them.
+
 **Supported runtimes:** Claude Code · Codex · Cursor · Windsurf · Kimi CLI · Kilo · Copilot ·
 Antigravity · OpenCode · Augment · Trae · Qwen · Hermes · Cline · CodeBuddy · ZCode · Pi: 17 in
 all. Instruction-file and hook support are best-effort per runtime; Claude Code is first-class

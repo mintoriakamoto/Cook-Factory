@@ -1,0 +1,49 @@
+{
+  "decision": "This repository ships with no continuous integration, and that is a decision with a stated reason rather than an omission nobody noticed. There is no workflows directory under .github, and none is added. The gate is `npm test` plus `npm run lint:ci`, run locally, and it is complete: `npm test` is defined as `node scripts/run-tests.cjs` with no suite argument, the runner returns every discovered file when no suite is named, and its walk excludes only node_modules. A plain `npm test` therefore selects and runs every suite, the install suite included. Adding a workflow file here would produce the exact defect this fence exists to remove: a guard that cannot fire. No push to a remote is authorized, so a workflow committed today would sit in the tree reading as coverage while never executing once. If continuous integration is ever wanted it is a milestone level decision made against a push policy, not a file dropped into a phase. The references listed below name workflow paths that do not exist in this fork. Each is retained for the reason recorded beside it, and each reason is printed at the moment this checker refuses, so a reader who lands on a phantom reference is told it is deliberate rather than left to manufacture a blocker out of it.",
+  "references": [
+    {
+      "path": ".github/workflows/install-smoke.yml",
+      "reason": "Named by scripts/ci-test-scope.cjs and by the header of tests/release-tarball-smoke.install.test.cjs as the dedicated trigger for the packed artifact install suite. That workflow does not exist here. The suite is reached instead by a plain `npm test`, which selects every suite, and its exclusion from the scoped lane remains correct for the original per chunk timeout cost reason. Inherited from upstream, kept because the exclusion it explains is still live."
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "reason": "Named in the header of scripts/verify-npm-publish.cjs as the consumer of its publish verification retry. No publish workflow exists here and no npm publish is automated in this fork. Kept because it records which caller the module was shaped for."
+    },
+    {
+      "path": ".github/workflows/pr-target-validator.yml",
+      "reason": "Named in the header of scripts/pr-target-policy.cjs as the workflow the branch classification logic was extracted from, so the logic could be unit tested apart from its caller. The extraction and its tests are real; the workflow is not present in this fork."
+    },
+    {
+      "path": ".github/workflows/pr-title-validator.yml",
+      "reason": "Named in the header of scripts/release-notes/conventional-title.cjs as the second consumer of the single conventional commit title matcher. The changelog classifier consumer is real and present; this gate consumer is not present in this fork."
+    },
+    {
+      "path": ".github/workflows/version-gate.yml",
+      "reason": "Named in the header of scripts/issue-version-gate.cjs as the workflow that would auto close bug reports filed without a version. The pure detection logic is present and tested; nothing invokes it in this fork."
+    },
+    {
+      "path": ".github/workflows/test.yml",
+      "reason": "Declared as a subject of scripts/lint-pr-check-project-dir.cjs, which forbids the cwd token in the PR check layer. The subject is absent here. It is fenced rather than deleted so the lint keeps reporting 9 declared subjects and reconciles them explicitly, instead of silently shrinking its own subject set to the 6 that happen to exist."
+    },
+    {
+      "path": ".github/workflows/pr-template-format.yml",
+      "reason": "Declared as a subject of scripts/lint-pr-check-project-dir.cjs and absent here, fenced for the same reason as the test workflow subject above: the guard must name what it cannot open rather than filter it away."
+    },
+    {
+      "path": ".github/workflows/changeset-required.yml",
+      "reason": "Declared as a subject of scripts/lint-pr-check-project-dir.cjs and absent here, fenced for the same reason as the 2 workflow subjects above."
+    },
+    {
+      "path": ".github/workflows/deploy.yml",
+      "reason": "Not a reference to this repository at all. src/docs.cts lists it among the candidate deployment config files it probes for in a USER's project when mapping a codebase, alongside Dockerfile, fly.toml and vercel.json. The path is a probe input evaluated against somebody else's tree, so its absence here is correct and expected."
+    },
+    {
+      "path": ".github/workflows/deploy.yaml",
+      "reason": "The yaml spelling of the same probe input in src/docs.cts. Fenced as its own row rather than folded into the yml row, because a fence entry covers exactly 1 path and widening a reason to cover a second path is how a table stops meaning anything."
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "reason": "Not a reference to this repository at all. ferrox-core/templates/codebase/integrations.md is a TEMPLATE that shows a worked example of an integrations document for a fictional Next.js and Vercel project, and this path appears inside that example. It describes the template consumer's repository, never this one."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 ---
 name: ferrox-review
-description: "Request cross-AI peer review of phase plans from external AI CLIs"
+description: "You want other AI models to critique a plan before you build it. Cross-AI peer review"
 argument-hint: "--phase N [--gemini] [--claude] [--codex] [--opencode] [--qwen] [--cursor] [--agy] [--all]"
 allowed-tools:
   - Read

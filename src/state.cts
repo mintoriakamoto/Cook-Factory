@@ -20,6 +20,8 @@ const { escapeRegex, normalizePhaseName, extractPhaseToken, parsePhaseFromProse,
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import milestoneManifest = require('./milestone-manifest.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -36,6 +38,7 @@ const { transitionCore, applyStatePreservation, sliceCurrentPositionSection } = 
 type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
 type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
 type PhaseInventoryRecord = stateTransitionMod.PhaseInventoryRecord;
+type ProgressRecord = stateTransitionMod.ProgressRecord;
 import {
   computeProgressPercent,
   normalizeProgressNumbers,
@@ -43,8 +46,9 @@ import {
   shouldPreserveExistingProgress,
   stateExtractField,
   stateReplaceField,
-  KNOWN_TEMPLATE_DEFAULTS,
-  stateReplaceFieldIfTemplate,
+  // KNOWN_TEMPLATE_DEFAULTS and stateReplaceFieldIfTemplate were consumed only by
+  // the session verb's resume-pointer branch, which phase 14.1 D3d dropped. They
+  // remain exported from state-document.cjs for other callers.
 } from './state-document.cjs';
 import { tokenizeHeadings, collectSection, replaceSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
@@ -286,11 +290,164 @@ let _stateStealSeq = 0;
 
 // Shared stop predicates corresponding to the regex lookaheads used in state.cts:
 //   STOP_H2_PLUS : (?=\n##|$)            — stops at any heading with level ≥ 2
-//   STOP_H2_H3   : (?=\n###?|\n##[^#]|$) — stops at level 2 or 3
 //   STOP_H2_ONLY : (?=\n##[^#]|$)        — stops at level 2 only
+// The level-2-or-3 predicate retired with the curated-context sections (14.1
+// plan 02): every section this module still splices is level 2. The pruner's
+// own copy stays in state-transition.cts, which is a different owner.
 const STOP_H2_PLUS = (lv: number): boolean => lv >= 2;
-const STOP_H2_H3 = (lv: number): boolean => lv === 2 || lv === 3;
 const STOP_H2_ONLY = (lv: number): boolean => lv === 2;
+
+/**
+ * Locate the first heading matching `pred` and return its UNTRIMMED body span.
+ *
+ * Phase 14.1 plan 02: this is the ONE section-boundary helper the curated-context
+ * verbs share. Each of them used to inline the same tokenizeHeadings walk, so a
+ * boundary rule could fork between siblings; the fork is the defect class this
+ * phase exists to remove. `stop` decides which following heading level ends the
+ * section (STOP_H2_ONLY / STOP_H2_H3 above).
+ */
+function sliceHeadingSpan(
+  content: string,
+  pred: (level: number, text: string) => boolean,
+  stop: (level: number) => boolean,
+): { bodyStart: number; bodyEnd: number; body: string } | null {
+  const hs = tokenizeHeadings(content);
+  const i = hs.findIndex((h) => pred(h.level, h.text));
+  if (i === -1) return null;
+  const h = hs[i];
+  const ls = content.split(/\r?\n/);
+  const hl = ls[h.line - 1];
+  const bodyStart = h.offset + hl.length + 1;
+  let bodyEnd = content.length;
+  for (let j = i + 1; j < hs.length; j++) {
+    if (stop(hs[j].level)) { bodyEnd = hs[j].offset - 1; break; }
+  }
+  return { bodyStart, bodyEnd, body: content.slice(bodyStart, bodyEnd) };
+}
+
+// ─── Active milestone artifact: the home for curated-context entries ─────────
+//
+// Phase 14.1 D3a: decisions, blockers and roadmap-evolution entries belong to
+// the lifecycle `active` milestone artifact, NOT to STATE.md. STATE.md's copy
+// had already forked from the artifact's, which is why D3d deletes the section
+// rather than reconciling it.
+//
+// D1 locks the resolution rule: the single `lifecycle: active` artifact, never
+// the newest version. Resolving by max version turns `lint:ci` red the moment
+// anyone drafts a future milestone, and an unattended fleet cannot self-resolve
+// that gate. `activeMilestone` at src/milestone-manifest.cts:305 is the shipped
+// resolver; this module consumes it and never adds a second one.
+
+/**
+ * The 3 machine-owned level 2 sections these verbs append into. Deliberately
+ * distinct from an artifact's hand-authored `## Decisions (locked)` block: a
+ * machine append into a curated surface puts both surfaces in one region, which
+ * is exactly the fork this phase removes. Keep the 2 adjacent and separate.
+ */
+const MILESTONE_MACHINE_SECTIONS = Object.freeze({
+  decisions: 'Decisions Log',
+  blockers: 'Blockers',
+  roadmapEvolution: 'Roadmap Evolution',
+});
+
+type ActiveArtifactResolution = { path: string } | { reason: 'none' | 'multiple' };
+
+/**
+ * Resolve the single `lifecycle: active` milestone artifact under `.planning`.
+ *
+ * Returns its absolute path, or a reason code when there is not exactly one.
+ * When the active group carries more than 1 part the HIGHEST numbered part wins
+ * deterministically: `collectMilestones` already sorts parts ascending by
+ * `part` then filename, so the last element is the newest part of the group.
+ */
+function resolveActiveMilestoneArtifactPath(cwd: string): ActiveArtifactResolution {
+  const dir = planningDir(cwd);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.md'));
+  } catch {
+    return { reason: 'none' };
+  }
+  const candidates: Array<{ name: string; text: string }> = [];
+  for (const name of names) {
+    const text = platformReadSync(path.join(dir, name));
+    if (text !== null) candidates.push({ name, text });
+  }
+  const files = milestoneManifest.selectArtifactFiles(candidates);
+  const parsed = files.map((f) => milestoneManifest.parseMilestoneArtifact(f.text, f.name));
+  const { groups } = milestoneManifest.collectMilestones(parsed);
+  const active = milestoneManifest.activeMilestone(groups);
+  if (active === null) {
+    // The shipped resolver returns null for BOTH the zero-active and the
+    // multiple-active case, so the caller owns the message (14.1 plan 02).
+    const activeCount = groups.filter((g) => g.lifecycle === 'active').length;
+    return { reason: activeCount > 1 ? 'multiple' : 'none' };
+  }
+  const parts = active.parts;
+  return { path: path.join(dir, parts[parts.length - 1].file) };
+}
+
+/**
+ * Resolve the active milestone artifact or FAIL LOUD. Never falls back to
+ * writing STATE.md: a silent fallback would recreate the deleted section and
+ * reintroduce the fork. Follows the repository failure-message contract — what
+ * is wrong, a run line, then the fixing command indented 2 spaces.
+ */
+function activeMilestoneArtifactOrFail(cwd: string, verb: string): string {
+  const resolved = resolveActiveMilestoneArtifactPath(cwd);
+  if ('path' in resolved) return resolved.path;
+  if (resolved.reason === 'multiple') {
+    error(
+      `more than 1 .planning milestone artifact carries \`lifecycle: active\`, so \`state ${verb}\` cannot pick a destination and wrote nothing\n`
+      + 'Run:\n'
+      + '  node scripts/gen-milestones.cjs --check',
+    );
+  }
+  error(
+    `no .planning milestone artifact carries \`lifecycle: active\`, so \`state ${verb}\` has no destination and wrote nothing\n`
+    + 'Run:\n'
+    + '  set `lifecycle: active` in the frontmatter of the intended .planning/MILESTONE-v*.md',
+  );
+  // Unreachable: error() exits the process. The compiler cannot see the `never`
+  // return through the destructured io.cjs import, so it needs this terminator.
+  throw new Error('unreachable');
+}
+
+type MilestoneAppendResult = { content: string; created: boolean } | { duplicate: true };
+
+/**
+ * Append one entry into a machine-owned level 2 section of a milestone artifact,
+ * creating the section on demand at the END of the artifact.
+ *
+ * Preserves the 2 properties the STATE.md handlers documented and that only ever
+ * needed a new destination: section auto-create (src/state.cts:991 in the prior
+ * shape) and the never-silently-drop contract (src/state.cts:1114 in the prior
+ * shape). An exact trimmed line already present is a no-op replay.
+ */
+function appendMilestoneSectionEntry(content: string, section: string, entry: string): MilestoneAppendResult {
+  const wanted = section.toLowerCase();
+  const span = sliceHeadingSpan(
+    content,
+    (lv, text) => lv === 2 && text.trim().toLowerCase() === wanted,
+    STOP_H2_ONLY,
+  );
+  if (span !== null) {
+    if (span.body.split(/\r?\n/).some((line) => line.trim() === entry.trim())) return { duplicate: true };
+    let body = span.body.replace(/^None(?: yet)?\.?\s*$/gim, '');
+    body = body.trimEnd() + '\n' + entry + '\n';
+    return { content: content.slice(0, span.bodyStart) + body + content.slice(span.bodyEnd), created: false };
+  }
+  const scaffold = ['', `## ${section}`, '', entry, ''].join('\n');
+  return { content: content.trimEnd() + '\n' + scaffold, created: true };
+}
+
+/** Read, transform and write a milestone artifact. No write when nothing changed. */
+function readModifyWriteMilestoneArtifact(artifactPath: string, fn: (content: string) => string): void {
+  const before = platformReadSync(artifactPath);
+  if (before === null) return;
+  const after = fn(before);
+  if (after !== before) platformWriteSync(artifactPath, after);
+}
 
 function cmdStateLoad(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
@@ -754,10 +911,13 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
   }
 }
 
+/**
+ * Append a decision to the machine-owned decisions log of the ACTIVE milestone
+ * artifact (phase 14.1 D3a). STATE.md is never touched: its Accumulated Context
+ * copy had already forked from the artifact's, so D3d deletes the section and
+ * this verb writes the root that owns the content.
+ */
 function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw: boolean): void {
-  const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
-
   const { phase, summary, summary_file, rationale, rationale_file } = options;
   let summaryText: string | undefined = undefined;
   let rationaleText = '';
@@ -772,62 +932,31 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
 
   if (!summaryText) { output({ error: 'summary required' }, raw, undefined); return; }
 
+  const artifactPath = activeMilestoneArtifactOrFail(cwd, 'add-decision');
   const entry = `- [Phase ${phase || '?'}]: ${summaryText}${rationaleText ? ` — ${rationaleText}` : ''}`;
-  let _added = false;
   let created = false;
+  let duplicate = false;
 
-  readModifyWriteStateMd(statePath, (content) => {
-    // ADR-1372 T6: find Decisions section via tokenizeHeadings; stop at level 2 or 3.
-    // Mirrors /(###?\s*(?:Decisions|Decisions Made|Accumulated.*Decisions)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
-    const decisionsPred = (lv: number, text: string): boolean =>
-      (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text);
-    const sectionBody = (() => {
-      const hs = tokenizeHeadings(content);
-      const i = hs.findIndex(h => decisionsPred(h.level, h.text));
-      if (i === -1) return null;
-      const h = hs[i];
-      const ls = content.split('\n');
-      const hl = ls[h.line - 1];
-      const bs = h.offset + hl.length + 1;
-      let se = content.length;
-      for (let j = i + 1; j < hs.length; j++) {
-        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
-      }
-      return { bodyStart: bs, bodyEnd: se, body: content.slice(bs, se) };
-    })();
+  readModifyWriteMilestoneArtifact(artifactPath, (content) => {
+    const r = appendMilestoneSectionEntry(content, MILESTONE_MACHINE_SECTIONS.decisions, entry);
+    if ('duplicate' in r) { duplicate = true; return content; }
+    created = r.created;
+    return r.content;
+  });
 
-    if (sectionBody !== null) {
-      let newBody = sectionBody.body;
-      // Remove placeholders
-      newBody = newBody.replace(/None yet\.?\s*\n?/gi, '').replace(/No decisions yet\.?\s*\n?/gi, '');
-      newBody = newBody.trimEnd() + '\n' + entry + '\n';
-      _added = true;
-      return content.slice(0, sectionBody.bodyStart) + newBody + content.slice(sectionBody.bodyEnd);
-    }
-
-    // Section absent — DWIM: auto-create canonical ## Decisions scaffold,
-    // then append the entry. Matches state begin-phase / advance-plan DWIM behavior.
-    const scaffold = [
-      '',
-      '## Decisions',
-      '',
-      entry,
-      '',
-    ].join('\n');
-    _added = true;
-    created = true;
-    return content.trimEnd() + '\n' + scaffold;
-  }, cwd);
-
-  // Auto-create fallback guarantees added === true; no else branch needed.
-  const result: Record<string, unknown> = { added: true, decision: entry };
+  // Auto-create guarantees a home, so added is always true; a replay reports
+  // added:true with duplicate:true so callers keying on `added` keep working.
+  const result: Record<string, unknown> = { added: true, decision: entry, artifact: path.basename(artifactPath) };
   if (created) result['created'] = true;
+  if (duplicate) result['duplicate'] = true;
   output(result, raw, 'true');
 }
 
+/**
+ * Append a blocker to the machine-owned blockers section of the ACTIVE milestone
+ * artifact (phase 14.1 D3a). Same retarget as the decision verb, same reason.
+ */
 function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, raw: boolean): void {
-  const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
   const blockerOptions: StateAddBlockerOptions = typeof text === 'object' && text !== null ? text : { text: text };
   let blockerText: string | undefined = undefined;
 
@@ -840,54 +969,21 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
 
   if (!blockerText) { output({ error: 'text required' }, raw, undefined); return; }
 
+  const artifactPath = activeMilestoneArtifactOrFail(cwd, 'add-blocker');
   const entry = `- ${blockerText}`;
-  let _added = false;
   let created = false;
+  let duplicate = false;
 
-  readModifyWriteStateMd(statePath, (content) => {
-    // ADR-1372 T6: find Blockers/Concerns section via tokenizeHeadings; stop at level 2 or 3.
-    // Mirrors /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
-    const blockersPred = (lv: number, text: string): boolean =>
-      (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Concerns)$/i.test(text);
-    const sectionSpan = (() => {
-      const hs = tokenizeHeadings(content);
-      const i = hs.findIndex(h => blockersPred(h.level, h.text));
-      if (i === -1) return null;
-      const h = hs[i];
-      const ls = content.split('\n');
-      const hl = ls[h.line - 1];
-      const bs = h.offset + hl.length + 1;
-      let se = content.length;
-      for (let j = i + 1; j < hs.length; j++) {
-        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
-      }
-      return { bodyStart: bs, bodyEnd: se, body: content.slice(bs, se) };
-    })();
+  readModifyWriteMilestoneArtifact(artifactPath, (content) => {
+    const r = appendMilestoneSectionEntry(content, MILESTONE_MACHINE_SECTIONS.blockers, entry);
+    if ('duplicate' in r) { duplicate = true; return content; }
+    created = r.created;
+    return r.content;
+  });
 
-    if (sectionSpan !== null) {
-      let sectionBody = sectionSpan.body;
-      sectionBody = sectionBody.replace(/None\.?\s*\n?/gi, '').replace(/None yet\.?\s*\n?/gi, '');
-      sectionBody = sectionBody.trimEnd() + '\n' + entry + '\n';
-      _added = true;
-      return content.slice(0, sectionSpan.bodyStart) + sectionBody + content.slice(sectionSpan.bodyEnd);
-    }
-
-    // Section absent — DWIM: auto-create canonical ### Blockers scaffold.
-    const scaffold = [
-      '',
-      '### Blockers',
-      '',
-      entry,
-      '',
-    ].join('\n');
-    _added = true;
-    created = true;
-    return content.trimEnd() + '\n' + scaffold;
-  }, cwd);
-
-  // Auto-create fallback guarantees added === true; no else branch needed.
-  const result: Record<string, unknown> = { added: true, blocker: blockerText };
+  const result: Record<string, unknown> = { added: true, blocker: blockerText, artifact: path.basename(artifactPath) };
   if (created) result['created'] = true;
+  if (duplicate) result['duplicate'] = true;
   output(result, raw, 'true');
 }
 
@@ -915,310 +1011,145 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
   const actionText = (action && action.trim()) || 'changed';
   const afterText = after && after.trim() ? ` after Phase ${after.trim()}` : '';
   const urgentText = urgent ? ' (URGENT)' : '';
+  const artifactPath = activeMilestoneArtifactOrFail(cwd, 'add-roadmap-evolution');
   const entry = `- Phase ${phase || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
 
   let duplicate = false;
   let created = false;
-  let subsectionCreated = false;
 
-  // The Roadmap Evolution subsection lives under `## Accumulated Context`. Scope
-  // every lookup to that section's body so a `### Roadmap Evolution` heading in an
-  // unrelated h2 section (or a fenced example) can never be matched or mutated.
-  // The accBody lookahead stops only at the next h2 (`\n##[^#]`), so nested h3
-  // subsections stay inside the captured Accumulated Context body.
-  // Section boundaries mirror the sibling handlers (add-decision/add-blocker):
-  // a trailing CR on a CRLF STATE.md is absorbed by the lazy body and trimmed,
-  // so following sections are preserved without data loss (see the CRLF test).
-  //
-  // ADR-1372 T6: accPattern and subPattern migrated to tokenizeHeadings.
-  // accPattern  = /(##\s*Accumulated Context\s*\n)([\s\S]*?)(?=\n##[^#]|$)/i
-  //               → stop at level 2 only (STOP_H2_ONLY)
-  // subPattern  = /(###\s*Roadmap Evolution\s*\n)([\s\S]*?)(?=\n###?|$)/i
-  //               → applied to accBody; stop at level 2 or 3 (STOP_H2_H3)
-  readModifyWriteStateMd(statePath, (content) => {
-    // Locate ## Accumulated Context and extract its untrimmed body span.
-    const accHs = tokenizeHeadings(content);
-    const accIdx = accHs.findIndex(h => h.level === 2 && /^accumulated\s+context$/i.test(h.text));
-
-    if (accIdx !== -1) {
-      const accH = accHs[accIdx];
-      const contentLines = content.split('\n');
-      const accHL = contentLines[accH.line - 1];
-      const accBodyStart = accH.offset + accHL.length + 1;
-      let accBodyEnd = content.length;
-      for (let j = accIdx + 1; j < accHs.length; j++) {
-        if (STOP_H2_ONLY(accHs[j].level)) { accBodyEnd = accHs[j].offset - 1; break; }
-      }
-      const accBody = content.slice(accBodyStart, accBodyEnd);
-
-      // Find `### Roadmap Evolution` WITHIN the Accumulated Context body only.
-      // tokenizeHeadings is applied to accBody to scope the search.
-      // Stop predicate mirrors (?=\n###?|$): level 2 or 3.
-      const subHs = tokenizeHeadings(accBody);
-      const subIdx = subHs.findIndex(h => h.level === 3 && /^roadmap\s+evolution$/i.test(h.text));
-
-      if (subIdx !== -1) {
-        const subH = subHs[subIdx];
-        const accLines = accBody.split('\n');
-        const subHL = accLines[subH.line - 1];
-        const subBodyStart = subH.offset + subHL.length + 1;
-        let subBodyEnd = accBody.length;
-        for (let j = subIdx + 1; j < subHs.length; j++) {
-          if (STOP_H2_H3(subHs[j].level)) { subBodyEnd = subHs[j].offset - 1; break; }
-        }
-        let subBody = accBody.slice(subBodyStart, subBodyEnd);
-
-        // Dedupe: exact (trimmed) line already present is a no-op replay.
-        if (subBody.split('\n').some((line) => line.trim() === entry.trim())) {
-          duplicate = true;
-          return content;
-        }
-        subBody = subBody.replace(/None yet\.?\s*\n?/gi, '');
-        subBody = subBody.trimEnd() + '\n' + entry + '\n';
-        // Splice subBody into accBody, then splice newAccBody into content.
-        const newAccBody = accBody.slice(0, subBodyStart) + subBody + accBody.slice(subBodyEnd);
-        return content.slice(0, accBodyStart) + newAccBody + content.slice(accBodyEnd);
-      }
-
-      // Subsection missing — append it at the end of the Accumulated Context body.
-      subsectionCreated = true;
-      const trimmedAcc = accBody.trimEnd();
-      const block = `${trimmedAcc ? `${trimmedAcc}\n\n` : ''}### Roadmap Evolution\n\n${entry}\n`;
-      return content.slice(0, accBodyStart) + block + content.slice(accBodyEnd);
-    }
-
-    // No `## Accumulated Context` — DWIM: create both at end of file.
-    // Mirrors the add-decision / add-blocker auto-create behavior.
-    created = true;
-    subsectionCreated = true;
-    const scaffold = [
-      '',
-      '## Accumulated Context',
-      '',
-      '### Roadmap Evolution',
-      '',
-      entry,
-      '',
-    ].join('\n');
-    return content.trimEnd() + '\n' + scaffold;
-  }, cwd);
+  // The machine-owned roadmap evolution section is a level 2 section of the
+  // ACTIVE milestone artifact (phase 14.1 D3a). The nesting under the deleted
+  // `## Accumulated Context` went with that section; the DEDUPE RULE the nesting
+  // existed to protect is preserved verbatim, an exact trimmed line already
+  // inside the section body is a no-op replay, so the insert-phase workflow
+  // checklist that reads `reason: duplicate` keeps working.
+  readModifyWriteMilestoneArtifact(artifactPath, (content) => {
+    const r = appendMilestoneSectionEntry(content, MILESTONE_MACHINE_SECTIONS.roadmapEvolution, entry);
+    if ('duplicate' in r) { duplicate = true; return content; }
+    created = r.created;
+    return r.content;
+  });
 
   if (duplicate) {
     output({ added: false, reason: 'duplicate', entry }, raw, 'false');
     return;
   }
-  const result: Record<string, unknown> = { added: true, entry };
+  const result: Record<string, unknown> = { added: true, entry, artifact: path.basename(artifactPath) };
   if (created) result['created'] = true;
-  if (subsectionCreated) result['subsection_created'] = true;
+  if (duplicate) result['duplicate'] = true;
   output(result, raw, 'true');
 }
 
+/**
+ * Remove a blocker row from the machine-owned blockers section of the ACTIVE
+ * milestone artifact (phase 14.1 D3a). Retargeted alongside its sibling writer
+ * so the add and the resolve halves can never point at different files.
+ */
 function cmdStateResolveBlocker(cwd: string, text: string, raw: boolean): void {
-  const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
   if (!text) { output({ error: 'text required' }, raw, undefined); return; }
 
+  const artifactPath = activeMilestoneArtifactOrFail(cwd, 'resolve-blocker');
   let resolved = false;
 
-  readModifyWriteStateMd(statePath, (content) => {
-    // ADR-1372 T6: find Blockers/Concerns section via tokenizeHeadings; stop at level 2 or 3.
-    // Mirrors /(###?\s*(?:Blockers|Blockers\/Concerns|Concerns)\s*\n)([\s\S]*?)(?=\n###?|\n##[^#]|$)/i
-    const hs = tokenizeHeadings(content);
-    const i = hs.findIndex(h => (h.level === 2 || h.level === 3) && /^(?:Blockers|Blockers\/Concerns|Concerns)$/i.test(h.text));
-    if (i === -1) return content;
+  readModifyWriteMilestoneArtifact(artifactPath, (content) => {
+    const wanted = MILESTONE_MACHINE_SECTIONS.blockers.toLowerCase();
+    const span = sliceHeadingSpan(
+      content,
+      (lv, heading) => lv === 2 && heading.trim().toLowerCase() === wanted,
+      STOP_H2_ONLY,
+    );
+    if (span === null) return content;
 
-    const h = hs[i];
-    const ls = content.split('\n');
-    const hl = ls[h.line - 1];
-    const bs = h.offset + hl.length + 1;
-    let se = content.length;
-    for (let j = i + 1; j < hs.length; j++) {
-      if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
-    }
-    const sectionBody = content.slice(bs, se);
-    const lines = sectionBody.split('\n');
-    const filtered = lines.filter(line => {
+    const filtered = span.body.split(/\r?\n/).filter(line => {
       if (!line.startsWith('- ')) return true;
       return !line.toLowerCase().includes(text.toLowerCase());
     });
 
     let newBody = filtered.join('\n');
-    // If section is now empty, add placeholder
+    // If the section is now empty, leave the placeholder rather than a bare gap.
     if (!newBody.trim() || !newBody.includes('- ')) {
-      newBody = 'None\n';
+      newBody = '\nNone\n';
     }
 
     resolved = true;
-    return content.slice(0, bs) + newBody + content.slice(se);
-  }, cwd);
+    return content.slice(0, span.bodyStart) + newBody + content.slice(span.bodyEnd);
+  });
 
   if (resolved) {
-    output({ resolved: true, blocker: text }, raw, 'true');
+    output({ resolved: true, blocker: text, artifact: path.basename(artifactPath) }, raw, 'true');
   } else {
-    output({ resolved: false, reason: 'Blockers section not found in STATE.md' }, raw, 'false');
+    output({ resolved: false, reason: `Blockers section not found in ${path.basename(artifactPath)}` }, raw, 'false');
   }
 }
 
+/**
+ * Record the session boundary.
+ *
+ * REDIRECTED by phase 14.1 D3d, not removed. D3d deleted `## Session Continuity`,
+ * but this verb has 6 workflow call sites plus the executor agent, so a hard
+ * failure was not acceptable. It now writes FRONTMATTER KEYS ONLY, which D3d
+ * retains wholesale, and touches no body section.
+ *
+ * The 2 keys are `stopped_at` and `last_activity`. Both are already emitted by
+ * `buildStateFrontmatter` (`fm['stopped_at']` and `fm['last_activity']`) and both
+ * are in the allowed key set the structural guard enforces, so no whitelist
+ * changes. There is deliberately NO `last_session` key: none exists, and
+ * inventing one would be rejected with E_GOV_STATE_FM_KEY on the first write.
+ * The 120 character cap the guard puts on the narrative value is what keeps
+ * `stopped_at` from growing back into a narrative.
+ *
+ * The resume pointer is DROPPED. D3d's reason: it restates what the single
+ * `lifecycle: active` milestone artifact already says, and the live defect that
+ * created this phase was a resume pointer aimed at a superseded milestone. The
+ * argument is accepted and the VALUE is ignored, with a named deprecation line
+ * on stderr and exit 0, so a caller learns rather than silently loses a field.
+ */
 function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
 
-  const now = realClock.nowIso();
-  const updated: string[] = [];
-  let sessionCreated = false;
-
-  readModifyWriteStateMd(statePath, (content) => {
-    // Update Last session / Last Date
-    let result = stateReplaceField(content, 'Last session', now);
-    if (result) { content = result; updated.push('Last session'); }
-    result = stateReplaceField(content, 'Last Date', now);
-    if (result) { content = result; updated.push('Last Date'); }
-
-    // Update Stopped at
-    if (options.stopped_at) {
-      result = stateReplaceField(content, 'Stopped At', options.stopped_at);
-      if (!result) result = stateReplaceField(content, 'Stopped at', options.stopped_at);
-      if (result) { content = result; updated.push('Stopped At'); }
-    }
-
-    // Update Resume File — only when the caller explicitly passed a value OR the
-    // existing value is a known template default.  An executor-authored path must
-    // not be silently replaced with 'None' just because --resume-file was omitted
-    // (Knuth invariant: handler-owns-transition-between-known-template-defaults).
-    const resumeFileDefaults = KNOWN_TEMPLATE_DEFAULTS['Resume File'];
-    if (options.resume_file !== undefined && options.resume_file !== null) {
-      // Caller explicitly passed a value — always honour it.
-      result = stateReplaceField(content, 'Resume File', options.resume_file);
-      if (!result) result = stateReplaceField(content, 'Resume file', options.resume_file);
-      if (result) { content = result; updated.push('Resume File'); }
-    } else {
-      // No explicit value — only set 'None' when existing value is also a known default
-      // (i.e. not executor-authored).
-      const newRf = stateReplaceFieldIfTemplate(content, 'Resume File', resumeFileDefaults, 'None');
-      if (newRf !== content) {
-        content = newRf;
-        updated.push('Resume File');
-      } else {
-        // Try alternate capitalisation
-        const newRfAlt = stateReplaceFieldIfTemplate(content, 'Resume file', resumeFileDefaults, 'None');
-        if (newRfAlt !== content) {
-          content = newRfAlt;
-          updated.push('Resume File');
-        }
-      }
-    }
-
-    // Bug #944: DWIM normalize/auto-create — when the caller supplied --stopped-at or
-    // --resume-file but the body lacks the canonical labels (in-place replace
-    // returned a miss), persist the values durably. Mirrors the DWIM pattern used
-    // by add-decision, add-blocker, and record-metric. Never silently drop
-    // caller-supplied values.
-    //
-    // Guard: only act when the caller actually supplied a value. When no
-    // --stopped-at / --resume-file are given and the body already had no session
-    // labels (nothing was updated), we return recorded:false — the existing
-    // behaviour for a no-op call that didn't supply any values.
-    //
-    // Correctness invariant: both buildStateFrontmatter and cmdStateSnapshot read
-    // only the FIRST `## Session` block (via a /##\s*Session\s*\n…/i regex).
-    // If we blindly append a second `## Session` block when one already exists, the
-    // newly-written Stopped at / Resume file end up in the second (invisible) block.
-    // Fix: when a `## Session` heading already exists, normalize THAT block in place
-    // (insert / replace canonical bold-label lines within the existing section).
-    // A `## Session Continuity` heading (bootstrap shape) is handled additively —
-    // missing canonical fields are inserted while the heading and any prose are
-    // preserved (#1101). Only append a brand-new section when NEITHER heading exists.
-    const callerSuppliedValues = !!(options.stopped_at || (options.resume_file !== undefined && options.resume_file !== null));
-    const needsStoppedAt = options.stopped_at && !updated.includes('Stopped At');
-    const needsResumeFile = options.resume_file !== undefined && options.resume_file !== null && !updated.includes('Resume File');
-    const needsLastSession = !updated.includes('Last session') && !updated.includes('Last Date');
-
-    if (callerSuppliedValues && (needsStoppedAt || needsResumeFile || needsLastSession)) {
-      const resumeValue = (options.resume_file !== undefined && options.resume_file !== null)
-        ? options.resume_file
-        : 'None';
-      const stoppedAtValue = options.stopped_at || 'None';
-
-      // Determine whether a session heading already exists in the body. The
-      // canonical normalized form is `## Session`; the bootstrap templates
-      // (workstream.cts, ferrox2-import.cts, templates/state.md) instead emit
-      // `## Session Continuity`. Treat each separately so we never append a
-      // duplicate section alongside an existing one.
-      const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
-      const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
-
-      if (existingCanonicalSession) {
-        // Normalize in place: replace the ENTIRE BODY of the existing ## Session
-        // section (heading + all content up to the next ## heading or EOF) with
-        // canonical bold-label lines. The negative-lookahead per-line pattern
-        // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
-        // which correctly stops at the next section boundary without consuming it.
-        // A trailing blank line is added so the next ## heading keeps its spacing.
-        content = content.replace(
-          /^(## Session[ \t]*\n(?:(?!^## )[\s\S])*)/m,
-          [
-            '## Session',
-            '',
-            `**Last session:** ${now}`,
-            `**Stopped at:** ${stoppedAtValue}`,
-            `**Resume file:** ${resumeValue}`,
-            '',
-            '',
-          ].join('\n'),
-        );
-      } else if (existingSessionContinuity) {
-        // #1101: a `## Session Continuity` section already exists (bootstrap
-        // shape). Previously this fell through to the append branch and created
-        // a SECOND `## Session` block — a duplicate. Instead, insert only the
-        // canonical fields that are still missing, right after the heading,
-        // preserving the `## Session Continuity` heading and ALL existing lines
-        // (e.g. prose like "Next recommended action"). Fields already updated in
-        // place above (needs* false) are not re-inserted. A function replacement
-        // is used so `$`-bearing caller values are inserted literally (#3454).
-        const linesToInsert: string[] = [];
-        if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
-        if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
-        if (needsResumeFile) linesToInsert.push(`**Resume file:** ${resumeValue}`);
-        if (linesToInsert.length > 0) {
-          // Case-insensitive to match the `existingSessionContinuity` detection
-          // above (#1101 review F3) — otherwise a lowercase heading would detect
-          // but no-op the insert while still reporting the fields as updated.
-          content = content.replace(
-            /^(## Session Continuity[ \t]*\n)/im,
-            (_m, heading: string) => heading + linesToInsert.join('\n') + '\n',
-          );
-        }
-      } else {
-        // No session heading exists at all — append a new canonical section.
-        const scaffold = [
-          '',
-          '## Session',
-          '',
-          `**Last session:** ${now}`,
-          `**Stopped at:** ${stoppedAtValue}`,
-          `**Resume file:** ${resumeValue}`,
-          '',
-        ].join('\n');
-        content = content.trimEnd() + '\n' + scaffold;
-      }
-
-      sessionCreated = true;
-
-      if (needsLastSession) updated.push('Last session');
-      if (needsStoppedAt) updated.push('Stopped At');
-      if (needsResumeFile) updated.push('Resume File');
-    }
-
-    return content;
-  }, cwd);
-
-  if (updated.length > 0) {
-    const result: Record<string, unknown> = { recorded: true, updated };
-    if (sessionCreated) result['created'] = true;
-    output(result, raw, 'true');
-  } else {
-    output({ recorded: false, reason: 'No session fields found in STATE.md' }, raw, 'false');
+  if (options.resume_file !== undefined && options.resume_file !== null) {
+    process.stderr.write(
+      'state record-session: --resume-file is deprecated and ignored since phase 14.1 (D3d).\n'
+      + '  The resume pointer is derived from the single lifecycle: active milestone artifact\n'
+      + '  under .planning, so storing a second copy in STATE.md could only go stale.\n',
+    );
   }
+
+  const patch: Record<string, string> = {};
+  const updated: string[] = [];
+  if (options.stopped_at) { patch['stopped_at'] = options.stopped_at; updated.push('stopped_at'); }
+  patch['last_activity'] = realClock.localToday();
+  updated.push('last_activity');
+  patch['last_updated'] = realClock.nowIso();
+
+  // Lock plus direct write, NOT readModifyWriteStateMd. Same reason
+  // `milestoneSwitch` gives for the same choice: this verb rebuilds frontmatter
+  // directly and must not run the steady-state post-sync. That post-sync's
+  // `stopped_at` preservation rule restores the PRE-transform frontmatter value
+  // whenever the body's session source did not change, and since D3d deleted the
+  // body's session block that source is null forever, so the rule would silently
+  // revert every value this verb writes.
+  withStateLock(statePath, () => {
+    const content = platformReadSync(statePath) || '';
+    const next = setStateFrontmatterKeys(content, patch);
+    if (next !== content) platformWriteSync(statePath, next);
+  });
+
+  output({ recorded: true, updated }, raw, 'true');
+}
+
+/**
+ * Set frontmatter keys on a STATE.md document, leaving the body untouched.
+ * The frontmatter-only write seam phase 14.1 D3d needs: the body has no field
+ * surface for these values any more, and D3d retains frontmatter wholesale.
+ */
+function setStateFrontmatterKeys(content: string, patch: Record<string, string>): string {
+  const fm = extractFrontmatter(content) as Record<string, unknown>;
+  const body = stripFrontmatter(content);
+  for (const [key, value] of Object.entries(patch)) fm[key] = value;
+  const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
+  return `---\n${yamlStr}\n---\n\n${body.replace(/^\n+/, '')}`;
 }
 
 /**
@@ -1565,28 +1496,23 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
             diskTotalSummaries += summaryCount;
             if (completed) diskCompletedPhases++;
           }
-          // Count phase headings from ROADMAP using a digit-containing pattern
-          // that matches both numeric phases (01, 05.1) and project-code phases
-          // (PROJ-42, CK-05) but excludes pure-word section headers like
-          // `## Phase Overview:` or `## Phase Details:` — single source of
-          // truth for total_phases (#549).
-          let roadmapPhaseCount = 0;
-          if (roadmapScope !== null) {
-            // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
-            let m: RegExpExecArray | null;
-            while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
-              // Only count tokens that contain at least one digit — excludes
-              // pure-word section headings (Overview, Details) while keeping
-              // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-              // Also exclude 999.x backlog phases. Mirrors init.cts filter.
-              if (!/\d/.test(m[1]) || /^999\b/.test(m[1])) continue;
-              // #1514: retired/folded phases are struck through in the ROADMAP;
-              // exclude them from the denominator (they can never be completed).
-              if (retiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
-              roadmapPhaseCount++;
-            }
-          }
+          // RETIRED by phase 14.1 D3c. A ROADMAP phase-heading count used to be
+          // able to RAISE total_phases above the on-disk phase-directory count
+          // via Math.max. That was the live second half of the counters defect:
+          // `extractCurrentMilestone` (src/roadmap-parser.cts:51-64) picks the
+          // roadmap region using STATE.md's own `milestone:` key, so a number
+          // read out of that region and written back into STATE.md's progress
+          // map is STATE deriving from ROADMAP while ROADMAP scoping derives
+          // from STATE. D3c locks the roots: the phase directories plus the
+          // milestone artifacts, and nothing else. total_phases is now the disk
+          // count, full stop, which is the same source `completedPhases`,
+          // `totalPlans` and `completedPlans` already used.
+          //
+          // The roadmap is still READ here for 2 things that produce no counter:
+          // the #1514 retired-phase EXCLUSION, which can only shrink the disk
+          // set and never invent a phase, and the #1761 `milestoneBounded`
+          // probe, which only decides whether to publish a percent. Both are
+          // one-way reads that cannot raise a count.
 
           cached = (() => {
             // #1761 read-path: mirror the cmdStateSync guard (#1794). When the
@@ -1605,9 +1531,8 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
               milestoneBounded = versionedHeading.test(roadmapRaw);
             }
             return {
-              totalPhases: (!milestoneBounded || roadmapPhaseCount === 0)
-                ? phaseDirs.length
-                : Math.max(phaseDirs.length, roadmapPhaseCount),
+              // D3c: the disk phase-directory count, and nothing else.
+              totalPhases: phaseDirs.length,
               milestoneBounded,
               completedPhases: diskCompletedPhases,
               totalPlans: diskTotalPlans,
@@ -2748,8 +2673,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 
 /**
  * Prune old entries from STATE.md sections that grow unboundedly (#1970).
- * Moves decisions, recently-completed summaries, and resolved blockers
- * older than keepRecent phases to STATE-ARCHIVE.md.
+ * NARROWED by phase 14.1 D3d to the Performance Metrics table, the only one of
+ * its original 4 targets that still exists: rows older than keepRecent phases
+ * move to STATE-ARCHIVE.md. The archive-file behavior is unchanged.
  *
  * Options:
  *   keepRecent: number of recent phases to retain (default: 3)
@@ -2867,13 +2793,122 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
  *   - Locks via `readModifyWriteStateMd` (real path) or reads-only (dry-run).
  *   - Wires `phaseInventoryProvider` to a real `.planning/phases/` disk scan.
  *   - `--dry-run`: computes the rebuild, emits a structured diff, writes nothing.
- *   - `--verbose`: emits the audit-log entries to stderr (in addition to the
- *     `## Rebuild Log` section that `rebuildCore` already appends to STATE.md).
+ *   - `--verbose`: emits the audit-log entries to stderr, in addition to the
+ *     append-only sidecar this function writes them to.
+ *
+ * SIDECAR (phase 14.1 plan 02). The audit trail used to be a level 2 section of
+ * STATE.md itself. Its `before` field carries the drifted prose the rebuild just
+ * deleted, verbatim, so a versionless false claim removed from the body would
+ * have survived inside the log with the structural guard green. An audit log
+ * records what changed and is not a statement of current state, so under D3d it
+ * does not belong in the file at all.
+ *
+ * The sidecar is DELIBERATELY outside the plan 03 checker's inspection set: it
+ * is an append-only audit record, it makes no current-state claim, and putting
+ * an append-only log under a structural contract would put this phase back in
+ * the business of policing prose it just moved out of reach.
  *
  * Per ADR-1817 §5 this is the heavy/manual counterpart to the lightweight,
  * auto-triggered `state sync` (3 frontmatter fields). The two compose
  * non-overlappingly.
  */
+// ─── The single phase-directory derivation (phase 14.1 D3c) ─────────────────
+//
+// D3c locks the roots: the phase directories plus the milestone artifacts are
+// the ONLY sources STATE.md derives from. Before this, `completePhase` passed
+// `progressProvider: () => null` with a comment saying progress came from the
+// roadmap, while `extractCurrentMilestone` (src/roadmap-parser.cts:51-64) reads
+// STATE.md's `milestone:` key to decide which roadmap region to parse. That is
+// STATE progress reading ROADMAP while ROADMAP scoping reads STATE, and it is
+// how `completed_phases: 0` survived in frontmatter with a phase complete and
+// committed.
+//
+// Both consumers now go through ONE named function so they cannot disagree:
+// `completePhase`'s progress provider and the `rebuild` path's phase-inventory
+// provider. Composed from the existing derivations rather than a third scanner:
+// `scanPhasePlans` (src/plan-scan.cts) owns the per-directory plan and summary
+// counts and the completed rule, exactly as `buildStateFrontmatter` uses it.
+
+/**
+ * One record per on-disk phase directory under `.planning/phases/`.
+ * Returns null when the directory is absent or unreadable, which is the signal
+ * both callers already treat as "no disk evidence, leave the counters alone".
+ */
+function scanPhaseInventory(cwd: string): PhaseInventoryRecord[] | null {
+  try {
+    const phasesDir = path.join(planningPaths(cwd).planning, 'phases');
+    if (!fs.existsSync(phasesDir) || !fs.statSync(phasesDir).isDirectory()) return null;
+    const records: PhaseInventoryRecord[] = [];
+    for (const entry of fs.readdirSync(phasesDir)) {
+      const full = path.join(phasesDir, entry);
+      let stat: fs.Stats;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (!stat.isDirectory()) continue;
+      // Directory-name convention: `<N>-<slug>`, where N may carry decimal
+      // segments (`14.1-governance-truth`). The prior `^(\d+)-` form silently
+      // DROPPED every decimal phase, which would have understated the counters
+      // the moment this became their source.
+      const m = entry.match(/^(\d+(?:\.\d+)*)-(.+)$/);
+      if (!m) continue;
+      const { planCount, summaryCount } = scanPhasePlans(full);
+      records.push({ number: m[1], name: m[2], planCount, summaryCount });
+    }
+    return records;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The aggregate progress counters, derived from the phase directories and from
+ * nothing else. Keys match the frontmatter `progress` map at
+ * `src/state.cts` `buildStateFrontmatter`, so the 2 writers agree on shape.
+ */
+function deriveProgressFromPhaseDirs(cwd: string): ProgressRecord | null {
+  const inventory = scanPhaseInventory(cwd);
+  if (inventory === null) return null;
+  let completedPhases = 0;
+  let totalPlans = 0;
+  let completedPlans = 0;
+  for (const record of inventory) {
+    totalPlans += record.planCount;
+    completedPlans += record.summaryCount;
+    // Same completion rule scanPhasePlans applies per directory: a phase is
+    // complete when it has plans and every one of them has a summary.
+    if (record.planCount > 0 && record.summaryCount >= record.planCount) completedPhases++;
+  }
+  return {
+    total_phases: inventory.length,
+    completed_phases: completedPhases,
+    total_plans: totalPlans,
+    completed_plans: completedPlans,
+  };
+}
+
+const STATE_REBUILD_LOG_FILENAME = 'state-rebuild-log.jsonl';
+
+/**
+ * Append the rebuild audit entries to the append-only JSON Lines sidecar and
+ * return its path.
+ *
+ * Follows the 2 invariants `src/halting-log.cts` states in its own header:
+ * writes go through an append call so existing lines are never truncated or
+ * rewritten, and the entry carries the caller-supplied timestamp rather than a
+ * clock read here. One JSON object per line, carrying all 6 fields the retired
+ * section format carried, so nothing in the audit trail was traded for the move.
+ *
+ * The directory is resolved exactly the way the waiting-signal writer resolves
+ * it: prefer `.ferrox` when one exists, fall back to the planning directory.
+ */
+function appendStateRebuildSidecar(cwd: string, entries: unknown[]): string {
+  const ferroxDir = fs.existsSync(path.join(cwd, '.ferrox')) ? path.join(cwd, '.ferrox') : planningDir(cwd);
+  const target = path.join(ferroxDir, STATE_REBUILD_LOG_FILENAME);
+  platformEnsureDir(ferroxDir);
+  const payload = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  fs.appendFileSync(target, payload, 'utf-8');
+  return target;
+}
+
 function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean): void {
   const silent = !!options.silent;
   const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
@@ -2883,34 +2918,11 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
   const dryRun = !!options.dryRun;
   const verbose = !!options.verbose;
 
-  // Wire phaseInventoryProvider to a real `.planning/phases/` disk scan. This
-  // is the same canonical source `buildStateFrontmatter` consults; the Leaky-
-  // Abstractions guard in `rebuildCore` (ADR-1817 §1) keeps the pure core
-  // testable without this dep — here we provide it.
-  const phaseInventoryProvider = (): PhaseInventoryRecord[] | null => {
-    try {
-      const phasesDir = path.join(planningPaths(cwd).planning, 'phases');
-      if (!fs.existsSync(phasesDir) || !fs.statSync(phasesDir).isDirectory()) return null;
-      const entries = fs.readdirSync(phasesDir);
-      const records: PhaseInventoryRecord[] = [];
-      for (const entry of entries) {
-        const full = path.join(phasesDir, entry);
-        let stat: fs.Stats;
-        try { stat = fs.statSync(full); } catch { continue; }
-        if (!stat.isDirectory()) continue;
-        // Directory-name convention: `<NN>-<slug>` (e.g. `03-test-phase`).
-        const m = entry.match(/^(\d+)-(.+)$/);
-        if (!m) continue;
-        const files = fs.readdirSync(full);
-        const planCount = files.filter(f => /-PLAN\.md$/i.test(f)).length;
-        const summaryCount = files.filter(f => /-SUMMARY\.md$/i.test(f)).length;
-        records.push({ number: m[1], name: m[2], planCount, summaryCount });
-      }
-      return records;
-    } catch {
-      return null;
-    }
-  };
+  // The shared disk derivation, not a private copy: `scanPhaseInventory` is the
+  // SAME function `completePhase`'s progress provider consumes, so the 2
+  // derivations cannot drift. The Leaky-Abstractions guard in `rebuildCore`
+  // (ADR-1817 §1) keeps the pure core testable without this dep.
+  const phaseInventoryProvider = (): PhaseInventoryRecord[] | null => scanPhaseInventory(cwd);
 
   const deps: StateTransitionDeps = {
     progressProvider: () => null,
@@ -2944,9 +2956,10 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
     return;
   }
 
-  // Real path: lock + RMW via the existing seam. The rebuild log is captured
-  // so we can emit it to stderr under --verbose (the section is also written
-  // to STATE.md by rebuildCore itself, per ADR-1817 §3).
+  // Real path: lock + RMW via the existing seam. The rebuild log is captured so
+  // we can emit it to stderr under --verbose AND append it to the sidecar below.
+  // Phase 14.1 plan 02: the pure core no longer renders any section into
+  // STATE.md, so this impure caller owns the whole audit destination.
   let capturedLog: unknown[] = [];
   let capturedMutated = false;
   readModifyWriteStateMd(statePath, (content: string) => {
@@ -2959,11 +2972,19 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
 
   emitVerboseLog(capturedLog);
 
-  emit({
+  // Append-only-ON-MUTATION: an empty log writes no line, which is what keeps
+  // the verb idempotent. The dry-run path returned above and never reaches here.
+  const sidecar = capturedLog.length > 0 ? appendStateRebuildSidecar(cwd, capturedLog) : null;
+
+  const result: Record<string, unknown> = {
     rebuilt: capturedMutated,
     mutations: capturedLog.length,
-    note: capturedMutated ? 'STATE.md rebuilt; see ## Rebuild Log section for the audit trail' : 'Nothing to rebuild',
-  }, raw, capturedMutated ? 'true' : 'false');
+    note: capturedMutated
+      ? `STATE.md rebuilt; the audit trail is appended to ${STATE_REBUILD_LOG_FILENAME}`
+      : 'Nothing to rebuild',
+  };
+  if (sidecar !== null) result['audit_log'] = sidecar;
+  emit(result, raw, capturedMutated ? 'true' : 'false');
 }
 
 /**
@@ -3136,6 +3157,10 @@ export = {
   cmdStateAdvancePlan,
   cmdStateRecordMetric,
   cmdStateUpdateProgress,
+  // Phase 14.1 D3c: the single phase-directory derivation, exported so
+  // src/phase.cts consumes THIS function rather than writing a third scanner.
+  scanPhaseInventory,
+  deriveProgressFromPhaseDirs,
   cmdStateAddDecision,
   cmdStateAddBlocker,
   cmdStateAddRoadmapEvolution,

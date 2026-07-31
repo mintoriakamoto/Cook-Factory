@@ -124,5 +124,15 @@ export default {
     '.stryker-tmp',
     'coverage',
     'hooks/dist',
+    // FF-B190. Files under .ijfw are TRACKED by git and simultaneously rewritten and deleted by
+    // a session hook while the suite runs, so copying them into a sandbox races the hook and
+    // fails with ENOENT on whichever file it happened to remove. Observed naming a different
+    // path on consecutive runs, which is the tell. They are session telemetry, never a mutation
+    // subject.
+    '.ijfw',
+    // The fleet's control plane. A full git worktree per workgraph node lives
+    // under here, so sandboxing would copy the whole repository once per node,
+    // and a mutation planted in a COPY is scored against a file no test imports.
+    '.ferrox',
   ],
 };

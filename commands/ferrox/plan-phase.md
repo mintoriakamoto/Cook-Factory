@@ -1,6 +1,6 @@
 ---
 name: ferrox:plan-phase
-description: Create detailed phase plan (PLAN.md) with verification loop
+description: "Ready to work out the next step in detail before building it. Produces a plan to execute"
 argument-hint: "[phase] [--auto] [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp]"
 effort: max
 allowed-tools:
@@ -28,6 +28,8 @@ Create executable phase prompts (PLAN.md files) for a roadmap phase with integra
 - **`--view`** — view-only: print existing `RESEARCH.md` to stdout. Does not spawn the researcher. Cheapest mode for the correction-without-replanning loop. If no `RESEARCH.md` exists yet, errors with a hint to drop `--view`.
 
 **Orchestrator role:** Parse arguments, validate phase, research domain (unless skipped), spawn ferrox-planner, verify with ferrox-plan-checker, iterate until pass or max iterations, present results.
+
+**Planning ends with a parallelism recommendation.** Once the plans exist the shape of the phase is knowable, so step 13f runs `scripts/parallelism-verdict.cjs` and reports which execution mode fits, recommendation first, with the measures that back it. It reports and never acts: `/ferrox-execute-phase` owns the backend decision, its availability check and its refusal.
 </objective>
 
 <execution_context>

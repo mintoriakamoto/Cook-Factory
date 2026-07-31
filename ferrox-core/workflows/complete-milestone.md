@@ -59,20 +59,11 @@ These items are open. Choose an action:
 
 If user chooses [A] (Acknowledge):
 1. Re-run `ferrox-tools.cjs query audit-open --json` to get structured data
-2. Write acknowledged items to STATE.md under `## Deferred Items` section:
-   ```markdown
-   ## Deferred Items
-
-   Items acknowledged and deferred at milestone close on {date}:
-
-   | Category | Item | Status |
-   |----------|------|--------|
-   | debug | {slug} | {status} |
-   | quick_task | {slug} | {status} |
-   ...
-   ```
-   Sanitize all slug and status values via `sanitizeForDisplay()` before writing. Never inject raw file content into STATE.md.
-3. Set `closeout_type=override_closeout` and record `Known verification overrides: {count} (see STATE.md Deferred Items)` in the MILESTONES.md entry.
+2. Write acknowledged items to `.planning/BACKLOG.md`, one row each. STATE.md no
+   longer carries a Deferred Items section: phase 14.1 D3d deleted every
+   free-prose section from that file and open items already live in the backlog.
+   Sanitize all slug and status values via `sanitizeForDisplay()` before writing. Never inject raw file content into the backlog.
+3. Set `closeout_type=override_closeout` and record `Known verification overrides: {count} (see .planning/BACKLOG.md)` in the MILESTONES.md entry.
 4. Proceed with milestone close.
 
 If output shows all clear (no open items): set `closeout_type=verified_closeout`, print `All artifact types clear.`, and proceed.
@@ -594,21 +585,16 @@ ferrox_run query commit "docs: update retrospective for v${VERSION}" --files .pl
 
 Most STATE.md updates were handled by `milestone complete`, but verify and update remaining fields:
 
-**Project Reference:**
+**STATE.md carries frontmatter plus machine-written field sections only** since
+phase 14.1 D3d. There is no project-reference section and no accumulated-context
+section to update, and the current focus is DERIVED from the single
+`lifecycle: active` milestone artifact rather than restated here.
 
-```markdown
-## Project Reference
-
-See: .planning/PROJECT.md (updated [today])
-
-**Core value:** [Current core value from PROJECT.md]
-**Current focus:** [Next milestone or "Planning next milestone"]
-```
-
-**Accumulated Context:**
-- Clear decisions summary (full log in PROJECT.md)
-- Clear resolved blockers
-- Keep open blockers for next milestone
+**Where the curated content lives now:**
+- Decisions, blockers and roadmap evolution: machine-owned sections of the active
+  milestone artifact, written by `state add-decision`, `state add-blocker`,
+  `state resolve-blocker` and `state add-roadmap-evolution`
+- Resolved blockers: removed from that artifact by `state resolve-blocker`
 
 </step>
 

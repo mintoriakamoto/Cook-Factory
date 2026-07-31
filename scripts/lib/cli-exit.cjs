@@ -53,4 +53,38 @@ function runMain(main) {
     });
 }
 
-module.exports = { ExitError, runMain };
+/**
+ * The recovery footer EVERY refusal on the fleet path ends with.
+ *
+ * This is `NOTHING_HAPPENED` (scripts/fleet-dispatch.cjs) one level up. That
+ * constant exists because the promise "nothing was minted" used to be carried by
+ * exactly 1 refusal, leaving readers of the others to infer it. The recovery path
+ * was worse: it was carried by 0 refusals. A count over 13,423 lines of shipped
+ * scripts found 0 mentions of ferrox-health, ferrox-resume-work, ferrox-undo,
+ * ferrox-pause-work, ferrox-config, ferrox-help, ferrox-forensics,
+ * ferrox-progress or ferrox-next. Not one refusal named a way out, so a beginner
+ * who hit a legitimate refusal learned what was wrong and nothing about what to
+ * do, which is the difference between a gate and a wall.
+ *
+ * Every command named here is verified to exist as a shipped command. Naming a
+ * command that does not exist would reproduce the defect this fixes: a refusal
+ * that sends the reader somewhere absent.
+ */
+const WAY_OUT = 'Not sure what to do next: /ferrox-health checks this project, '
+  + '/ferrox-resume-work picks up where you left off, /ferrox-undo reverses the last step.';
+
+/**
+ * Append the recovery footer to a refusal message, at most once.
+ *
+ * Idempotent BY CONSTRUCTION. Refusals on this path are wrapped and re-wrapped
+ * (`refuse` already appends its own promise, and callers rethrow), so a helper
+ * that appended unconditionally would stack the same 3 commands 2 or 3 deep on
+ * exactly the messages a struggling reader is already trying to parse.
+ */
+function withWayOut(message) {
+  const text = typeof message === 'string' ? message : String(message);
+  if (text.includes(WAY_OUT)) return text;
+  return `${text}\n${WAY_OUT}`;
+}
+
+module.exports = { ExitError, runMain, WAY_OUT, withWayOut };

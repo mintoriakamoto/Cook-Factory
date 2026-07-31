@@ -1,0 +1,144 @@
+{
+  "_pin": "This is the PRISTINE pin of the vendored tree. It is written once, in phase 18 plan 01, and no later plan may edit it. Every later change to a vendored file is recorded in DIVERGENCES.json as an enumerated exception, so the pin stays a fixed base to diff against. A manifest that is updated whenever the tree changes proves nothing.",
+  "_line_count_convention": "lines is the newline count, which is what wc -l reports. physical_lines is that count plus 1 when the file does not end in a newline. bin/ratchet-mcp is the 1 file in this drop with no trailing newline, so its lines is 485 and its physical_lines is 486. entrypoints_total_lines sums the lines field over the 15 entrypoints only.",
+  "source": {
+    "origin": "https://github.com/FerroxLabs/ratchet.git",
+    "commit": "5b4bbb4bce23ab512ead3dfadbf4328b7d6cbaee",
+    "committed_at": "2026-07-11 17:22:32 +0700",
+    "commit_subject": "fix(overwatch): adversarial review — no subject-mask, loud broken store",
+    "captured_at": "2026-07-26"
+  },
+  "entrypoints_total_lines": 14103,
+  "entrypoint_count": 15,
+  "file_count": 16,
+  "files": {
+    "RESIDUALS.md": {
+      "sha256": "b89f2fce5bfbe2186f15bfc0b9736a81b5ccd6ee013ea5a8965c147bb2aae7dd",
+      "lines": 67,
+      "physical_lines": 68,
+      "bytes": 4952,
+      "mode": "0644",
+      "kind": "doc"
+    },
+    "bin/ratchet": {
+      "sha256": "b45463270b6fa1cf20f37d7f64294d537bd44cd44fcdd408bcfcae272ef00ffa",
+      "lines": 5481,
+      "physical_lines": 5482,
+      "bytes": 331200,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-agents": {
+      "sha256": "4179501fcf744eb7e506af4a0bf86da7f91e5f13bbd3eff2d3daa189a03c1617",
+      "lines": 291,
+      "physical_lines": 292,
+      "bytes": 15614,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-budget": {
+      "sha256": "69218c6bda2e605544e16dee0abfac5f673c26d5149f791ce0a6786824c713d2",
+      "lines": 334,
+      "physical_lines": 335,
+      "bytes": 18251,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-ci": {
+      "sha256": "91cd072599ef00cd1604b5f529835ac0f359235bb8228f0c400625c2e810d021",
+      "lines": 540,
+      "physical_lines": 541,
+      "bytes": 21547,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-delint": {
+      "sha256": "86e8078030efa4b6d928abf32d9f2ce7c790da38aa7ea4d89bc38b67e1fd609f",
+      "lines": 318,
+      "physical_lines": 319,
+      "bytes": 18462,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-exec": {
+      "sha256": "386a0ae3a64d17a64dfedb723cbad22d5154aba04089152ba4776195a87d2c57",
+      "lines": 1067,
+      "physical_lines": 1068,
+      "bytes": 66675,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-fuse": {
+      "sha256": "871c6ff32768fff782278c0d0016a5ce1fb0c7df8049aac287004624977f4369",
+      "lines": 124,
+      "physical_lines": 125,
+      "bytes": 7041,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-fuse-bench": {
+      "sha256": "8f17454dfe288d1318e598e119d83f117c6bd202f0182fd076e569b6797c0d35",
+      "lines": 174,
+      "physical_lines": 175,
+      "bytes": 9331,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-glass": {
+      "sha256": "7e21401b036662e2e8d386c7d990f79296084df3ac0f9ab696cefe8a2a1af9e4",
+      "lines": 2439,
+      "physical_lines": 2440,
+      "bytes": 167025,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-index": {
+      "sha256": "b6bb7b5048df891d625ce1e2f3a3a1e3e053327f6220a81b303bcbdff47a7792",
+      "lines": 547,
+      "physical_lines": 548,
+      "bytes": 28591,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-kanban": {
+      "sha256": "32aeb9a6e5cec6e366ec83ba17938dcaba705fa2cf4f982d2c37ee5a0265b6a2",
+      "lines": 331,
+      "physical_lines": 332,
+      "bytes": 13275,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-maintain": {
+      "sha256": "38f502f7225222ee420bb48a52c3cc00b3a648c6346271936dc60b2a916b3a15",
+      "lines": 856,
+      "physical_lines": 857,
+      "bytes": 46480,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-mcp": {
+      "sha256": "77f525bd5827e2effaf7ec6178ce0f86dd344455de4c6c5a0529b532351e25c2",
+      "lines": 485,
+      "physical_lines": 486,
+      "bytes": 20392,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-preview": {
+      "sha256": "d44618bc889b4d85959cba35bb607837aa4246a1725d02d5a358c572ba4cb140",
+      "lines": 657,
+      "physical_lines": 658,
+      "bytes": 26655,
+      "mode": "0755",
+      "kind": "entrypoint"
+    },
+    "bin/ratchet-think": {
+      "sha256": "42ef23836a3ba5db4b59d0edc3c48c34795f36e6e8b60786e7b5e7d58940398e",
+      "lines": 459,
+      "physical_lines": 460,
+      "bytes": 25499,
+      "mode": "0755",
+      "kind": "entrypoint"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: ferrox:brainstorm
-description: Research brainstorm with 3 silent stances (guided convergence, agent-generated options, free-form sounding board), researcher subagents on tap, a browser companion, and stance-keyed exits that promote Decisions into the lifecycle
+description: "You have an idea or a blank page and want to think it through. 3 silent stances, then routes"
 argument-hint: "[topic] [--research] [--text]"
 allowed-tools:
   - Read

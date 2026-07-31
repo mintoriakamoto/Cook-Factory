@@ -1,6 +1,6 @@
 ---
 name: ferrox:verify-work
-description: Validate built features through conversational UAT
+description: "Something was built and you want to confirm it works, by trying it rather than trusting it"
 argument-hint: "[phase number, e.g., '4'] [--ws <name>]"
 allowed-tools:
   - Read

@@ -439,12 +439,14 @@ Reference full template: `~/.claude/ferrox-core/templates/roadmap.md`
 
 Use template from `~/.claude/ferrox-core/templates/state.md`.
 
-Key sections:
-- Project Reference (core value, current focus)
-- Current Position (phase, plan, status, progress bar)
+Key sections, and there are only these. Phase 14.1 D3d deleted every free-prose
+section, so a heading outside this closed set fails `checkStateStructure`:
+- Current Position (phase, plan, status, last activity, progress bar)
 - Performance Metrics
-- Accumulated Context (decisions, todos, blockers)
-- Session Continuity
+- Operator Next Steps, created on demand by the milestone-close writer
+
+Decisions, blockers and roadmap evolution live in the single `lifecycle: active`
+milestone artifact, not here.
 
 ## Draft Presentation Format
 

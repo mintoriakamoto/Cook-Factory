@@ -43,6 +43,12 @@ import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getG
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
 import verificationMod = require('./verification.cjs');
+// FF-B29: antiloop-config-resolve.cjs is required LAZILY at its single call site
+// inside cmdInitPlanPhase, never statically here. A static import would put the
+// whole CLI on the critical path of a warning surface: a missing built lib would
+// then take down every init command rather than degrading 1 warning. That was
+// observed, not predicted, while executing this plan.
+type AntiloopConfigResolve = typeof import('./antiloop-config-resolve.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicateMod = require('./uat-predicate.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
@@ -668,6 +674,29 @@ function cmdInitPlanPhase(
     } catch {
       /* intentionally empty */
     }
+  }
+
+  // FF-B29 (Phase 15 SC2): the second warning surface for the loop-generator
+  // config combination. PLAN-PHASE is the right surface rather than a generic
+  // init, because the combination's consequence is a runaway plan generator, so
+  // the moment a human is about to plan a phase is the moment the warning is
+  // actionable. Assembled inside a try and assigned onto the result object,
+  // following the state-warnings idiom directly above, with the catch swallowing
+  // so the warning path can never fail the command. The 3-path resolution lives
+  // in exactly 1 place, antiloop-config-resolve.cjs, which the doctor verb also
+  // calls, so the 2 surfaces cannot drift apart.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy on purpose, see the type alias near the imports
+    const antiloopConfigResolve = require('./antiloop-config-resolve.cjs') as AntiloopConfigResolve;
+    const loopResult = antiloopConfigResolve.evaluateProjectLoopConfig(cwd);
+    result['config_warnings'] = {
+      decision: loopResult.decision,
+      matched: loopResult.matched,
+      unresolved: loopResult.unresolved,
+      message: antiloopConfigResolve.formatLoopConfigDoctorLine(loopResult),
+    };
+  } catch {
+    /* a warning can never fail planning */
   }
 
   output(withProjectRoot(cwd, result), raw);

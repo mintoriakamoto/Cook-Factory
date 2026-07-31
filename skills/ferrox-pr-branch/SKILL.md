@@ -1,6 +1,6 @@
 ---
 name: ferrox-pr-branch
-description: "Create a clean PR branch by filtering out .planning/ commits — ready for code review"
+description: "You want a PR branch without the .planning/ commits, so reviewers see only real code"
 argument-hint: "[target branch, default: main]"
 allowed-tools:
   - Bash

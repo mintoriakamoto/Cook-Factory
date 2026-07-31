@@ -137,6 +137,11 @@ function main() {
       subcommands: 'MEMORY_SUBCOMMANDS',
       routerPath: path.join(ROOT, 'ferrox-core', 'bin', 'lib', 'memory-command-router.cjs'),
     },
+    {
+      commandAliases: 'ANTILOOP_COMMAND_ALIASES',
+      subcommands: 'ANTILOOP_SUBCOMMANDS',
+      routerPath: path.join(ROOT, 'ferrox-core', 'bin', 'lib', 'antiloop-command-router.cjs'),
+    },
   ];
 
   for (const family of families) {

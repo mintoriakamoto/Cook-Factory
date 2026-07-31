@@ -1,6 +1,6 @@
 ---
 name: ferrox-thread
-description: "Manage persistent context threads for cross-session work"
+description: "You want a named context thread that survives across sessions for one line of work"
 argument-hint: "[list [--open | --resolved] | close <slug> | status <slug> | name | description]"
 allowed-tools:
   - Read

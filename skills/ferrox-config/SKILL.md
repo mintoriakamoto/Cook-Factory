@@ -1,6 +1,6 @@
 ---
 name: ferrox-config
-description: "Configure Ferrox settings — workflow toggles, advanced knobs, integrations, and model profile"
+description: "You want to change how Ferrox behaves. Workflow toggles, advanced knobs, integrations"
 argument-hint: "[--advanced | --integrations | --profile <name>]"
 allowed-tools:
   - Read

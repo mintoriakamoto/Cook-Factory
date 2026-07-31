@@ -1,6 +1,6 @@
 ---
 name: ferrox-capture
-description: "Capture ideas, tasks, notes, and seeds to their destination"
+description: "An idea, note or todo you do not want to lose right now. Files it where it belongs"
 argument-hint: "[--note | --backlog | --seed | --list | --list-seeds] [text]"
 allowed-tools:
   - Read

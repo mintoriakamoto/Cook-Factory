@@ -1,6 +1,6 @@
 ---
 name: ferrox-cleanup
-description: "Archive accumulated phase directories from completed milestones"
+description: "Finished milestones have left directories lying around and you want them archived"
 allowed-tools:
   - Read
   - Write

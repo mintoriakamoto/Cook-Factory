@@ -1,6 +1,6 @@
 ---
 name: ferrox-add-tests
-description: "Generate tests for a completed phase based on UAT criteria and implementation"
+description: "Something was built and you want tests covering what it promised to do"
 argument-hint: "<phase> [additional instructions]"
 allowed-tools:
   - Read

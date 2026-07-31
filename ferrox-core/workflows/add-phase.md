@@ -62,13 +62,17 @@ Extract from result: `phase_number`, `padded`, `name`, `slug`, `directory`.
 <step name="update_project_state">
 Update STATE.md to reflect the new phase:
 
-1. Read `.planning/STATE.md`
-2. Under "## Accumulated Context" → "### Roadmap Evolution" add entry:
-   ```
-   - Phase {N} added: {description}
-   ```
+Record the addition through the dedicated handler. Since phase 14.1 D3d it
+appends to the machine-owned Roadmap Evolution section of the single
+`lifecycle: active` milestone artifact, NOT to STATE.md, creates that section
+when missing, and dedupes identical entries:
 
-If "Roadmap Evolution" section doesn't exist, create it.
+```bash
+ferrox_run query state.add-roadmap-evolution --phase {N} --action added --note "{description}"
+```
+
+It fails loud when no single milestone artifact is active, and writes nothing in
+that case.
 </step>
 
 <step name="completion">

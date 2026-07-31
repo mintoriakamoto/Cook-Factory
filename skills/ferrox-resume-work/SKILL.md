@@ -1,6 +1,6 @@
 ---
 name: ferrox-resume-work
-description: "Resume work from previous session with full context restoration"
+description: "Coming back to work you left part way through. Restores the full context you had"
 allowed-tools:
   - Read
   - Bash

@@ -1,6 +1,6 @@
 ---
 name: ferrox-settings
-description: "Configure Ferrox workflow toggles and model profile"
+description: "You want to change workflow toggles and which models Ferrox uses"
 allowed-tools:
   - Read
   - Write

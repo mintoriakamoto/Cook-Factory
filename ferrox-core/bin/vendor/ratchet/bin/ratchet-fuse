@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""wl-fuse — dev-time Mixture-of-Providers coding council (prototype).
+
+Three tiers (the Crucible/Fugu pattern, applied to DEV work):
+  1. GENERATE  — cheap frontier ensemble (Flux-pinned) each produce a candidate, in parallel.
+  2. AUDIT     — codex (GPT-5.5) + gemini CLIs adversarially review all candidates.
+  3. JUDGE     — Opus (the caller / Claude Code) synthesizes the winner from the bundle.
+
+Cost lever: the token-heavy GENERATE tier runs on pennies-per-call open models; the only
+expensive spend is the thin JUDGE layer. Flux returns cost_usd per call, so the bundle carries
+a real cost ledger. Usage:  wl-fuse <task.md> [--out DIR]
+
+Requires FLUX_TEST_KEY (or FLUX_DEV_KEY) in env; codex + gemini on PATH.
+"""
+import json, os, subprocess, sys, threading, time, urllib.request, urllib.error
+
+FLUX_URL = "https://api.fluxrouter.ai/v1/chat/completions"
+KEY = os.environ.get("RATCHET_COUNCIL_KEY") or os.environ.get("FLUX_DEV_KEY") or os.environ.get("FLUX_TEST_KEY", "")
+ROSTER = [  # the cheap coding ensemble — all already pinned in Flux
+    ("glm",      "flux-pinned-glm-5-2"),
+    ("deepseek", "flux-pinned-deepseek-v4-pro"),
+    ("kimi",     "flux-pinned-kimi-k2-7-code-highspeed"),
+    ("minimax",  "flux-pinned-minimax-m3"),
+    ("qwen",     "flux-pinned-qwen3-coder-plus"),
+]
+GEN_SYS = ("You are a senior engineer fixing a specific, scoped bug. Output ONLY: (1) one fenced "
+           "code block with the exact corrected code, then (2) a single 'RATIONALE:' line. No preamble.")
+
+def flux_call(label, alias, task, max_tokens=4000):
+    body = json.dumps({"model": alias, "stream": True, "max_tokens": max_tokens, "temperature": 0,
+        "messages": [{"role": "system", "content": GEN_SYS}, {"role": "user", "content": task}]}).encode()
+    req = urllib.request.Request(FLUX_URL, data=body, headers={
+        "Authorization": f"Bearer {KEY}", "Content-Type": "application/json", "Accept": "text/event-stream"})
+    content, cost, ptok, ctok, served, t0 = [], 0.0, 0, 0, None, time.time()
+    try:
+        for raw in urllib.request.urlopen(req, timeout=600):
+            ln = raw.decode("utf-8", "replace").strip()
+            if not ln.startswith("data:"): continue
+            d = ln[5:].strip()
+            if d == "[DONE]": break
+            try: j = json.loads(d)
+            except Exception: continue
+            served = served or j.get("model")
+            u = j.get("usage") or {}
+            if u:
+                cost = u.get("cost_usd", cost) or cost
+                ptok = u.get("prompt_tokens", ptok) or ptok
+                ctok = u.get("completion_tokens", ctok) or ctok
+            dl = (j.get("choices") or [{}])[0].get("delta") or {}
+            if dl.get("content"): content.append(dl["content"])
+        return {"label": label, "alias": alias, "served": served, "ok": True,
+                "candidate": "".join(content).strip(), "cost_usd": round(cost, 6),
+                "prompt_tokens": ptok, "completion_tokens": ctok, "elapsed_s": round(time.time()-t0, 1)}
+    except urllib.error.HTTPError as e:
+        return {"label": label, "alias": alias, "ok": False, "error": f"HTTP {e.code}: {e.read().decode('utf-8','replace')[:300]}"}
+    except Exception as e:
+        return {"label": label, "alias": alias, "ok": False, "error": f"{type(e).__name__}: {e}"}
+
+def cli_audit(tool, prompt, cwd):
+    try:
+        if tool == "codex":
+            cmd = ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", prompt]
+        else:
+            cmd = ["gemini", "--skip-trust", "-p", prompt]
+        env = dict(os.environ, GEMINI_CLI_TRUST_WORKSPACE="true")
+        r = subprocess.run(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=600)
+        return r.stdout.strip() or f"[{tool} no stdout] {r.stderr.strip()[:300]}"
+    except Exception as e:
+        return f"[{tool} FAILED] {type(e).__name__}: {e}"
+
+def main():
+    if len(sys.argv) < 2 or not KEY:
+        print("usage: wl-fuse <task.md> [--out DIR]   (needs FLUX_TEST_KEY/FLUX_DEV_KEY)"); sys.exit(1)
+    task_path = sys.argv[1]
+    task = open(task_path).read()
+    out = sys.argv[sys.argv.index("--out")+1] if "--out" in sys.argv else os.path.splitext(task_path)[0] + ".fuse"
+    os.makedirs(out, exist_ok=True)
+
+    # TIER 1: GENERATE (parallel cheap ensemble)
+    print(f"[wl-fuse] GENERATE — {len(ROSTER)} models in parallel …")
+    results, threads = [None]*len(ROSTER), []
+    def run(i, l, a): results[i] = flux_call(l, a, task)
+    for i, (l, a) in enumerate(ROSTER):
+        t = threading.Thread(target=run, args=(i, l, a)); t.start(); threads.append(t)
+    for t in threads: t.join()
+    gen = [r for r in results if r]
+    for r in gen:
+        tag = "OK" if r.get("ok") else "FAIL"
+        print(f"  [{tag}] {r['label']:9} ${r.get('cost_usd',0):.5f}  {r.get('completion_tokens','?')}tok  {r.get('elapsed_s','?')}s")
+        if r.get("ok"):
+            open(f"{out}/candidate_{r['label']}.md", "w").write(f"# {r['label']} ({r['alias']})\n\n{r['candidate']}")
+    ok = [r for r in gen if r.get("ok") and r.get("candidate")]
+
+    # TIER 2: AUDIT (codex + gemini, adversarial)
+    bundle = task + "\n\n---\n# CANDIDATE FIXES (from a cheap model ensemble)\n"
+    for i, r in enumerate(ok, 1):
+        bundle += f"\n## Candidate {i} — {r['label']}\n{r['candidate']}\n"
+    audit_prompt = (bundle + "\n---\nYou are an ADVERSARIAL code auditor. For EACH candidate: is it "
+        "CORRECT and does it compile? Does it fail LOUD on a parse error while keeping None for a genuine "
+        "miss? Refute where you can. Then: RANK the candidates best→worst and name the single BEST (or say "
+        "NONE is correct and why). Be terse.")
+    print("[wl-fuse] AUDIT — codex + gemini (adversarial) …")
+    audits = {}
+    at = []
+    for tool in ("codex", "gemini"):
+        def run_audit(tl=tool): audits[tl] = cli_audit(tl, audit_prompt, os.path.dirname(os.path.abspath(task_path)))
+        th = threading.Thread(target=run_audit); th.start(); at.append(th)
+    for th in at: th.join()
+    for tool, text in audits.items():
+        open(f"{out}/audit_{tool}.md", "w").write(f"# {tool} adversarial audit\n\n{text}")
+        print(f"  [{ 'OK' if not text.startswith('[') else 'ERR'}] {tool}: {len(text)} chars")
+
+    # COST LEDGER
+    total_gen = round(sum(r.get("cost_usd", 0) for r in ok), 6)
+    ledger = {"task": task_path, "generate_cost_usd": total_gen, "candidates": len(ok),
+              "per_model": [{"label": r["label"], "cost_usd": r.get("cost_usd"), "completion_tokens": r.get("completion_tokens")} for r in ok],
+              "note": "JUDGE tier (Opus) cost is separate + thin — it only adjudicates finalists."}
+    json.dump(ledger, open(f"{out}/cost.json", "w"), indent=2)
+    print(f"[wl-fuse] DONE. GENERATE cost = ${total_gen:.5f} across {len(ok)} models.")
+    print(f"[wl-fuse] bundle → {out}  (candidates + audits + cost.json). JUDGE tier: hand {out} to Opus.")
+
+if __name__ == "__main__":
+    main()

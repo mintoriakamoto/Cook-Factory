@@ -1,6 +1,6 @@
 ---
 name: ferrox:design-init
-description: Create DESIGN.md, the project's durable design contract, via a short recommendation-first interview or a scan of existing UI code
+description: "You want a durable design contract before any UI is built. Creates DESIGN.md by interview"
 argument-hint: "[--from-existing]"
 allowed-tools:
   - Read

@@ -1,6 +1,6 @@
 ---
 name: ferrox:spec-phase
-description: Clarify WHAT a phase delivers with ambiguity scoring; produces a SPEC.md before discuss-phase.
+description: "You want WHAT a step delivers pinned down, with ambiguity scored, before discussing how"
 argument-hint: "<phase> [--auto] [--text]"
 allowed-tools:
   - Read

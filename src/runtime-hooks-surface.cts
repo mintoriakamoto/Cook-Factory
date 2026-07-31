@@ -134,6 +134,26 @@ const FERROX_CURSOR_HOOK_MARKER = 'ferrox-managed';
 // reconciliation scope is always the full set). The install path
 // (writeCursorHooksJson) resolves a descriptor-driven subset via
 // resolveManagedHookEvents(opts.managedHookEvents).
+
+/**
+ * Every settings.json hook event Ferrox is capable of REGISTERING.
+ *
+ * Exported so the uninstall path can derive its removal set from the SAME list
+ * the registration path is written against. It used to be a second literal in
+ * bin/install.js, maintained by hand, and that independence is the FF-B518 drift
+ * class: an event added to registration and forgotten here leaves a settings
+ * entry pointing at a deleted file. It has now happened 4 times (issue 941,
+ * FF-B24, FF-B511, and the UserPromptSubmit offer hook, caught by a real
+ * install/uninstall round trip rather than by review).
+ *
+ * Anything registered by `applySettingsJsonHooks` MUST appear here.
+ */
+const MANAGED_SETTINGS_HOOK_EVENTS: readonly string[] = Object.freeze([
+  'SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool',
+  'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent',
+  'BeforeModel', 'FileChanged', 'UserPromptSubmit',
+]);
+
 const CURSOR_MANAGED_EVENTS = CURSOR_HOOK_EVENTS;
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1531,7 @@ function writeCopilotHookConfig(targetDir: string): string {
 //   readGuardCommand          - command string or null
 //   readInjectionScannerCommand - command string or null
 //   configReloadCommand       - command string or null
+//   offerCommand              - command string or null (UserPromptSubmit)
 //   hookOpts                  - { portableHooks, runtime } passed to buildHookCommand
 //   localCmd                  - (hookFile: string) => string|null
 //   localShellCmd             - (hookFile: string) => string|null
@@ -1533,6 +1554,8 @@ interface ApplySettingsJsonHooksOpts {
   readGuardCommand: string | null;
   readInjectionScannerCommand: string | null;
   configReloadCommand: string | null;
+  /** UserPromptSubmit offer hook command, or null when node's path is unknown. */
+  offerCommand?: string | null;
   hookOpts: BuildHookCommandOpts;
   localCmd: (hookFile: string) => string | null;
   localShellCmd: (hookFile: string) => string | null;
@@ -1557,6 +1580,7 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     readGuardCommand,
     readInjectionScannerCommand,
     configReloadCommand,
+    offerCommand,
     hookOpts,
     localCmd,
     localShellCmd,
@@ -2051,6 +2075,48 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
       }
     }
     // ── end FileChanged hook ────────────────────────────────────────────────────
+
+    // ── UserPromptSubmit: the offer hook ────────────────────────────────────────
+    // The only Ferrox hook that runs on what the USER typed. Every other Ferrox
+    // hook fires after the model has already chosen an action (PreToolUse) or
+    // after the turn (Stop/PostToolUse), which is too late to suggest a better
+    // entry point than the one about to be used.
+    //
+    // It is silent by default in all but a handful of situations: the registry it
+    // delegates to refuses to speak during the 4 mid-flight situations, fires only
+    // on a state EDGE rather than a level, and spends at most 1 offer per prompt
+    // and once per (offer, project) forever. See ferrox-core/bin/lib/offer-registry.cjs.
+    //
+    // Registered LAST so a failure to wire it cannot affect any hook above it.
+    if (extendedEvents.includes('UserPromptSubmit')) {
+      if (!settings.hooks.UserPromptSubmit) {
+        settings.hooks.UserPromptSubmit = [];
+      }
+      const offerFile = path.join(targetDir, 'hooks', 'ferrox-offer.js');
+      const alreadyHasOffer = settings.hooks.UserPromptSubmit.some((entry: HookGroup) =>
+        entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'ferrox-offer'))
+      );
+      if (!alreadyHasOffer && fs.existsSync(offerFile) && offerCommand) {
+        settings.hooks.UserPromptSubmit.push({
+          hooks: [
+            {
+              type: 'command',
+              command: offerCommand,
+              // Short on purpose. This runs before every prompt is answered, so
+              // it must be invisible in the common case; the hook itself exits
+              // quiet on a 2 second stdin timeout well inside this.
+              timeout: 5
+            }
+          ]
+        });
+        console.log(`  ${green}✓${reset} Configured UserPromptSubmit offer hook (Claude Code)`);
+      } else if (!alreadyHasOffer && !fs.existsSync(offerFile)) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped UserPromptSubmit hook — ferrox-offer.js not found at target`);
+      } else if (!alreadyHasOffer && !offerCommand) {
+        console.warn(`  ${yellow}⚠${reset}  Skipped UserPromptSubmit hook — Node executable path unavailable`);
+      }
+    }
+    // ── end UserPromptSubmit hook ───────────────────────────────────────────────
   }
   /* eslint-enable @typescript-eslint/no-unsafe-member-access,
                    @typescript-eslint/no-unsafe-call,
@@ -2298,6 +2364,10 @@ function referencesHook(h: Record<string, unknown>, hookName: string): boolean {
 // ---------------------------------------------------------------------------
 
 export = {
+  // The settings.json hook events Ferrox registers. Exported so the uninstall
+  // path derives its removal set from the registration side rather than from a
+  // second hand-maintained literal (FF-B518).
+  MANAGED_SETTINGS_HOOK_EVENTS,
   // Cline
   buildClineRulesBody,
   buildClineAgentsMdBody,

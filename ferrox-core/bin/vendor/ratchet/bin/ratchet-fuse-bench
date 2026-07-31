@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""wl-fuse-bench — blind, neutral-panel quality benchmark: cheap models vs Fable.
+
+For each task: all contenders generate (single-shot, via Flux), outputs are ANONYMIZED to
+letters, and NON-Claude judges (Gemini + Codex) score them blind on compile-correctness + quality.
+Answers: does any cheap model match/beat Fable's blind score at a fraction of the cost?
+Usage: wl-fuse-bench <task1.md> [task2.md ...] --out DIR
+"""
+import hashlib, json, os, re, subprocess, sys, threading, time, urllib.request, urllib.error
+
+FLUX_URL = "https://api.fluxrouter.ai/v1/chat/completions"
+KEY = os.environ.get("RATCHET_COUNCIL_KEY") or os.environ.get("FLUX_DEV_KEY") or os.environ.get("FLUX_TEST_KEY", "")
+CONTENDERS = [
+    ("fable",    "flux-pinned-claude-fable-5"),     # premium baseline
+    ("glm",      "flux-pinned-glm-5-2"),
+    ("deepseek", "flux-pinned-deepseek-v4-pro"),
+    ("kimi",     "flux-pinned-kimi-k2-7-code-highspeed"),
+    ("minimax",  "flux-pinned-minimax-m3"),
+    ("qwen",     "flux-pinned-qwen3-coder-plus"),
+]
+GEN_SYS = "You are a senior engineer. Output ONLY one fenced code block with the fix, then a single RATIONALE line."
+
+def _flux_once(alias, task, max_tokens):
+    body = json.dumps({"model": alias, "stream": True, "max_tokens": max_tokens, "temperature": 0,
+        "messages": [{"role": "system", "content": GEN_SYS}, {"role": "user", "content": task}]}).encode()
+    req = urllib.request.Request(FLUX_URL, data=body, headers={"Authorization": f"Bearer {KEY}",
+        "Content-Type": "application/json", "Accept": "text/event-stream"})
+    c, rc, cost, ct, fin, err = [], [], 0.0, 0, None, None
+    try:
+        for raw in urllib.request.urlopen(req, timeout=500):
+            ln = raw.decode("utf-8", "replace").strip()
+            if not ln.startswith("data:"): continue
+            d = ln[5:].strip()
+            if d == "[DONE]": break
+            try: j = json.loads(d)
+            except Exception: continue
+            u = j.get("usage") or {}
+            if u: cost = u.get("cost_usd", cost) or cost; ct = u.get("completion_tokens", ct) or ct
+            ch = (j.get("choices") or [{}])[0]
+            fin = ch.get("finish_reason") or fin
+            dl = ch.get("delta") or {}
+            if dl.get("content"): c.append(dl["content"])
+            if dl.get("reasoning_content"): rc.append(dl["reasoning_content"])
+    except urllib.error.HTTPError as e:
+        err = f"HTTP {e.code}: {e.read().decode('utf-8','replace')[:200]}"
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    return {"text": "".join(c).strip(), "reason_chars": len("".join(rc)), "cost": round(cost, 6),
+            "ctok": ct, "finish": fin, "err": err}
+
+_last_claude_call = [0.0]
+CLAUDE_GAP_S = 50  # positional throttle: rapid repeat Claude-family calls get finish_reason=refusal
+
+def flux(alias, task, serial_paced=False):
+    """Retry-on-empty (up to 3), escalating tokens; records diagnostics so an empty
+    baseline can never be mistaken for a bad answer again. serial_paced=True enforces
+    a >=CLAUDE_GAP_S gap between calls (the Fable-baseline fix) and long refusal backoff."""
+    tries = []
+    backoffs = (45, 90) if serial_paced else (5, 11)
+    for i, mt in enumerate((3000, 4000, 6000)):
+        if serial_paced:
+            wait = _last_claude_call[0] + CLAUDE_GAP_S - time.time()
+            if wait > 0:
+                print(f"    [pace] waiting {int(wait)}s before {alias} call (throttle dodge)"); time.sleep(wait)
+            _last_claude_call[0] = time.time()
+        r = _flux_once(alias, task, mt)
+        tries.append({"finish": r["finish"], "err": r["err"], "reason_chars": r["reason_chars"], "ctok": r["ctok"]})
+        if r["text"]:
+            r["tries"] = tries; return r
+        if i < 2:
+            time.sleep(backoffs[i])
+    return {"text": f"[EMPTY after {len(tries)} tries — diag: {json.dumps(tries)}]",
+            "cost": 0, "ctok": 0, "tries": tries}
+
+def judge(tool, prompt, cwd):
+    try:
+        cmd = ["codex", "exec", "--skip-git-repo-check", "-s", "read-only", prompt] if tool == "codex" \
+              else ["gemini", "--skip-trust", "-p", prompt]
+        env = dict(os.environ, GEMINI_CLI_TRUST_WORKSPACE="true")
+        r = subprocess.run(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=500)
+        return r.stdout.strip() or f"[{tool} empty] {r.stderr[:200]}"
+    except Exception as e:
+        return f"[{tool} FAILED {e}]"
+
+def parse_scores(text, letters):
+    """Extract {letter: score} from a judge reply. JSON first, regex fallback."""
+    m = re.search(r"\{[^{}]*scores[^{}]*\{[^{}]*\}[^{}]*\}", text, re.S) or re.search(r"\{.*\}", text, re.S)
+    if m:
+        try:
+            j = json.loads(m.group(0)); sc = j.get("scores", {})
+            out = {L: float(sc[L]) for L in letters if L in sc}
+            if out: return out, (j.get("best") or "").strip()[:1]
+        except Exception: pass
+    sc = {}
+    for L in letters:
+        mm = re.search(rf"\b{L}\b[^0-9]{{0,20}}(\d+(?:\.\d+)?)\s*/?\s*10", text)
+        if mm: sc[L] = float(mm.group(1))
+    bm = re.search(r"best[^A-Z]{0,12}([A-Z])", text, re.I)
+    return sc, (bm.group(1) if bm else "")
+
+def main():
+    tasks = [a for a in sys.argv[1:] if a.endswith(".md")]
+    out = sys.argv[sys.argv.index("--out")+1] if "--out" in sys.argv else "/tmp/fuse-bench"
+    os.makedirs(out, exist_ok=True)
+    if not KEY or not tasks: print("usage: wl-fuse-bench <task.md>... --out DIR (needs FLUX key)"); sys.exit(1)
+
+    agg = {label: {"score_sum": 0.0, "score_n": 0, "best": 0, "cost": 0.0} for label, _ in CONTENDERS}
+    for ti, tpath in enumerate(tasks):
+        task = open(tpath).read()
+        tname = os.path.splitext(os.path.basename(tpath))[0]
+        print(f"\n===== TASK {ti+1}: {tname} — {len(CONTENDERS)} contenders generating =====")
+        gens = {}
+        ths = []
+        def run(lbl, al): gens[lbl] = flux(al, task)
+        # cheap ensemble in parallel; Claude-family SERIAL + PACED in the main thread
+        # (the parallel/rapid pattern triggered positional refusals and invalidated the baseline)
+        for lbl, al in CONTENDERS:
+            if "claude" in al:
+                continue
+            t = threading.Thread(target=run, args=(lbl, al)); t.start(); ths.append(t)
+        for lbl, al in CONTENDERS:
+            if "claude" in al:
+                gens[lbl] = flux(al, task, serial_paced=True)
+        for t in ths: t.join()
+        # blind: deterministic per-task permutation by hash
+        order = sorted(gens.keys(), key=lambda l: hashlib.sha1(f"{ti}:{l}".encode()).hexdigest())
+        letters = [chr(65+i) for i in range(len(order))]
+        L2model = dict(zip(letters, order))
+        model2L = {m: L for L, m in L2model.items()}
+        for lbl in gens: agg[lbl]["cost"] += gens[lbl]["cost"]
+        blind = f"# TASK\n{task}\n\n# ANONYMIZED CANDIDATE SOLUTIONS\n"
+        for L in letters:
+            blind += f"\n## Candidate {L}\n{gens[L2model[L]]['text']}\n"
+        jprompt = (blind + f"\n---\nYou are a STRICT adversarial Rust reviewer. For EACH candidate "
+            f"({', '.join(letters)}): does it COMPILE and CORRECTLY fix the stated bug(s) without breaking "
+            f"the signature? Score 0-10 (0=broken/wrong, 10=correct+idiomatic+minimal). Then name the single "
+            f"BEST letter. Reply as compact JSON exactly: {{\"scores\":{{\"A\":n,...}},\"best\":\"X\"}}.")
+        open(f"{out}/{tname}_blind.md", "w").write(blind + "\n\n<!-- KEY: " + json.dumps(model2L) + " -->")
+        print(f"  blind map: {model2L}")
+        # neutral panel judges
+        jres = {}
+        jt = []
+        def rj(tool): jres[tool] = judge(tool, jprompt, out)
+        for tool in ("gemini", "codex"):
+            th = threading.Thread(target=rj, args=(tool,)); th.start(); jt.append(th)
+        for th in jt: th.join()
+        for tool, txt in jres.items():
+            open(f"{out}/{tname}_judge_{tool}.md", "w").write(txt)
+            sc, best = parse_scores(txt, letters)
+            print(f"  {tool}: scores={sc} best={best}")
+            for L, v in sc.items():
+                agg[L2model[L]]["score_sum"] += v; agg[L2model[L]]["score_n"] += 1
+            if best in L2model: agg[L2model[best]]["best"] += 1
+
+    # scorecard
+    print("\n================= SCORECARD (blind, neutral panel) =================")
+    print(f"{'model':10} {'mean_score':>10} {'best_picks':>10} {'cost_usd':>10}")
+    rows = []
+    for lbl, a in agg.items():
+        mean = round(a["score_sum"]/a["score_n"], 2) if a["score_n"] else 0
+        rows.append((lbl, mean, a["best"], round(a["cost"], 5)))
+    for lbl, mean, best, cost in sorted(rows, key=lambda r: -r[1]):
+        print(f"{lbl:10} {mean:>10} {best:>10} {cost:>10}")
+    json.dump({"scorecard": rows}, open(f"{out}/scorecard.json", "w"), indent=2)
+    fable = next(r for r in rows if r[0] == "fable")
+    print(f"\nFABLE baseline: score={fable[1]} cost=${fable[3]}")
+    for lbl, mean, best, cost in sorted(rows, key=lambda r: -r[1]):
+        if lbl == "fable": continue
+        verdict = "MATCHES/BEATS Fable" if mean >= fable[1] else f"{round(mean-fable[1],1)} below"
+        cheaper = f"{round(fable[3]/cost,1)}x cheaper" if cost else "n/a"
+        print(f"  {lbl:10} {verdict:20} at {cheaper}")
+
+if __name__ == "__main__":
+    main()

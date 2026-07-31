@@ -1,6 +1,6 @@
 ---
 name: ferrox-help
-description: "Show available Ferrox commands and usage guide"
+description: "You do not know what to type, or what Ferrox can do. Shows the commands that matter"
 argument-hint: "[--brief | --full | <topic> | --brief <topic>]"
 allowed-tools:
   - Read

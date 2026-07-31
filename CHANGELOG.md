@@ -1,5 +1,86 @@
 # Changelog
 
+## 1.16.0 (2026-07-30): The on ramp
+
+Ferrox knew how to build software and was bad at meeting people. 74 commands, of
+which a beginner could use 11, and the one that starts a project ended by printing
+a command and stopping. This release is about the distance between installing it
+and having it build something.
+
+**It offers to build the whole thing, and then does.** `/ferrox-new-project` used
+to finish by telling you to type something else, at 7 separate handoffs. It now
+asks once whether to build it now or one step at a time, and "build it now" carries
+you through every step, pausing only on a real decision. The machinery already
+existed (`/ferrox-progress --next --auto`); nothing routed to it.
+
+**Say what you want in plain words.** `/ferrox-next "brainstorm a game then build
+it autonomously"` reads that as a sequence and runs the chain, rather than doing the
+first thing you said and silently dropping the rest. Run it bare and it still shows
+you where you are.
+
+**The commands say when to use them.** All 74 descriptions were rewritten from what
+the command does to when you would reach for it, because that one line is all a
+runtime reads when deciding whether a command fits. "Validate built features through
+conversational UAT" became "Something was built and you want to confirm it works, by
+trying it rather than trusting it".
+
+**A smaller front door, without a smaller install.** `--profile=beginner` installs
+18 commands covering the 9 questions a first project raises. The default still
+installs all 74, so nothing you read about is ever missing. `core` was also fixed: it
+could build and then not confirm, ship, debug or undo, which is a demo rather than a
+profile.
+
+**Ferrox can now suggest things, rarely.** A new prompt hook offers the right entry
+point at the moments where staying silent is a genuine failure: you described a
+project and have no plan, the current step's plans do not overlap so they could build
+in parallel, or you have finished work that never left your machine. It is silent
+during work, fires on a change rather than a standing condition, spends at most 1
+offer per prompt and once per offer per project, and never suggests something that
+would refuse. Turn it off for one prompt with a leading `*` or the words `ferrox
+off`, or entirely with `FERROX_NO_OFFERS=1`.
+
+**Refusals tell you what to do next.** Across 13,423 lines of shipped scripts, the
+number of times a refusal named a recovery command was 0. Every refusal on the fleet
+path now ends with `/ferrox-health`, `/ferrox-resume-work` and `/ferrox-undo`, and
+the anti loop menu explains its 4 legal moves instead of listing their ids.
+
+### Fixed
+
+- `/ferrox-next` emitted the legacy `/ferrox:<cmd>` form for all 11 situations, which
+  Claude Code cannot route. Every action it offers is now routable, and codex installs
+  get their own shell-var form.
+- The generated project instruction file named 3 of 74 commands, all mid work, and
+  omitted `new-project`, so clearing context and saying "ok, build it" routed to the
+  small ad-hoc task command straight past your roadmap.
+- 2 fleet refusals sent you to files that do not exist in an install.
+- `/ferrox-verify-work` and `/ferrox-execute-phase` never mentioned `/ferrox-ship`, so
+  a finished increment had no stated way to leave your machine.
+- The newcomer tour omitted `next`, `resume-work`, `pause-work` and `undo`.
+- A returning user mid-phase is now offered `resume-work`, which was previously
+  unreachable unless they had run `pause-work` on the way out.
+- Uninstall now derives its hook removal set from the registration side rather than
+  restating it, so the 2 can no longer drift apart and leave settings entries pointing
+  at deleted files.
+- The 100 character description budget is now enforced in CI. It was declared and
+  never wired in, which is how a 229 character description shipped under it.
+
+## 1.14.0 to 1.15.1 (2026-07-29 and 2026-07-30): Fleet mode, and getting it to actually run
+
+These 5 releases shipped without changelog entries. Recorded here after the fact, from
+the release commits.
+
+- **1.14.0** introduced fleet mode: a phase's non overlapping plans build in parallel,
+  one git worktree per node, parallel build and serial land. Measured at 3.27x against
+  1 agent taking turns, with live agents on both arms. The published proof verdict
+  remains NEGATIVE on false green rate, and that stands.
+- **1.14.1** fixed fleet mode being unreachable. The installer's script allowlist never
+  included the fleet entry points, so 1.14.0 shipped the feature and not the path to it.
+- **1.14.2** let a global install resolve those scripts from any project.
+- **1.15.0** added cross repo fleet runs, landing locally without GitHub, a Rust aware
+  work graph, and per worker briefs.
+- **1.15.1** made uninstall symmetric with install, and taught `doctor` to verify hook
+  files exist and to report version skew between installs.
+
 ## 1.13.1 (2026-07-24): Merge-gate hardening
 
 A security pass on the merge gate, the fail-closed hook that no increment is meant to

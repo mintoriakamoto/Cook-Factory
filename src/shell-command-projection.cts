@@ -224,6 +224,24 @@ const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
     'ferrox-session-state.sh',
     'ferrox-validate-commit.sh',
     'ferrox-phase-boundary.sh',
+    // FF-B511: these two ARE registered into settings.json / settings.local.json
+    // by applySettingsJsonHooks (worktree-path-guard on PreToolUse,
+    // graphify-update on PostToolUse) but were missing from this set, so the
+    // uninstall strip (which filters on isManagedHookCommand) walked straight
+    // past them and left 2 orphaned registrations pointing at deleted files.
+    // Same drift class as the FERROX_UNINSTALL_HOOKS literal that #941 replaced
+    // with a derived set: registration set and removal set must not be
+    // maintained independently.
+    'ferrox-worktree-path-guard.js',
+    // Same set, same reason, third entry added under it: the UserPromptSubmit
+    // offer hook is registered by applySettingsJsonHooks, so it must be
+    // recognised here or uninstall removes the FILE and leaves the
+    // REGISTRATION, which is a settings entry pointing at nothing. Verified by
+    // a real install/uninstall round trip, not by inspection: the first
+    // attempt at this hook did exactly that.
+    'ferrox-offer.js',
+
+    'ferrox-graphify-update.sh',
   ]),
   'codex-toml': new Set([
     'ferrox-check-update.js',

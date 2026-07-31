@@ -1,6 +1,6 @@
 ---
 name: ferrox:surface
-description: Toggle which skills are surfaced — apply a profile, list, or disable a cluster without reinstall
+description: "Too many commands, or too few. Applies a profile or disables a cluster without reinstalling"
 argument-hint: "[list|status|profile <name>|disable <cluster>|enable <cluster>|reset]"
 allowed-tools:
   - Read

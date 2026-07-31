@@ -1,6 +1,6 @@
 ---
 name: ferrox-workstreams
-description: "Manage parallel workstreams — list, create, switch, status, progress, complete, and resume"
+description: "You want independent tracks of work running side by side. List, create, switch, resume"
 allowed-tools:
   - Read
   - Bash

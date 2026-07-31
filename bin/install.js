@@ -305,6 +305,50 @@ const FERROX_WINDSURF_HOOK_SCRIPTS = [
 // git-cmd.js does not start with "ferrox-" (shared classifier for #3129), ferrox-graphify-rebuild.sh does.
 const FERROX_HOOK_LIB_FILES = ['git-cmd.js', 'ferrox-graphify-rebuild.sh'];
 
+// Top-level scripts/ entry points that the SHIPPED workflows and commands invoke
+// against the install root, plus the transitive closure of their in-repo
+// scripts/ requires (#3211).
+//
+// 1.14.0 shipped fleet mode with execute-phase.md invoking
+// ${FERROX_ROOT}/scripts/{execution-backend-switch,parallelism-verdict,
+// fleet-dispatch,fleet-glass}.cjs, but the installer copies scripts/ by this
+// ENUMERATED ALLOWLIST rather than by directory copy, and the fleet entries were
+// never added. The code shipped inside the npm tarball (package.json "files"
+// includes scripts) but nothing placed it in the installed tree, so a clean
+// install had no path from the workflow to the code and fleet mode could not run.
+//
+// Derivation (do NOT hand-extend this list; re-derive it):
+//   entry points = every `scripts/<name>.cjs` resolved against the install root
+//                  by any file under ferrox-core/workflows/ or commands/, i.e.
+//                  every `ferrox_script <name>.cjs` call site
+//   closure      = entry points + every sibling scripts/*.cjs they require,
+//                  transitively
+// tests/installed-scripts-closure.install.test.cjs re-derives both from the shipped
+// sources against a REAL scratch install and fails if this list drifts.
+//
+// fleet-crew.cjs and fleet-foreman.cjs are operator CLIs that no shipped
+// workflow references; they are installed so the documented `node
+// scripts/fleet-{crew,foreman}.cjs` invocations resolve for a user who only
+// ever ran the installer.
+//
+// lint-antiloop-gate.cjs is not fleet code. It is here because
+// ferrox-core/workflows/execute-plan.md calls its exit code the source of truth
+// for whether a phase declares anti-loop governance, and that instruction was
+// unrunnable on any install because the script was never copied (FF-B476). Its
+// only sibling require is lib/cli-exit.cjs, already covered below.
+const FERROX_FLEET_SCRIPT_FILES = Object.freeze([
+  'execution-backend-switch.cjs',
+  'fleet-ask.cjs',
+  'fleet-controlplane.cjs',
+  'fleet-crew.cjs',
+  'fleet-dispatch.cjs',
+  'fleet-foreman.cjs',
+  'fleet-glass.cjs',
+  'fleet-loop.cjs',
+  'lint-antiloop-gate.cjs',
+  'parallelism-verdict.cjs',
+]);
+
 const CODEX_AGENT_SANDBOX = {
   'ferrox-executor': 'workspace-write',
   'ferrox-planner': 'workspace-write',
@@ -6913,6 +6957,205 @@ function validateHookFields(settings) {
 const FERROX_UNINSTALL_HOOKS = [..._HOOKS_TO_COPY, 'ferrox-check-update.cmd'];
 
 /**
+ * Hook events Ferrox may have registered into a settings.json-shaped file.
+ * Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop, PreCompact,
+ * also registered for Claude in #770), the 3 Antigravity-only events added in
+ * #776 (BeforeAgent, AfterAgent, BeforeModel), and the Claude-only FileChanged
+ * event added in #770 — safe to iterate for all runtimes; installs that don't
+ * register these events simply find no entries and skip.
+ */
+// DERIVED, not restated. The registration side (applySettingsJsonHooks) owns this
+// list; duplicating it here by hand is the FF-B518 drift class, where an event
+// added to registration and forgotten in removal leaves a settings entry pointing
+// at a deleted file. That has happened 4 times. The fallback keeps uninstall
+// working against an older installed lib that predates the export.
+const FERROX_SETTINGS_HOOK_EVENTS = Array.isArray(hooksSurface.MANAGED_SETTINGS_HOOK_EVENTS)
+  ? hooksSurface.MANAGED_SETTINGS_HOOK_EVENTS
+  : [
+    'SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool',
+    'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent',
+    'BeforeModel', 'FileChanged', 'UserPromptSubmit',
+  ];
+
+/**
+ * Strip every Ferrox-owned entry from ONE settings.json-shaped file: managed
+ * hook registrations, the Ferrox statusline, Ferrox-owned permissions, and the
+ * Ferrox MCP companion server. Everything else in the file — user hooks (even
+ * when they share an event entry with a Ferrox hook), user permissions, other
+ * MCP servers, and every unrelated top-level key such as `worktree` — is left
+ * untouched.
+ *
+ * Extracted from the uninstall body (FF-B511) so the SAME strip can run against
+ * every settings file a scope could have received Ferrox entries in, instead of
+ * only the hardcoded `settings.json`. One mechanism, called N times: a second
+ * copy of this logic would immediately start drifting from the first.
+ *
+ * Absent / empty / unparseable files are reported and skipped, never fatal.
+ * Idempotent: a second run finds nothing to strip and writes nothing.
+ *
+ * @returns {boolean} whether the file was modified (and rewritten).
+ */
+function stripFerroxFromSettingsFile(settingsPath, { runtime, targetDir, label }) {
+  if (!fs.existsSync(settingsPath)) return false;
+  let settings = readSettings(settingsPath);
+  if (settings === null) {
+    console.log(`  ${yellow}i${reset} Skipping ${label} cleanup — file could not be parsed`);
+    return false;
+  }
+  // Guard unexpected top-level shapes (a file parsed to [] or a primitive):
+  // report and continue rather than crashing the whole uninstall.
+  if (typeof settings !== 'object' || Array.isArray(settings)) {
+    console.log(`  ${yellow}i${reset} Skipping ${label} cleanup — unexpected top-level shape`);
+    return false;
+  }
+  let settingsModified = false;
+
+  // Remove Ferrox statusline if it references our hook
+  if (settings.statusLine && settings.statusLine.command &&
+    settings.statusLine.command.includes('ferrox-statusline')) {
+    delete settings.statusLine;
+    settingsModified = true;
+    console.log(`  ${green}✓${reset} Removed Ferrox statusline from ${label}`);
+  }
+
+  // Remove Ferrox hooks from settings — per-hook granularity to preserve
+  // user hooks that share an entry with a Ferrox hook (#1755 followup).
+  for (const eventName of FERROX_SETTINGS_HOOK_EVENTS) {
+    if (settings.hooks && settings.hooks[eventName]) {
+      const before = JSON.stringify(settings.hooks[eventName]);
+      settings.hooks[eventName] = settings.hooks[eventName]
+        .map(entry => {
+          if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
+          // Filter out individual Ferrox hooks, keep user hooks
+          entry.hooks = entry.hooks.filter((h) => {
+            if (!h || typeof h.command !== 'string') return true;
+            return !isManagedHookCommand(h.command, {
+              surface: 'settings-json',
+            });
+          });
+          return entry.hooks.length > 0 ? entry : null;
+        })
+        .filter(Boolean);
+      if (JSON.stringify(settings.hooks[eventName]) !== before) {
+        settingsModified = true;
+      }
+      if (settings.hooks[eventName].length === 0) {
+        delete settings.hooks[eventName];
+      }
+    }
+  }
+  if (settingsModified) {
+    console.log(`  ${green}✓${reset} Removed Ferrox hooks from ${label}`);
+  }
+
+  // Clean up empty hooks object. Pruned (not left as `hooks: {}`) because
+  // install() creates the key itself when absent, so removing an emptied one is
+  // the symmetric action, an empty hooks table carries no meaning to any host,
+  // and this matches the pre-FF-B511 behavior of the settings.json path.
+  if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+
+  // #768 — Remove Ferrox-owned Claude permissions.
+  // Applies only to Claude uninstalls. Filter only the exact Ferrox-owned entries
+  // to preserve any user-added allow/deny entries.
+  // Uses a local flag to avoid the shared `settingsModified` producing a false
+  // "Removed Ferrox permissions" message when only hooks/statusline changed.
+  if (_hostBehaviors(runtime).permissionsSchema === 'claude' && settings.permissions) {
+    let permissionsModified = false;
+    if (Array.isArray(settings.permissions.allow)) {
+      const before = settings.permissions.allow.length;
+      settings.permissions.allow = settings.permissions.allow.filter(
+        (e) => !FERROX_CLAUDE_ALLOW_PERMISSIONS.includes(e)
+      );
+      if (settings.permissions.allow.length !== before) {
+        permissionsModified = true;
+      }
+    }
+    if (Array.isArray(settings.permissions.deny)) {
+      const before = settings.permissions.deny.length;
+      settings.permissions.deny = settings.permissions.deny.filter(
+        (e) => !FERROX_CLAUDE_DENY_PERMISSIONS.includes(e)
+      );
+      if (settings.permissions.deny.length !== before) {
+        permissionsModified = true;
+      }
+    }
+    if (permissionsModified) {
+      settingsModified = true;
+      console.log(`  ${green}✓${reset} Removed Ferrox permissions from ${label}`);
+    }
+  }
+
+  // #2096 Phase B Upgrade 1 — Remove Ferrox-owned Antigravity permissions.allow
+  // rules. Symmetric to the Claude branch above: filters only the exact
+  // Ferrox-owned rule strings (regenerated from the current configDir) to
+  // preserve any user-added allow entries and all deny/ask.
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity' && settings.permissions) {
+    let antigravityPermissionsModified = false;
+    if (Array.isArray(settings.permissions.allow)) {
+      const ferroxRules = new Set(buildAntigravityAllowRules(targetDir));
+      const before = settings.permissions.allow.length;
+      settings.permissions.allow = settings.permissions.allow.filter((e) => !ferroxRules.has(e));
+      if (settings.permissions.allow.length !== before) {
+        antigravityPermissionsModified = true;
+      }
+      if (settings.permissions.allow.length === 0) {
+        delete settings.permissions.allow;
+      }
+    }
+    if (Object.keys(settings.permissions).length === 0) {
+      delete settings.permissions;
+    }
+    if (antigravityPermissionsModified) {
+      settingsModified = true;
+      console.log(`  ${green}✓${reset} Removed Ferrox permissions from ${label}`);
+    }
+  }
+
+  // #2097 UPGRADE 3 — Remove the MCP companion entry for runtimes that host MCP
+  // here (Augment), symmetric to the mcp_config.json removal for Antigravity.
+  // Only the Ferrox-owned mcpServers.ferrox key is removed — any other
+  // user-configured MCP servers are preserved.
+  if (_hostBehaviors(runtime).mcpCompanion === 'settings-json' &&
+    settings.mcpServers && typeof settings.mcpServers === 'object' &&
+    settings.mcpServers.ferrox !== undefined) {
+    delete settings.mcpServers.ferrox;
+    if (Object.keys(settings.mcpServers).length === 0) {
+      delete settings.mcpServers;
+    }
+    settingsModified = true;
+    console.log(`  ${green}✓${reset} Removed Ferrox MCP companion server from ${label}`);
+  }
+
+  if (settingsModified) {
+    writeSettings(settingsPath, settings);
+  }
+  return settingsModified;
+}
+
+/**
+ * Every settings.json-shaped filename a given runtime/scope could hold Ferrox
+ * entries in, derived from the SAME descriptor key install() reads
+ * (hostBehaviors.settingsFileByScope) so the registration target and the removal
+ * target cannot drift apart (FF-B511).
+ *
+ * `settings.json` is always included: it is the target for global installs and
+ * for every non-Claude runtime, and a local Claude install can still hold
+ * pre-#338 residue there (install()'s migration branch reads it for exactly that
+ * reason). The scope-local file is added only for the scope that actually
+ * receives it — a global uninstall must not touch a `settings.local.json` that
+ * install never wrote to.
+ */
+function ferroxSettingsFileNames(runtime, isGlobal) {
+  const names = ['settings.json'];
+  const scoped = _hostBehaviors(runtime).settingsFileByScope || null;
+  const scopedLocal = !isGlobal && scoped && typeof scoped.local === 'string' ? scoped.local : null;
+  if (scopedLocal && !names.includes(scopedLocal)) names.push(scopedLocal);
+  return names;
+}
+
+/**
  * Uninstall Ferrox from the specified directory for a specific runtime
  * Removes only Ferrox-specific files/directories, preserves user content
  * @param {boolean} isGlobal - Whether to uninstall from global or local
@@ -7522,6 +7765,12 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     try { fs.unlinkSync(path.join(targetDir, 'scripts', gen)); } catch (_) { /* best-effort */ }
   }
 
+  // Remove the fleet CLI entry points and their scripts/ closure (#3211) —
+  // before the scripts/ rmdir, so the directory can still go cleanly.
+  for (const fleetFile of FERROX_FLEET_SCRIPT_FILES) {
+    try { fs.unlinkSync(path.join(targetDir, 'scripts', fleetFile)); } catch (_) { /* best-effort */ }
+  }
+
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -7544,139 +7793,23 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     }
   }
 
-  // 6. Clean up settings.json (remove Ferrox hooks and statusline)
-  const settingsPath = path.join(targetDir, 'settings.json');
-  if (fs.existsSync(settingsPath)) {
-    let settings = readSettings(settingsPath);
-    if (settings === null) {
-      console.log(`  ${yellow}i${reset} Skipping settings.json cleanup — file could not be parsed`);
-      settings = {}; // prevent downstream crashes, but don't write back
-    }
-    let settingsModified = false;
-
-    // Remove Ferrox statusline if it references our hook
-    if (settings.statusLine && settings.statusLine.command &&
-      settings.statusLine.command.includes('ferrox-statusline')) {
-      delete settings.statusLine;
-      settingsModified = true;
-      console.log(`  ${green}✓${reset} Removed Ferrox statusline from settings`);
-    }
-
-    // Remove Ferrox hooks from settings — per-hook granularity to preserve
-    // user hooks that share an entry with a Ferrox hook (#1755 followup).
-    // Includes the 3 Qwen-only events added in #788 (SubagentStop, Stop,
-    // PreCompact, also registered for Claude in #770), the 3 Antigravity-only
-    // events added in #776 (BeforeAgent, AfterAgent, BeforeModel), and the
-    // Claude-only FileChanged event added in #770 — safe to iterate for all
-    // runtimes; installs that don't register these events simply find no
-    // entries and skip.
-    for (const eventName of ['SessionStart', 'PostToolUse', 'AfterTool', 'PreToolUse', 'BeforeTool', 'SubagentStop', 'Stop', 'PreCompact', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'FileChanged']) {
-      if (settings.hooks && settings.hooks[eventName]) {
-        const before = JSON.stringify(settings.hooks[eventName]);
-        settings.hooks[eventName] = settings.hooks[eventName]
-          .map(entry => {
-            if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
-            // Filter out individual Ferrox hooks, keep user hooks
-            entry.hooks = entry.hooks.filter((h) => {
-              if (!h || typeof h.command !== 'string') return true;
-              return !isManagedHookCommand(h.command, {
-                surface: 'settings-json',
-              });
-            });
-            return entry.hooks.length > 0 ? entry : null;
-          })
-          .filter(Boolean);
-        if (JSON.stringify(settings.hooks[eventName]) !== before) {
-          settingsModified = true;
-        }
-        if (settings.hooks[eventName].length === 0) {
-          delete settings.hooks[eventName];
-        }
-      }
-    }
-    if (settingsModified) {
-      console.log(`  ${green}✓${reset} Removed Ferrox hooks from settings`);
-    }
-
-    // Clean up empty hooks object
-    if (settings.hooks && Object.keys(settings.hooks).length === 0) {
-      delete settings.hooks;
-    }
-
-    // #768 — Remove Ferrox-owned Claude permissions from settings.json.
-    // Applies only to Claude uninstalls. Filter only the exact Ferrox-owned entries
-    // to preserve any user-added allow/deny entries.
-    // Uses a local flag to avoid the shared `settingsModified` producing a false
-    // "Removed Ferrox permissions" message when only hooks/statusline changed.
-    if (_hostBehaviors(runtime).permissionsSchema === 'claude' && settings.permissions) {
-      let permissionsModified = false;
-      if (Array.isArray(settings.permissions.allow)) {
-        const before = settings.permissions.allow.length;
-        settings.permissions.allow = settings.permissions.allow.filter(
-          (e) => !FERROX_CLAUDE_ALLOW_PERMISSIONS.includes(e)
-        );
-        if (settings.permissions.allow.length !== before) {
-          permissionsModified = true;
-        }
-      }
-      if (Array.isArray(settings.permissions.deny)) {
-        const before = settings.permissions.deny.length;
-        settings.permissions.deny = settings.permissions.deny.filter(
-          (e) => !FERROX_CLAUDE_DENY_PERMISSIONS.includes(e)
-        );
-        if (settings.permissions.deny.length !== before) {
-          permissionsModified = true;
-        }
-      }
-      if (permissionsModified) {
-        settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed Ferrox permissions from settings.json`);
-      }
-    }
-
-    // #2096 Phase B Upgrade 1 — Remove Ferrox-owned Antigravity permissions.allow
-    // rules from settings.json. Symmetric to the Claude branch above: filters
-    // only the exact Ferrox-owned rule strings (regenerated from the current
-    // configDir) to preserve any user-added allow entries and all deny/ask.
-    if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity' && settings.permissions) {
-      let antigravityPermissionsModified = false;
-      if (Array.isArray(settings.permissions.allow)) {
-        const ferroxRules = new Set(buildAntigravityAllowRules(targetDir));
-        const before = settings.permissions.allow.length;
-        settings.permissions.allow = settings.permissions.allow.filter((e) => !ferroxRules.has(e));
-        if (settings.permissions.allow.length !== before) {
-          antigravityPermissionsModified = true;
-        }
-        if (settings.permissions.allow.length === 0) {
-          delete settings.permissions.allow;
-        }
-      }
-      if (Object.keys(settings.permissions).length === 0) {
-        delete settings.permissions;
-      }
-      if (antigravityPermissionsModified) {
-        settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed Ferrox permissions from settings.json`);
-      }
-    }
-
-    // #2097 UPGRADE 3 — Remove the MCP companion entry from settings.json for
-    // runtimes that host MCP there (Augment), symmetric to the mcp_config.json
-    // removal for Antigravity below. Only the Ferrox-owned mcpServers.ferrox key is
-    // removed — any other user-configured MCP servers are preserved.
-    if (_hostBehaviors(runtime).mcpCompanion === 'settings-json' &&
-      settings.mcpServers && typeof settings.mcpServers === 'object' &&
-      settings.mcpServers.ferrox !== undefined) {
-      delete settings.mcpServers.ferrox;
-      if (Object.keys(settings.mcpServers).length === 0) {
-        delete settings.mcpServers;
-      }
-      settingsModified = true;
-      console.log(`  ${green}✓${reset} Removed Ferrox MCP companion server from settings.json`);
-    }
-
-    if (settingsModified) {
-      writeSettings(settingsPath, settings);
+  // 6. Clean up the settings file(s) — remove Ferrox hooks, statusline,
+  //    permissions and MCP companion entry.
+  //
+  //    FF-B511: this used to clean ONLY `settings.json`. A local Claude install
+  //    registers its hooks in `settings.local.json` instead (the #338 privacy
+  //    split — see the isLocalClaude branch in install()), so uninstall deleted
+  //    the hook FILES while leaving all 15 registrations behind. Every
+  //    subsequent tool call in that project then invoked a missing path. The
+  //    filename set is now derived from the same descriptor key install() reads,
+  //    so the registration target and the removal target cannot drift apart.
+  for (const settingsFileName of ferroxSettingsFileNames(runtime, isGlobal)) {
+    const settingsFilePath = path.join(targetDir, settingsFileName);
+    if (stripFerroxFromSettingsFile(settingsFilePath, {
+      runtime,
+      targetDir,
+      label: settingsFileName,
+    })) {
       removedCount++;
     }
   }
@@ -8523,6 +8656,15 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     const genInstallPath = path.join(configDir, 'scripts', gen);
     if (fs.existsSync(genInstallPath)) {
       manifest.files['scripts/' + gen] = fileHash(genInstallPath);
+    }
+  }
+
+  // Track the fleet CLI entry points and their scripts/ closure (#3211) so
+  // update/drift detection and uninstall can account for them.
+  for (const fleetFile of FERROX_FLEET_SCRIPT_FILES) {
+    const fleetInstallPath = path.join(configDir, 'scripts', fleetFile);
+    if (fs.existsSync(fleetInstallPath)) {
+      manifest.files['scripts/' + fleetFile] = fileHash(fleetInstallPath);
     }
   }
 
@@ -10243,6 +10385,30 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
 
+  // Copy the fleet CLI entry points and their in-repo scripts/ closure (#3211).
+  // ferrox-core/workflows/execute-phase.md and plan-phase.md resolve these against
+  // the install root ("${FERROX_ROOT}/scripts/<name>.cjs"), so without this copy a
+  // clean install has the workflow but not the code it invokes and fleet mode is
+  // dead on arrival. Same class of gap as #1223 and #1920, and copied
+  // unconditionally for the same reason: any runtime that installs the workflows
+  // needs the scripts those workflows shell out to.
+  {
+    const fleetDestDir = path.join(targetDir, 'scripts');
+    fs.mkdirSync(fleetDestDir, { recursive: true });
+    for (const fleetFile of FERROX_FLEET_SCRIPT_FILES) {
+      const fleetSrc = path.join(src, 'scripts', fleetFile);
+      const fleetDest = path.join(fleetDestDir, fleetFile);
+      if (!fs.existsSync(fleetSrc)) {
+        failures.push(`scripts/${fleetFile} (source missing from package — reinstall from npm)`);
+      } else {
+        fs.copyFileSync(fleetSrc, fleetDest);
+        if (!verifyFileInstalled(fleetDest, `scripts/${fleetFile}`)) {
+          failures.push(`scripts/${fleetFile}`);
+        }
+      }
+    }
+  }
+
   // Remove legacy get-shit-done-cc artifacts and stale update caches (#607).
   // cleanupLegacyFerroxCc handles both the legacy shared cache and the per-package
   // cache (formerly an inline unlinkSync here). A cleanup failure must never
@@ -10980,7 +11146,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (rawSettings === null) {
     console.log('  ' + yellow + 'i' + reset + '  Skipping settings.local.json configuration — file could not be parsed (comments or malformed JSON). Your existing settings are preserved.');
     persistActiveProfileMarker();
-    return;
+    // FF-B512: return the SAME result shape every other exit from install()
+    // returns (compare the Cline branch above). A bare `return` pushed
+    // `undefined` into installAllRuntimes' `results` array, and the very next
+    // statement there dereferences `r.runtime` — so a user whose
+    // settings.local.json was empty or malformed got a TypeError crash instead
+    // of the "skipped, existing settings preserved" outcome this branch is
+    // written to produce.
+    return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
   const settings = validateHookFields(cleanupOrphanedHooks(rawSettings));
   // #3002 CR: rewrite legacy `node .../ferrox-*.js` command strings carried over
@@ -11045,6 +11218,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const configReloadCommand = isGlobal
     ? buildHookCommand(targetDir, 'ferrox-config-reload.js', hookOpts)
     : localCmd('ferrox-config-reload.js');
+  // UserPromptSubmit offer hook. Built the same way as every other JS hook so it
+  // inherits the same null-node-path guard below; the registration site also
+  // guards on it being truthy, so a missing node path means no entry rather than
+  // a `command: null` entry the runtime's schema would reject.
+  const offerCommand = isGlobal
+    ? buildHookCommand(targetDir, 'ferrox-offer.js', hookOpts)
+    : localCmd('ferrox-offer.js');
 
   // #3002 CR: when resolveNodeRunner() returns null, every dependent JS-hook
   // command is null too. Emit one warning here so the operator sees the cause
@@ -11078,6 +11258,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     readGuardCommand,
     readInjectionScannerCommand,
     configReloadCommand,
+    offerCommand,
     hookOpts,
     localCmd,
     localShellCmd,
@@ -11324,14 +11505,38 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const program = getRuntimeLabel(runtime);
   const command = getRuntimeNewProjectCommand(runtime);
 
+  // The START HERE surface. Written once and appended to all 3 Done! banners.
+  //
+  // A default install writes 74 commands, of which an audit found 11 usable by a
+  // beginner and 40 expert or internal, and the word "phase" appears in 25
+  // descriptions while being defined nowhere on the surface. The payload is
+  // deliberately NOT reduced (a customer following any doc that names one of the
+  // other commands would hit command-not-found); the DOOR is reduced instead.
+  //
+  // It names exactly 1 command to type. Every extra command offered at this moment
+  // is a decision handed to the person with the least context they will ever have,
+  // and the one command it names ends by offering to build the whole thing, so the
+  // second step does not have to be typed or remembered either.
+  const startHere = `
+  ${cyan}Start here.${reset} One command:
+
+      ${cyan}${command}${reset}
+
+  Describe what you want to build. It asks a few questions, writes a plan, then
+  offers to build every step for you without stopping. Say yes and walk away.
+
+  ${cyan}Anything else:${reset} ${cyan}/ferrox-help${reset} lists the 9 commands that carry a whole project.
+  Want only those 9 installed next time: ${cyan}--profile=beginner${reset}
+`;
+
   // Claude Code global installs use the skills/ format (CC 2.1.88+).
   // Restart is required for CC to pick up newly-installed skills, and the
   // slash-menu surface depends on CC version — so the instruction needs to
   // cover both invocation paths to avoid #2957-style "no commands appear".
   if (_hostBehaviors(runtime).skillsGlobalOnboarding && isGlobal) {
     console.log(`
-  ${green}Done!${reset} Restart ${program}, then in any directory either type ${cyan}${command}${reset} or ask Claude to run the ${cyan}ferrox-new-project${reset} skill.
-
+  ${green}Done!${reset} Restart ${program} first, so it picks up the new skills.
+${startHere}
   ${cyan}Join the community:${reset} https://discord.gg/hXwAcR4MyU
 `);
     return;
@@ -11340,16 +11545,16 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (_hostBehaviors(runtime).doneBannerStyle === 'kimi-agent-file') {
     const agentPath = configDir ? path.join(configDir, 'agents', 'ferrox.yaml') : 'agents/ferrox.yaml';
     console.log(`
-  ${green}Done!${reset} Start ${program} with ${cyan}kimi --agent-file ${agentPath}${reset}, then run ${cyan}${command}${reset}.
-
+  ${green}Done!${reset} Start ${program} with ${cyan}kimi --agent-file ${agentPath}${reset}.
+${startHere}
   ${cyan}Join the community:${reset} https://discord.gg/hXwAcR4MyU
 `);
     return;
   }
 
   console.log(`
-  ${green}Done!${reset} Open a blank directory in ${program} and run ${cyan}${command}${reset}.
-
+  ${green}Done!${reset} Open a blank directory in ${program}.
+${startHere}
   ${cyan}Join the community:${reset} https://discord.gg/hXwAcR4MyU
 `);
 }
@@ -11358,7 +11563,15 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
  * Handle statusline configuration with optional prompt
  */
 function handleStatusline(settings, isInteractive, callback) {
-  const hasExisting = settings.statusLine != null;
+  // FF-B512: `settings` is null when install() bailed out of settings
+  // configuration because the file could not be parsed. Every other consumer of
+  // that result shape in the finalize path already guards on a nullish settings
+  // (see the `shouldInstallBanner && settings`, `mcpCompanion && settings` and
+  // `settingsPath && settings` gates in finishInstall, plus the null guard
+  // inside mergeClaudePermissions); this was the single omission, and it turned
+  // "existing settings preserved" into a TypeError crash. No settings object to
+  // inspect means no existing statusline to preserve.
+  const hasExisting = settings != null && settings.statusLine != null;
 
   if (!hasExisting) {
     callback(true);

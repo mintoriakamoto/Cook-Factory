@@ -1,6 +1,6 @@
 ---
 name: ferrox-audit-uat
-description: "Cross-phase audit of all outstanding UAT and verification items"
+description: "You want every outstanding verification item across all steps gathered in one place"
 allowed-tools:
   - Read
   - Glob

@@ -20,19 +20,12 @@ progress:
 
 # Project State
 
-## Project Reference
-
-See: .planning/PROJECT.md (updated [date])
-
-**Core value:** [One-liner from PROJECT.md Core Value section]
-**Current focus:** [Current phase name]
-
 ## Current Position
 
-Phase: [X] of [Y] ([Phase name])
-Plan: [A] of [B] in current phase
-Status: [Ready to plan / Planning / Ready to execute / In progress / Phase complete]
-Last activity: [YYYY-MM-DD] — [What happened]
+Phase: 1 (phase-name)
+Plan: 1 of 1 in current phase
+Status: Ready to plan
+Last activity: 2026-01-01
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -55,141 +48,76 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 
-## Accumulated Context
-
-### Decisions
-
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
-
-- [Phase X]: [Decision summary]
-- [Phase Y]: [Decision summary]
-
-### Pending Todos
-
-[From .planning/todos/pending/ — ideas captured during sessions]
-
-None yet.
-
-### Blockers/Concerns
-
-[Issues that affect future work]
-
-None yet.
-
-## Deferred Items
-
-Items acknowledged and carried forward from previous milestone close:
-
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| *(none)* | | | |
-
-## Session Continuity
-
-Last session: [YYYY-MM-DD HH:MM]
-Stopped at: [Description of last completed action]
-Resume file: [Path to .continue-here*.md if exists, otherwise "None"]
 ```
 
 <purpose>
 
 STATE.md is the project's short-term memory spanning all phases and sessions.
 
-**Problem it solves:** Information is captured in summaries, issues, and decisions but not systematically consumed. Sessions start without context.
+**Problem it solves:** information is captured in summaries, issues, and decisions but not systematically consumed. Sessions start without context.
 
-**Solution:** A single, small file that's:
-- Read first in every workflow
-- Updated after every significant action
-- Contains digest of accumulated context
-- Enables instant session restoration
+**Solution:** a single, small file that is read first in every workflow, updated after every significant action, and carries machine-written fields only.
+
+**Phase 14.1 D3d, the rule that governs this template.** Every free-prose section was DELETED. STATE.md now carries frontmatter plus machine-written field sections, and nothing else. A stale claim needs somewhere to live; this file gives it nowhere. The closed set is exactly 3 level 2 sections and no heading of level 3 anywhere:
+
+- `## Current Position`
+- `## Performance Metrics`
+- `## Operator Next Steps`, created on demand by the milestone-close writer
+
+Anything else fails `checkStateStructure` in `src/governance-manifest.cts`. Do not add a section here without adding it there first, and do not add one there without a `src/` writer to cite.
 
 </purpose>
 
 <lifecycle>
 
-**Creation:** After ROADMAP.md is created (during init)
-- Reference PROJECT.md (read it for current context)
-- Initialize empty accumulated context sections
-- Set position to "Phase 1 ready to plan"
+**Creation:** after ROADMAP.md is created (during init). Set position to phase 1, ready to plan.
 
-**Reading:** First step of every workflow
-- progress: Present status to user
-- plan: Inform planning decisions
-- execute: Know current position
-- transition: Know what's complete
+**Reading:** first step of every workflow.
+- progress: present status to the user
+- plan: inform planning decisions
+- execute: know current position
+- transition: know what is complete
 
-**Writing:** After every significant action
-- execute: After SUMMARY.md created
-  - Update position (phase, plan, status)
-  - Note new decisions (detail in PROJECT.md)
-  - Add blockers/concerns
-- transition: After phase marked complete
-  - Update progress bar
-  - Clear resolved blockers
-  - Refresh Project Reference date
+**Writing:** after every significant action.
+- execute: after SUMMARY.md is created, update position (phase, plan, status)
+- transition: after a phase is marked complete, update the progress bar
+
+**Where the deleted content went.** Decisions, blockers and roadmap evolution entries now live in machine-owned sections of the single `lifecycle: active` milestone artifact under `.planning`, written by `state add-decision`, `state add-blocker`, `state resolve-blocker` and `state add-roadmap-evolution`. Deferred items live in `.planning/BACKLOG.md`. The resume pointer is derived from the active milestone artifact and is no longer stored: `state record-session` accepts `--resume-file` and ignores it with a deprecation notice. The rebuild audit trail is an append-only sidecar, `state-rebuild-log.jsonl`, deliberately outside the file it audits.
 
 </lifecycle>
 
 <sections>
 
-### Project Reference
-Points to PROJECT.md for full context. Includes:
-- Core value (the ONE thing that matters)
-- Current focus (which phase)
-- Last update date (triggers re-read if stale)
-
-Claude reads PROJECT.md directly for requirements, constraints, and decisions.
-
 ### Current Position
-Where we are right now:
-- Phase X of Y — which phase
-- Plan A of B — which plan within phase
-- Status — current state
-- Last activity — what happened most recently
-- Progress bar — visual indicator of overall completion
+Where the project is right now, as machine-written fields and no prose:
+- Phase, the phase number with an optional parenthesised name
+- Plan, which plan within the phase
+- Status, the current state
+- Last activity, an ISO date with an optional writer-supplied narrative literal
+- Progress, a bar and a percentage
 
-Progress calculation: (completed plans) / (total plans across all phases) × 100%
+Every one of those values is checked against a closed set of shapes derived from the SDK writers, so a sentence cannot be typed into a field.
 
 ### Performance Metrics
-Track velocity to understand execution patterns:
+Velocity, so execution patterns are legible:
 - Total plans completed
 - Average duration per plan
 - Per-phase breakdown
-- Recent trend (improving/stable/degrading)
+- Recent trend
 
-Updated after each plan completion.
+Updated after each plan completion. Kept rather than deleted because it is a numeric table that carries no version and no claim, and a table of durations cannot go stale the way a sentence can.
 
-### Accumulated Context
-
-**Decisions:** Reference to PROJECT.md Key Decisions table, plus recent decisions summary for quick access. Full decision log lives in PROJECT.md.
-
-**Pending Todos:** Ideas captured via /ferrox-capture
-- Count of pending todos
-- Reference to .planning/todos/pending/
-- Brief list if few, count if many (e.g., "5 pending todos — see /ferrox:capture --list")
-
-**Blockers/Concerns:** From "Next Phase Readiness" sections
-- Issues that affect future work
-- Prefix with originating phase
-- Cleared when addressed
-
-### Session Continuity
-Enables instant resumption:
-- When was last session
-- What was last completed
-- Is there a .continue-here file to resume from
+### Operator Next Steps
+Written only by the milestone-close writer, and only ever the single line that names the command to start the next milestone.
 
 </sections>
 
 <size_constraint>
 
-Keep STATE.md under 100 lines.
+Keep STATE.md under 60 lines.
 
-It's a DIGEST, not an archive. If accumulated context grows too large:
-- Keep only 3-5 recent decisions in summary (full log in PROJECT.md)
-- Keep only active blockers, remove resolved ones
+It is a DIGEST, not an archive. There is no accumulated-context section to grow, so the only surface that grows is the metrics table, and `state prune` archives its old rows to STATE-ARCHIVE.md.
 
-The goal is "read once, know where we are" — if it's too long, that fails.
+The goal is "read once, know where we are". If it is too long, that fails.
 
 </size_constraint>

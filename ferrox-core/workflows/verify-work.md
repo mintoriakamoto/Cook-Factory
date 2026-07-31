@@ -683,6 +683,8 @@ After transition completes, present next-step options to the user:
 ```
 All tests passed. Phase {phase} marked complete.
 
+- `/ferrox:ship {phase}` — send this work: opens a PR from the completed phase
+- `/ferrox:progress --next --auto` — keep building the rest without stopping to ask
 - `/ferrox:plan-phase {next}` — Plan next phase
 - `/ferrox:execute-phase {next}` — Execute next phase
 - `/ferrox:secure-phase {phase}` — security review

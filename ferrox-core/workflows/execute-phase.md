@@ -68,8 +68,163 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--gaps-only` keeps its current meaning
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
+- Optional `--fleet` → `BACKEND_FLAG=--fleet` (execute this phase as a fleet of worker processes)
+- Optional `--inline` → `BACKEND_FLAG=--inline` (execute this phase inline in this session)
+
+`--fleet` and `--inline` together is a REFUSAL, not last token wins. Do not pick one. The
+`resolve_execution_backend` step below refuses the run for you and names why.
+
+**The flag is the machine surface. The surface people use is a sentence.** Set
+`BACKEND_INTENT` to the text the user actually wrote, so the switch can read a backend
+out of it:
+
+- If the user expressed the backend in the arguments (`/ferrox-execute-phase 21 use the ferrox fleet`), `BACKEND_INTENT="$ARGUMENTS"`.
+- If the user expressed it in the surrounding request instead ("build phase 21 with the ferrox fleet"), set `BACKEND_INTENT` to that sentence VERBATIM. Do not paraphrase it, do not summarise it, and do not decide the backend yourself. Hand the words to the switch and let it answer.
+- If the user said nothing about a backend, `BACKEND_INTENT="$ARGUMENTS"` is still correct. A sentence with no backend request in it resolves nothing, which is the ordinary case.
+
+**Never infer the backend in your own head.** The matcher is deliberately narrow, it refuses
+contradictions, and it echoes what it understood. An inference you make silently has none of
+those 3 properties.
 
 If `--wave` is absent, preserve the current behavior of executing all incomplete waves in the phase.
+</step>
+
+<step name="resolve_execution_backend" priority="first">
+**Every run names its execution backend out loud before it executes anything.**
+
+Run the switch. It is the only place a backend is chosen, and it prints the reason on
+every path:
+
+```bash
+# BACKEND_FLAG is "--fleet", "--inline", or empty (from parse_args).
+# BACKEND_INTENT is the user's own words (from parse_args).
+# Canonical resolver, see ferrox-core/references/ferrox-script-resolver.md.
+# RUNTIME_DIR first, then the project tree, then the install root per runtime.
+ferrox_script() { _n="$1"; _p="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; for _c in "${_p}/scripts/${_n}" "${_p}/.claude/scripts/${_n}" "${_p}/.codex/scripts/${_n}" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/${_n}" "${HERMES_HOME:-$HOME/.hermes}/scripts/${_n}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/scripts/${_n}" "${CODEX_HOME:-$HOME/.codex}/scripts/${_n}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/scripts/${_n}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/scripts/${_n}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/scripts/${_n}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/scripts/${_n}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/scripts/${_n}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/scripts/${_n}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/scripts/${_n}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/scripts/${_n}" "${GROK_AGENTS_HOME:-$HOME/.agents}/scripts/${_n}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/scripts/${_n}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/scripts/${_n}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/scripts/${_n}"; do [ -f "$_c" ] && { printf '%s\n' "$_c"; return 0; }; done; printf '%s\n' "${_p}/scripts/${_n}"; return 1; }
+SWITCH=$(ferrox_script execution-backend-switch.cjs)
+VERDICT=$(ferrox_script parallelism-verdict.cjs)
+
+# Precedence level 4, live rather than inert (FF-B410). A phase with no readable
+# work graph leaves this empty and the switch names that as the reason it degraded.
+RECOMMENDATION=$(node "$VERDICT" "${PHASE_ARG}" --pick 2>/dev/null || true)
+
+BACKEND_JSON=$(node "$SWITCH" ${BACKEND_FLAG:-} \
+  ${BACKEND_INTENT:+--intent "$BACKEND_INTENT"} \
+  ${RECOMMENDATION:+--recommendation "$RECOMMENDATION"} --json)
+BACKEND_EXIT=$?
+```
+
+**Obey the exit code.**
+
+- Exit `2` is a REFUSAL. **STOP.** Execute nothing. Report the stderr line to the user
+  verbatim. This happens when `--fleet` was asked for explicitly and cannot be honored,
+  when the fleet was asked for IN WORDS and cannot be honored, when `--fleet` and
+  `--inline` were both given, or when one sentence asked for both backends.
+- Exit `0` means a backend was resolved. Read `executed_backend` from the JSON and
+  execute that way. Read `reason` and `precedence` and **state both to the user in one
+  line before the first wave spawns.**
+
+Precedence, highest first, resolved inside the switch:
+
+1. the explicit flag on this invocation
+2. the backend the user asked for IN WORDS, read out of `BACKEND_INTENT`
+3. `claude_orchestration.execution_backend` in `.planning/config.json`
+4. the parallelism verdict's recommendation
+5. inline, naming why level 4 was not usable
+
+**Echo every inference before acting.** When `precedence` is `language`, the switch emits a
+notice reading `understood "<phrase>" as backend <backend>. Say --inline or "run it inline"
+to override.` **Repeat that line to the user before the first wave spawns.** A silent
+inference is strictly worse than a flag, because the reader cannot see that it was made.
+
+**When a flag and the words disagree, the flag wins and the switch says so.** Repeat that
+notice too. A person who typed both should be told which one this run obeyed.
+
+**The asymmetry is deliberate.** An explicit `--fleet` that cannot be honored refuses,
+because a person made a decision and running inline behind their back would be lying to
+them. **A fleet asked for in words refuses exactly the same way**, because that person
+decided just as much. A CONFIG default that cannot be honored falls back to inline and says
+so loudly, because a configuration value must never break an unattended build. Config is
+the only level that falls back.
+
+**When `executed_backend` is `inline` while `resolved_backend` is `fleet`,** the switch
+reports `fleet backend resolved, no dispatch manifest consumer is installed in this tree
+(scripts/fleet-dispatch.cjs is absent or declares a different manifest kind), executing
+inline`. Repeat that line to the user and execute inline.
+**Never report a fleet run that did not happen.**
+
+**Resolution is not execution.** A resolved fleet has spawned nothing. The switch says
+`dispatching through scripts/fleet-dispatch.cjs`, and the next step is what actually
+dispatches. Do not tell the user a fleet ran until that step reports it.
+</step>
+
+<step name="dispatch_the_fleet">
+**Run this step ONLY when `executed_backend` is `fleet`.** Skip it entirely on every
+inline path.
+
+The fleet does not dispatch from this prompt. It dispatches from a MANIFEST, emitted by
+the same orchestration capability the inline path uses, and consumed by
+`scripts/fleet-dispatch.cjs`, which validates it, refuses overlapping write lanes, and
+drives the shipped fleet driver.
+
+```bash
+# Canonical resolver, see ferrox-core/references/ferrox-script-resolver.md.
+# RUNTIME_DIR first, then the project tree, then the install root per runtime.
+ferrox_script() { _n="$1"; _p="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; for _c in "${_p}/scripts/${_n}" "${_p}/.claude/scripts/${_n}" "${_p}/.codex/scripts/${_n}" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/${_n}" "${HERMES_HOME:-$HOME/.hermes}/scripts/${_n}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/scripts/${_n}" "${CODEX_HOME:-$HOME/.codex}/scripts/${_n}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/scripts/${_n}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/scripts/${_n}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/scripts/${_n}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/scripts/${_n}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/scripts/${_n}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/scripts/${_n}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/scripts/${_n}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/scripts/${_n}" "${GROK_AGENTS_HOME:-$HOME/.agents}/scripts/${_n}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/scripts/${_n}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/scripts/${_n}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/scripts/${_n}"; do [ -f "$_c" ] && { printf '%s\n' "$_c"; return 0; }; done; printf '%s\n' "${_p}/scripts/${_n}"; return 1; }
+CONSUMER=$(ferrox_script fleet-dispatch.cjs)
+
+# 1. The waves file: the SAME wave/plan model the inline path dispatches, with each
+#    plan's `files_modified` declared accurately. An undeclared write lane cannot be
+#    checked for overlap, and the consumer refuses a plan that omits the list.
+#    Shape: {"phaseDir": "...", "runId": "...", "waves":[{"id":"w1","plans":[
+#             {"id":"21-01","brief":"...","files_modified":["src/a.cts"]}]}]}
+# 2. The manifest, emitted rather than hand written:
+ferrox_run claude-orchestration emit-workflow \
+  --waves "$WAVES_JSON" --run-id "$RUN_ID" \
+  --phase-dir "$PHASE_DIR" --backend fleet --raw > "$MANIFEST_JSON"
+
+# 3. Read it back BEFORE dispatching anything. --plan-only validates the manifest,
+#    reconciles it against the phase work graph and dispatches NOTHING.
+node "$CONSUMER" --manifest "$MANIFEST_JSON" --plan-only
+
+# 4. Dispatch.
+node "$CONSUMER" --manifest "$MANIFEST_JSON" --json
+DISPATCH_EXIT=$?
+```
+
+**Obey the exit code, and report the OUTCOME, never your own summary of it.**
+
+- Exit `2` is a REFUSAL. Nothing was dispatched, no card was minted and no worktree was
+  cut. Report the stderr line verbatim. The common refusals are a manifest of the wrong
+  kind, a manifest whose nodes are not the phase work graph's nodes, and **overlapping
+  write lanes**, which is 2 plans in 1 stage declaring the same file. Never work around a
+  lane refusal by dispatching anyway.
+- Exit `0` means `verdict.outcome` is `dispatched_fleet`, the graph drained and nothing
+  parked.
+- Exit `1` means dispatch was attempted and this is NOT a clean fleet run. Read
+  `verdict.outcome` and say which one it is:
+  - `preflight_refused`: the fleet preconditions refused, **no worker was spawned**.
+  - `dispatched_nothing`: dispatch was allowed and 0 workers were observed.
+  - `dispatched_single_worker`: **1 worker is not a fleet.** Say so in those words.
+  - `dispatched_sequentially`: workers ran, and **never 2 at the same time.** That is a
+    queue. Report the spawn total AND the width, because the total on its own reads like
+    a fleet and the width is what refutes it.
+  - `dispatched_fleet` with a non zero exit: workers ran, and the run stopped on a bound
+    or drained with parked nodes. Name the parked nodes.
+  - `driver_failed`: the driver failed, and the reason travels with the verdict.
+
+**Report all 3 counters to the user: `verdict.counters.observed_spawns`,
+`verdict.counters.distinct_nodes` and `verdict.counters.demonstrated_width`.** They are
+folded out of the run log the driver wrote, and they are the only evidence that a fleet
+ran. The width is the one that distinguishes a fan out from a queue, so it is never
+dropped for brevity.
+**Never describe a run as a fleet run when `verdict.fleet` is `false`**, whatever the
+resolved backend said.
+
+**`proof_harness` is not null?** Then the preflight, the control plane or the worker seam
+were supplied by a test harness rather than by the shipped fleet. Say so in the same
+breath as the numbers. Those counters describe the dispatch mechanism, not a production
+run, and quoting them without the harness is how a rehearsal becomes a published figure.
 </step>
 
 <step name="initialize" priority="first">
@@ -569,6 +724,25 @@ Report:
 | 1 | 01-01, 01-02 | {from plan objectives, 3-8 words} |
 | 2 | 01-03 | ... |
 ```
+
+**Then render the glass, so the user SEES the shape of what is about to run:**
+
+```bash
+# Canonical resolver, see ferrox-core/references/ferrox-script-resolver.md.
+# RUNTIME_DIR first, then the project tree, then the install root per runtime.
+ferrox_script() { _n="$1"; _p="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; for _c in "${_p}/scripts/${_n}" "${_p}/.claude/scripts/${_n}" "${_p}/.codex/scripts/${_n}" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/${_n}" "${HERMES_HOME:-$HOME/.hermes}/scripts/${_n}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/scripts/${_n}" "${CODEX_HOME:-$HOME/.codex}/scripts/${_n}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/scripts/${_n}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/scripts/${_n}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/scripts/${_n}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/scripts/${_n}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/scripts/${_n}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/scripts/${_n}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/scripts/${_n}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/scripts/${_n}" "${GROK_AGENTS_HOME:-$HOME/.agents}/scripts/${_n}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/scripts/${_n}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/scripts/${_n}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/scripts/${_n}"; do [ -f "$_c" ] && { printf '%s\n' "$_c"; return 0; }; done; printf '%s\n' "${_p}/scripts/${_n}"; return 1; }
+GLASS=$(ferrox_script fleet-glass.cjs)
+node "$GLASS" graph "${PHASE_NUMBER}" 2>/dev/null || true
+```
+
+Print its output verbatim. It is READ ONLY: it takes no lease, writes no file, and
+changes nothing. It names the waves, the nodes, how many files are in each node's write
+lane, the declared edges, and which of those edges the scan could not reach. **An edge
+reported as unproven is the instrument reporting its own reach, never a defect count.**
+Say that when you show it, rather than letting an audience read `unproven` as `broken`.
+
+If the command fails or the phase has no readable graph, say so in 1 line and continue.
+The glass is a view, and a view that cannot render is not a reason to refuse a run.
 </step>
 
 <step name="cross_ai_delegation">
@@ -699,6 +873,17 @@ increases monotonically across waves. `{status}` is `complete` (success),
 @~/.claude/ferrox-core/references/execute-phase-wave-guard.md
 
 @~/.claude/ferrox-core/references/execute-phase-context-guard.md
+
+**Wave boundary glass (BEFORE the overlap check below):**
+
+```bash
+node "$GLASS" graph "${PHASE_NUMBER}" 2>/dev/null || true
+```
+
+Render it again at each wave boundary and print the output verbatim. The same read only
+view, re-read: a node that landed since the last wave changes what the graph says, and a
+boundary is exactly where a person wants to see the remaining shape rather than recall it.
+If it fails, say so in 1 line and continue.
 
 1. **Intra-wave files_modified overlap check (BEFORE spawning):**
 
@@ -2244,6 +2429,8 @@ If CONTEXT.md does **not** exist for the next phase, present:
 /ferrox:discuss-phase {next} ${FERROX_WS} — start here: discuss next phase before planning  ← recommended
 /ferrox:plan-phase {next} ${FERROX_WS} — plan next phase (skip discuss)
 /ferrox:execute-phase {next} ${FERROX_WS} — execute next phase (skip discuss and plan)
+/ferrox:progress --next --auto ${FERROX_WS} — build all the remaining phases without stopping
+/ferrox:ship {X} ${FERROX_WS} — send this work: opens a PR from the completed phase
 ```
 
 If CONTEXT.md **exists** for the next phase, present:

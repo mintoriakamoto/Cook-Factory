@@ -48,6 +48,7 @@ const { stateExtractField } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
 const { comparePhaseNum, extractPhaseToken, normalizePhaseName, phaseTokenMatches } = phaseId;
+import { formatFerroxSlash, resolveRuntime } from './runtime-slash.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -404,64 +405,103 @@ export function classify(s: SmartEntrySignals): Situation {
 
 // ─── Action sets ──────────────────────────────────────────────────────────────
 
+/**
+ * Every `command` below is authored in the colon form and PROJECTED through
+ * `formatFerroxSlash` on the way out.
+ *
+ * The colon form is not routable. #2808 unified every skill install to the hyphen
+ * form and `runtime-slash.cts` states in its own header that "the colon form is
+ * never emitted", yet this file emitted it for all 11 situations and referenced
+ * that helper 0 times. Every action in this menu was a command the user could
+ * select and the runtime could not run.
+ *
+ * The projection sits in these 2 helpers rather than at the 44 call sites because
+ * a per-site rewrite is a rewrite that is missing from whichever case is added
+ * next, and this file has grown a case per situation. `formatFerroxSlash` is
+ * idempotent and accepts colon-form input by design, so the literals below stay
+ * readable, the argument tail (`--next --auto`) round-trips untouched, and codex
+ * gets its `$ferrox-` shell-var form for free instead of a second hardcoded list.
+ */
 const action = (
   id: string,
   label: string,
   command: string,
   recommended = false,
-): SmartEntryAction => ({ id, label, command, recommended });
+  runtime?: string,
+): SmartEntryAction => ({
+  id,
+  label,
+  // String() because formatFerroxSlash is typed to pass non-string input straight
+  // through (its own idempotence guard). Matches commands.cts and ferrox2-import.cts.
+  command: String(formatFerroxSlash(command, runtime)),
+  recommended,
+});
 
-function rec(id: string, label: string, command: string): SmartEntryAction {
-  return action(id, label, command, true);
+function rec(id: string, label: string, command: string, runtime?: string): SmartEntryAction {
+  return action(id, label, command, true, runtime);
 }
 
-/** Per-situation ordered action list; recommended action first. */
-export function actionsFor(situation: Situation, s: SmartEntrySignals): SmartEntryAction[] {
+/**
+ * Per-situation ordered action list; recommended action first.
+ *
+ * `runtime` selects the command shape. It is optional so existing callers and
+ * tests keep working, and it defaults inside `formatFerroxSlash` to claude, which
+ * is the hyphen form. An absent runtime therefore still produces a ROUTABLE
+ * command; it just cannot produce codex's shell-var form.
+ */
+export function actionsFor(
+  situation: Situation,
+  s: SmartEntrySignals,
+  runtime?: string,
+): SmartEntryAction[] {
+  const rec_ = (id: string, label: string, command: string) => rec(id, label, command, runtime);
+  const action_ = (id: string, label: string, command: string) =>
+    action(id, label, command, false, runtime);
   const phaseN = s.current_phase ?? '';
   const execLabel = phaseN === '' ? 'Continue executing' : `Continue executing phase ${phaseN}`;
   switch (situation) {
     case 'no-project':
       return [
-        rec('new-project', 'Start a new project', '/ferrox:new-project'),
-        action('map-codebase', 'Map an existing codebase', '/ferrox:map-codebase'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('help', 'Show help', '/ferrox:help'),
+        rec_('new-project', 'Start a new project', '/ferrox:new-project'),
+        action_('map-codebase', 'Map an existing codebase', '/ferrox:map-codebase'),
+        action_('quick', 'Quick task', '/ferrox:quick'),
+        action_('help', 'Show help', '/ferrox:help'),
       ];
     case 'paused':
       return [
-        rec('resume-work', 'Resume work', '/ferrox:resume-work'),
-        action('progress', 'Show progress', '/ferrox:progress'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('help', 'Show help', '/ferrox:help'),
+        rec_('resume-work', 'Resume work', '/ferrox:resume-work'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
+        action_('quick', 'Quick task', '/ferrox:quick'),
+        action_('help', 'Show help', '/ferrox:help'),
       ];
     case 'blocked':
       return [
-        rec('debug', 'Debug the blocker', '/ferrox:debug'),
-        action('verify-work', 'Verify current work', '/ferrox:verify-work'),
-        action('capture', 'Capture a note', '/ferrox:capture'),
-        action('progress', 'Show progress', '/ferrox:progress'),
+        rec_('debug', 'Debug the blocker', '/ferrox:debug'),
+        action_('verify-work', 'Verify current work', '/ferrox:verify-work'),
+        action_('capture', 'Capture a note', '/ferrox:capture'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
       ];
     case 'verify-failed':
       return [
-        rec('verify-work', 'Re-verify work', '/ferrox:verify-work'),
-        action('debug', 'Debug the failure', '/ferrox:debug'),
-        action('code-review', 'Review recent work', '/ferrox:code-review'),
-        action('progress', 'Show progress', '/ferrox:progress'),
+        rec_('verify-work', 'Re-verify work', '/ferrox:verify-work'),
+        action_('debug', 'Debug the failure', '/ferrox:debug'),
+        action_('code-review', 'Review recent work', '/ferrox:code-review'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
       ];
     case 'needs-first-phase':
       return [
-        rec('discuss-phase', 'Discuss the first phase', '/ferrox:discuss-phase'),
-        action('plan-phase', 'Plan phase 1', '/ferrox:plan-phase'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('progress', 'Show progress', '/ferrox:progress'),
+        rec_('discuss-phase', 'Discuss the first phase', '/ferrox:discuss-phase'),
+        action_('plan-phase', 'Plan phase 1', '/ferrox:plan-phase'),
+        action_('quick', 'Quick task', '/ferrox:quick'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
       ];
     case 'planning':
       // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('progress-next', `Advance to the next step (plan phase ${phaseN || 1})`, '/ferrox:progress --next'),
-        action('plan-phase', `Plan phase ${phaseN || 1}`, '/ferrox:plan-phase'),
-        action('discuss-phase', 'Discuss before planning', '/ferrox:discuss-phase'),
-        action('progress', 'Show progress', '/ferrox:progress'),
+        rec_('progress-next', `Advance to the next step (plan phase ${phaseN || 1})`, '/ferrox:progress --next'),
+        action_('plan-phase', `Plan phase ${phaseN || 1}`, '/ferrox:plan-phase'),
+        action_('discuss-phase', 'Discuss before planning', '/ferrox:discuss-phase'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
       ];
     case 'executing':
       // In-project forward motion delegates to the single gated engine
@@ -469,41 +509,60 @@ export function actionsFor(situation: Situation, s: SmartEntrySignals): SmartEnt
       // -phase invariant + Gates 1-3 must not be bypassed by dispatching a raw
       // /ferrox:execute-phase here — that divergence is why the old flat /ferrox-next
       // was removed (#3054). Direct execute stays as an explicit secondary choice.
+      //
+      // `resume-work` is offered here DELIBERATELY, even though `executing` is not
+      // the paused situation. Someone who closed a terminal mid-phase comes back to
+      // `executing`, because the only signal that says otherwise is `paused_at`, and
+      // nothing writes it unless they ran /ferrox-pause-work on the way out. They
+      // were previously offered 4 ways forward and no way to pick up what they left,
+      // which is the one thing they came back to do.
+      //
+      // The classifier is deliberately NOT changed to call this state paused.
+      // `stopped_at` looks like the missing signal and is not: transition.md,
+      // execute-plan.md, discuss-phase.md, ui-phase.md, resume-project.md,
+      // forensics.md and milestone-summary.md all write it on the ordinary happy
+      // path, so keying `paused` on it would classify almost every active project as
+      // paused, and `paused` is tested before blocked, verify-failed and complete.
+      // `.continue-here.md` fails for the mirror reason: nothing in the codebase ever
+      // deletes it, so 1 pause would mark a project paused permanently. Offering the
+      // command costs nothing and cannot misclassify. See FF-B519.
       return [
-        rec('progress-next', 'Advance to the next step', '/ferrox:progress --next'),
-        action('execute-phase', execLabel, '/ferrox:execute-phase'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('code-review', 'Review recent work', '/ferrox:code-review'),
+        rec_('progress-next', 'Advance to the next step', '/ferrox:progress --next'),
+        action_('resume-work', 'Pick up where I left off', '/ferrox:resume-work'),
+        action_('execute-phase', execLabel, '/ferrox:execute-phase'),
+        action_('code-review', 'Review recent work', '/ferrox:code-review'),
       ];
     case 'verify-pending':
       // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('progress-next', 'Advance to the next step (verify)', '/ferrox:progress --next'),
-        action('verify-work', 'Verify work', '/ferrox:verify-work'),
-        action('code-review', 'Review recent work', '/ferrox:code-review'),
-        action('ship', 'Ship completed work', '/ferrox:ship'),
+        rec_('progress-next', 'Advance to the next step (verify)', '/ferrox:progress --next'),
+        action_('verify-work', 'Verify work', '/ferrox:verify-work'),
+        action_('code-review', 'Review recent work', '/ferrox:code-review'),
+        action_('ship', 'Ship completed work', '/ferrox:ship'),
       ];
     case 'idle-stranded':
       return [
-        rec('ship', 'Ship committed work', '/ferrox:ship'),
-        action('complete-milestone', 'Complete the milestone', '/ferrox:complete-milestone'),
-        action('progress', 'Show progress', '/ferrox:progress'),
-        action('capture', 'Capture a note', '/ferrox:capture'),
+        rec_('ship', 'Ship committed work', '/ferrox:ship'),
+        action_('complete-milestone', 'Complete the milestone', '/ferrox:complete-milestone'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
+        action_('capture', 'Capture a note', '/ferrox:capture'),
       ];
     case 'complete':
       return [
-        rec('new-milestone', 'Start a new milestone', '/ferrox:new-milestone'),
-        action('extract-learnings', 'Extract learnings', '/ferrox:extract-learnings'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('progress', 'Show progress', '/ferrox:progress'),
+        rec_('new-milestone', 'Start a new milestone', '/ferrox:new-milestone'),
+        action_('extract-learnings', 'Extract learnings', '/ferrox:extract-learnings'),
+        action_('quick', 'Quick task', '/ferrox:quick'),
+        action_('progress', 'Show progress', '/ferrox:progress'),
       ];
     case 'unknown':
     default:
+      // `unknown` is the state a returning user most often lands in, so it carries
+      // the recovery door for the same reason `executing` does. See FF-B519.
       return [
-        rec('progress', 'Show progress', '/ferrox:progress'),
-        action('progress-next', 'Advance to the next step', '/ferrox:progress --next'),
-        action('quick', 'Quick task', '/ferrox:quick'),
-        action('help', 'Show help', '/ferrox:help'),
+        rec_('progress', 'Show progress', '/ferrox:progress'),
+        action_('progress-next', 'Advance to the next step', '/ferrox:progress --next'),
+        action_('resume-work', 'Pick up where I left off', '/ferrox:resume-work'),
+        action_('help', 'Show help', '/ferrox:help'),
       ];
   }
 }
@@ -560,7 +619,10 @@ function progressLine(tail: string, s: SmartEntrySignals): string {
 export function classifyProject(cwd: string, now: () => number = Date.now): SmartEntryResult {
   const signals = detectSignals(cwd, now);
   const situation = classify(signals);
-  const actions = actionsFor(situation, signals);
+  // Resolve the runtime HERE, where a cwd exists, so every command in the menu is
+  // emitted in the shape the runtime can actually route. actionsFor stays callable
+  // without it and still yields the routable hyphen form.
+  const actions = actionsFor(situation, signals, resolveRuntime(cwd));
   const recommended = actions.find((a) => a.recommended)?.id ?? 'progress';
   const summary = buildSummary(situation, signals);
   return { situation, recommended, summary, signals, actions };
@@ -580,8 +642,9 @@ export function runSmartEntry(cwd: string, args: string[], raw: boolean): void {
     return;
   }
   // Human mode: a compact one-liner plus the recommended action.
+  const fallback = String(formatFerroxSlash('progress', resolveRuntime(cwd)));
   const human = `${result.summary}\nRecommended: ${result.recommended} → ${
-    result.actions.find((a) => a.id === result.recommended)?.command ?? '/ferrox:progress'
+    result.actions.find((a) => a.id === result.recommended)?.command ?? fallback
   }`;
   output(null, true, human);
 }

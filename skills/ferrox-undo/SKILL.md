@@ -1,6 +1,6 @@
 ---
 name: ferrox-undo
-description: "Safe git revert. Roll back phase or plan commits using the phase manifest with dependency checks."
+description: "You want the last step put back the way it was. Reverses its commits safely, in order"
 argument-hint: "--last N | --phase NN | --plan NN-MM"
 allowed-tools:
   - Read

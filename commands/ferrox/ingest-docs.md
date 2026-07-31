@@ -1,6 +1,6 @@
 ---
 name: ferrox:ingest-docs
-description: Bootstrap or merge a .planning/ setup from existing ADRs, PRDs, SPECs, and docs in a repo.
+description: "You already have ADRs, PRDs or specs and want them to become the plan, not be rewritten"
 argument-hint: "[path] [--mode new|merge] [--manifest <file>] [--resolve auto|interactive]"
 allowed-tools:
   - Read

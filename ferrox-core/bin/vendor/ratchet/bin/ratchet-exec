@@ -1,0 +1,1308 @@
+#!/usr/bin/env python3
+"""ratchet-exec — the dispatcher. Spawns and supervises headless CLI agents against work cards.
+
+THE BOUNDARY (EXEC-DESIGN, unanimous): this companion is an UNTRUSTED CLIENT of the kernel.
+It proposes work and records evidence; it NEVER mutates protected state (cards, gates, ledgers).
+A crashed or hallucinating lane costs a failed card — never a corrupted gate. Agents NEVER
+self-land: the only exit is a delivery artifact pointing at `ratchet land`.
+
+Verbs:
+  run   <work-id> [--cli claude|codex|gemini|mock] [--timeout <s>] [--prompt-extra <txt>]
+                  [--grant <glob,glob,...>]   WRITE-manifest: paths the agent may touch; a write
+                                              outside the lane rejects+restores the run. Absent =
+                                              auto-scoped from the repo index if it yields a
+                                              confident scope, else whole worktree (flagged).
+                  [--no-auto-grant]           skip the index; force whole-worktree unless --grant.
+  swarm --cards <id1,id2,...> [--clis <c1,c2,...>] [--max <n>] [--timeout <s>]
+                                    parallel lanes, one card each, halt-on-failure reporting
+  selftest                          mock-adapter proofs: reap, deliver-only-on-pass, no-mutation
+"""
+import importlib.machinery
+import importlib.util
+import json, os, re, signal, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def _kernel():
+    """Import the kernel AS A LIBRARY (single implementation of redact/record/state/config)."""
+    spec = importlib.util.spec_from_loader(
+        "ratchet_kernel", importlib.machinery.SourceFileLoader("ratchet_kernel", os.path.join(HERE, "ratchet")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+K = _kernel()
+
+# CLI profiles: argv prefix; the brief-pointer prompt is appended as the final argument.
+# 'mock' runs $RATCHET_MOCK_CMD via bash — the selftest adapter, no network, no model.
+PROFILES = {
+    "claude": ["claude", "-p", "--dangerously-skip-permissions"],
+    "codex":  ["codex", "exec", "--skip-git-repo-check", "-s", "workspace-write"],
+    "gemini": ["gemini", "--skip-trust", "-p"],
+    # the universal fallback (v2 dispatch): routed through Flux, metered, always installable.
+    # --force = headless, no interactive approval gate; reads its OWN Flux auth from its config,
+    # not our env (same as the sub-CLIs), so clean_env's allowlist doesn't starve it.
+    "wayland-core": ["wayland-core", "--force"],
+}
+
+def build_brief(m, card, r):
+    """Deterministic minimal context pack (E0 §2 layer 1): manifest facts + card + corpus.
+    File-handoff discipline (superpowers' proven lesson): the brief is a FILE the agent reads —
+    never pasted transcript."""
+    corpus = [c for c in K.state_load(K.CORPUS, {"cards": []})["cards"] if c["repo"] == card["repo"]]
+    lines = [
+        f"# WORK BRIEF — card {card['work_id']} ({card['risk']} risk)",
+        f"title: {card['title']}",
+        f"repo: {card['repo']} · mainline {r['mainline']} · lang {r.get('lang', '?')}",
+        f"issue: {card['issue'] or 'none'}",
+        f"suite (must stay green): {r.get('suite_cmd', 'none declared')}",
+        "",
+        "## Regression corpus for this repo (every card must KEEP passing)",
+        *([f"- {c['id']} {c['title']}: {c['repro_cmd']}" for c in corpus] or ["- (empty)"]),
+        "",
+        "## Rules (enforced by the kernel, not by this text)",
+        "- Work ONLY inside the current directory (your card's worktree).",
+        "- Commit locally with clear messages. NEVER push, NEVER merge, NEVER touch other branches.",
+        "- You cannot land work; a human or the kernel runs `ratchet land` after gates.",
+        "- When done, write a one-paragraph summary to DELIVERY.md in the worktree root.",
+    ]
+    return "\n".join(lines)
+
+# ── the governed exec sandbox (v2 keystone) ────────────────────────────────────
+# The card's worktree is already isolated (take), the lane is process-grouped + wall-clock
+# capped (above). The sandbox adds the deterministic, stdlib, cross-platform WRITE boundary:
+# snapshot the tree before the agent runs → on crash/timeout/violation hard-restore it byte-for-
+# byte → enforce the card's `grant` (paths the agent may touch); anything outside the lane —
+# out-of-grant path, symlink/realpath escape, or .git-metadata tamper — is a rejected run, not a
+# silent land.
+#
+# HONEST BOUNDARY (hardened after the wave-1 cross-audit): this governs WRITES to the worktree +
+# recovery, not READS, and not writes that leave the process group (a setsid-detached child) or
+# leave the filesystem worktree (an absolute-path write). Those residuals need OS sandboxing
+# (containers/namespaces) — deferred, tracked in BUILD-PLAN-V2 §9. What IS enforced here: every
+# in-worktree write surface (uncommitted + every commit's files, renames counted both ends),
+# symlink escapes, and the .git config/hooks RCE surface.
+
+# our own post-run git calls run with injected hooks + fsmonitor NEUTRALIZED: an agent can write
+# a core.fsmonitor command or a hook into .git and get code-exec on our very next `git status`.
+_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+def _git(wt, *args, timeout=45):
+    """FERROX DIV-02 (phase 18), half 1 of 2. Read git's output as BYTES and decode it with the
+    SURROGATE ESCAPE handler, instead of routing through the kernel's K.git, whose run() passes
+    text=True with no errors argument and therefore decodes STRICTLY.
+
+    The defect that fixes: one path that is not valid in the ambient encoding made _status_z raise
+    UnicodeDecodeError, which propagated out of _changed_paths. In run_card that call sits BEFORE
+    the .git-tamper check and before any restore, and in guarded_suite it sits before the
+    unconditional restore, so a single undecodable filename aborted the containment audit with the
+    tree unrestored and an injected hook still live. _hooks_dir resolves `rev-parse --git-path
+    hooks`, which for a linked worktree is the CANONICAL repository's hooks directory, so that hook
+    then fires on the next canonical git operation.
+
+    The REPLACE handler is deliberately NOT used. It yields a string that no longer resolves on
+    disk, so os.path.islink / os.path.realpath in _escapes would look up a name that does not
+    exist and walk a symlink escape straight through as clean: a loud crash traded for a silent
+    miss. surrogateescape never raises AND round-trips, so os.fsencode of the decoded name is the
+    original byte sequence and every downstream on-disk lookup still hits the real file. The
+    docstring on _status_z already argues this exact point about C-quoted names.
+
+    Same (rc, stdout, stderr) contract as K.git, including the rstrip-only on stdout, because a
+    leading space is significant in porcelain output (' M file')."""
+    argv = ["git", "-C", wt, *_SAFE, *args]
+    try:
+        r = subprocess.run(argv, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timeout after {timeout}s"
+    except (FileNotFoundError, OSError) as e:
+        return 127, "", str(e)
+    return (r.returncode,
+            r.stdout.decode("utf-8", "surrogateescape").rstrip("\n"),
+            r.stderr.decode("utf-8", "surrogateescape").strip())
+
+def _containment_audit(wt, snap, refs0=None):
+    """FERROX DIV-02 (phase 18), half 2 of 2: defence in depth behind the lenient decode above.
+    Upstream ran the containment audit INLINE, with no try, immediately before the restore, so any
+    throw from inside it skipped the restore entirely. The strict decode was the known way to make
+    that happen; this makes the ordering safe against every other way. Fails CLOSED: an audit that
+    could not complete is itself reported as a violation, so the run is rejected and restored
+    rather than reported clean.
+
+    Call sites are inside the guarded_suite and run_card blocks, which DIV-03 rewrites wholesale;
+    reversing all 3 ledger entries reproduces the pristine bytes. Returns a dict rather than a
+    tuple because the 2 callers compose violations differently: guarded_suite folds in ref tamper,
+    run_card folds in the grant manifest."""
+    out = {"changed": [], "escapes": [], "meta_tampered": False, "ref_tampered": [], "error": None}
+    try:
+        out["changed"] = _changed_paths(wt, snap)
+        out["escapes"] = _escapes(wt, out["changed"])
+        out["meta_tampered"] = _git_meta(wt) != snap["meta"]
+        if refs0 is not None:
+            out["ref_tampered"] = _ref_tamper(refs0, _refs(wt))
+    except Exception as e:   # noqa: BLE001 — deliberately broad: the restore below must always run
+        out["error"] = "<containment audit failed: %s: %s>" % (type(e).__name__, e)
+    return out
+
+def _hooks_dir(wt):
+    """The REAL hooks directory (the common gitdir for a worktree). Resolved WITHOUT the
+    core.hooksPath=/dev/null override _git carries — that override would make git report /dev/null.
+    fsmonitor is still neutralized; rev-parse fires no hook itself."""
+    _, hd, _ = K.git(wt, "-c", "core.fsmonitor=false", "rev-parse", "--git-path", "hooks")
+    hd = hd.strip()
+    if hd and not os.path.isabs(hd):
+        hd = os.path.join(wt, hd)
+    return hd if hd and os.path.isdir(hd) else None
+
+def _config_path(wt):
+    """The .git/config file backing this worktree (the common gitdir — a worktree's .git is a file).
+    Resolved WITHOUT the _git core.hooksPath override; fsmonitor neutralized, rev-parse fires no hook."""
+    _, cp, _ = K.git(wt, "-c", "core.fsmonitor=false", "rev-parse", "--git-path", "config")
+    cp = cp.strip()
+    if cp and not os.path.isabs(cp):
+        cp = os.path.join(wt, cp)
+    return cp if cp and os.path.isfile(cp) else None
+
+def _git_meta(wt):
+    """Fingerprint the RCE-relevant git metadata: local config + every hook file's content. These
+    do NOT change during a normal commit, so a change between snapshot and post-run = tampering."""
+    import hashlib
+    parts = []
+    _, cfg, _ = _git(wt, "config", "--local", "--list")  # --local reads the file, not -c overrides
+    parts.append("CONFIG\n" + cfg)
+    hd = _hooks_dir(wt)
+    if hd:
+        for name in sorted(os.listdir(hd)):
+            p = os.path.join(hd, name)
+            if os.path.isfile(p):
+                try:
+                    parts.append(f"HOOK {name} {hashlib.sha256(open(p, 'rb').read()).hexdigest()}")
+                except OSError:
+                    parts.append(f"HOOK {name} UNREADABLE")
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+def _status_z(wt):
+    """Parse `git status --porcelain -z` into (xy, path, orig) tuples. The -z form emits RAW,
+    unquoted, NUL-delimited bytes — the DEFAULT porcelain C-quotes any non-ASCII / space / control
+    filename (e.g. `"caf\\303\\251.txt"`), and the downstream islink/os.remove checks would then look
+    up that quoted LITERAL, which matches nothing on disk — walking a symlink escape straight through
+    as `clean` and leaving agent files un-restored. A rename/copy (R/C) is followed by its ORIGINAL
+    path as the next NUL field. Every git-output path parse in this file MUST go through -z."""
+    _, out, _ = _git(wt, "status", "--porcelain", "-z")
+    fields = out.split("\x00")
+    entries, i = [], 0
+    while i < len(fields):
+        f = fields[i]
+        if not f:
+            i += 1
+            continue
+        xy, path = f[:2], f[3:]
+        orig = None
+        if xy and xy[0] in ("R", "C"):
+            i += 1
+            orig = fields[i] if i < len(fields) else None
+        entries.append((xy, path, orig))
+        i += 1
+    return entries
+
+def _snapshot(wt):
+    """Pre-run state, enough to restore the worktree byte-for-byte on any bad exit: HEAD, a pinned
+    stash of pre-existing dirty content, the pre-run untracked set, the hooks-dir file set, and the
+    .git-metadata hash."""
+    rc, head, _ = _git(wt, "rev-parse", "HEAD")
+    head = head.strip() if rc == 0 and head.strip() else None  # None = empty/no-commit repo
+    entries = _status_z(wt)
+    untracked = {p for xy, p, _ in entries if xy == "??"}
+    stash = None
+    if head and any(xy != "??" for xy, _, _ in entries):
+        _, sref, _ = _git(wt, "stash", "create")
+        stash = sref.strip() or None
+        if stash:  # PIN it against agent-triggered gc (a dangling commit is collectable)
+            _git(wt, "update-ref", "refs/ratchet/snapshot", stash)
+    hd = _hooks_dir(wt)
+    hooks = {}  # name -> (bytes, mode): full content, so an OVERWRITE of an existing hook (take
+    if hd:      # installs one) is reverted on restore, not just an added-name hook
+        for name in os.listdir(hd):
+            p = os.path.join(hd, name)
+            if os.path.isfile(p):
+                try:
+                    hooks[name] = (open(p, "rb").read(), os.stat(p).st_mode)
+                except OSError:
+                    pass
+    cp = _config_path(wt)
+    config = None  # (bytes, mode): captured so a tampered .git/config is reverted byte-for-byte
+    if cp:
+        try:
+            config = (open(cp, "rb").read(), os.stat(cp).st_mode)
+        except OSError:
+            config = None
+    return {"head": head, "stash": stash, "untracked": untracked, "meta": _git_meta(wt),
+            "hooks_dir": hd, "hooks": hooks, "config_path": cp, "config": config}
+
+def _restore(wt, snap):
+    """Hard-restore to the snapshot; returns True only if every step succeeded (a silently-failed
+    restore must not be reported as clean). Removes ONLY agent-created untracked paths — pre-run
+    untracked content is preserved (git stash create cannot capture it, git clean -fd would nuke
+    it). Re-applies the pinned dirty stash, then drops the pin."""
+    import shutil
+    ok = True
+    # restore .git/config FIRST, byte-for-byte, so every git op below runs against clean config:
+    # a run that injected core.hooksPath / core.fsmonitor / a [core] alias etc. is REVERTED, not
+    # merely neutralized for our own ops. Byte-level restore preserves multi-valued keys perfectly
+    # (the fidelity concern that had deferred this). Atomic tmp+replace so an interrupted restore
+    # can never leave .git/config truncated (a corrupt config makes git refuse to operate).
+    cp = snap.get("config_path"); csaved = snap.get("config")
+    if cp and csaved is not None:
+        cdata, cmode = csaved
+        try:
+            if not os.path.isfile(cp) or open(cp, "rb").read() != cdata:
+                tmp = cp + ".ratchet-restore.tmp"
+                with open(tmp, "wb") as fh:
+                    fh.write(cdata)
+                os.chmod(tmp, cmode)
+                os.replace(tmp, cp)
+        except OSError:
+            ok = False
+    if snap["head"]:
+        rc, _, _ = _git(wt, "reset", "--hard", snap["head"]); ok = ok and rc == 0
+    for xy, p, _ in _status_z(wt):
+        if xy != "??":
+            continue
+        if not p or p in snap["untracked"]:
+            continue  # pre-existing untracked → keep
+        tgt = os.path.join(wt, p)
+        try:
+            if os.path.isdir(tgt) and not os.path.islink(tgt):
+                shutil.rmtree(tgt, ignore_errors=True)
+            else:
+                os.remove(tgt)
+        except OSError:
+            ok = False
+    if snap.get("stash"):
+        rc, _, _ = _git(wt, "stash", "apply", snap["stash"]); ok = ok and rc == 0
+        _git(wt, "update-ref", "-d", "refs/ratchet/snapshot")
+    # restore .git/hooks byte-for-byte (git reset --hard never touches them): remove agent-ADDED
+    # hooks AND revert OVERWRITES of pre-existing hooks — closes the persistent hook-injection RCE.
+    hd = snap.get("hooks_dir"); saved = snap.get("hooks", {})
+    if hd and os.path.isdir(hd):
+        for name in os.listdir(hd):
+            if name not in saved:
+                try:
+                    os.remove(os.path.join(hd, name))
+                except OSError:
+                    ok = False
+        for name, (data, mode) in saved.items():
+            p = os.path.join(hd, name)
+            try:
+                if not os.path.isfile(p) or open(p, "rb").read() != data:
+                    open(p, "wb").write(data); os.chmod(p, mode)
+            except OSError:
+                ok = False
+    return ok
+
+def _changed_paths(wt, snap):
+    """Every path the agent touched vs the snapshot — uncommitted (porcelain) AND every file in
+    EVERY commit snapshot..HEAD (git log --name-only, so an add-then-remove that nets to zero in a
+    plain diff is still caught, because it lands in history). Renames count BOTH source and
+    destination. Deterministic ground truth, never the agent's self-report."""
+    paths = set()
+    for xy, p, orig in _status_z(wt):
+        if p:
+            paths.add(p)
+        if orig:  # rename/copy: source is vacated, destination written — both are touched
+            paths.add(orig)
+    if snap["head"]:
+        # --no-renames: a committed `git mv forbidden -> allowed` must surface BOTH names, not
+        # collapse (git log's default rename detection) to just the destination. -z: raw unquoted
+        # NUL-delimited names, so a non-ASCII filename is the real on-disk name, not a C-quoted literal.
+        # -m: diff merge commits against each parent too — a file introduced ONLY in a merge
+        # resolution (present in neither parent) is otherwise invisible to git log and would slip the
+        # grant/escape audit. Over-inclusive by design (containment prefers false-positive to a miss).
+        _, names, _ = _git(wt, "log", "--name-only", "--no-renames", "-m", "--format=", "-z", snap["head"] + "..HEAD")
+        for p in names.split("\x00"):
+            if p:
+                paths.add(p)
+    return sorted(paths)
+
+def _escapes(wt, paths):
+    """Changed paths that break containment: a symlink (an agent can write THROUGH it to an
+    external target git never sees), or a path whose realpath resolves outside the worktree.
+    Always a violation — grant or not."""
+    root = os.path.realpath(wt)
+    bad = []
+    for p in paths:
+        full = os.path.join(wt, p)
+        if os.path.islink(full):
+            bad.append(p); continue
+        rp = os.path.realpath(full)
+        if rp != root and not rp.startswith(root + os.sep):
+            bad.append(p)
+    return bad
+
+def _valid_autogrant(globs):
+    """Validate globs returned by the index BEFORE trusting them as a lane. ratchet-index is a
+    separate companion — a bug, future change, or tamper could return `**` / `/etc/**` / `../x`,
+    which would read as 'governed' while actually granting the world. Defense in depth at the exec
+    boundary: a list of relative globs, no absolute/`..`/root-wide entry. Anything off ⇒ reject
+    (fall back to ungoverned+flagged), never widen silently."""
+    if not isinstance(globs, list) or not globs:
+        return False
+    for g in globs:
+        if not isinstance(g, str) or not g.strip():
+            return False
+        gg = g.strip().replace("\\", "/")
+        if gg.startswith("/") or ".." in gg.split("/") or gg in ("**", "*", "**/*", "/**", "."):
+            return False
+    return True
+
+def _ungranted(paths, grant):
+    """Paths OUTSIDE the grant globs. A glob is a file pattern (`*.py`, `src/**`) or a directory
+    (`src` / `src/` grants everything beneath it — matched by path component, so `src` does NOT
+    grant a sibling `src-secrets/`). fnmatch `*`/`**` span `/`, so `src/**` is recursive."""
+    import fnmatch
+    globs = [g.strip() for g in grant if g.strip()]
+    def granted(path):
+        for g in globs:
+            if fnmatch.fnmatch(path, g):
+                return True
+            base = g.rstrip("/")
+            if path == base or path.startswith(base + "/"):  # exact component-boundary prefix
+                return True
+        return False
+    return [p for p in paths if not granted(p)]
+
+_OUT_CAP = 4_000_000   # bytes of child output retained; both callers slice only the last 200_000
+
+def _supervise(proc, deadline):
+    """Non-blocking wall-clock supervision of an untrusted child. Returns (reaped, out_bytes).
+    NEVER blocks on a read a child could hold open — a partial line with no newline, or a bg child
+    keeping the stdout pipe open, both defeated a blocking readline()/read() and starved the timeout
+    check. Reads are non-blocking, gated by select against the remaining budget; on timeout the whole
+    GROUP is SIGTERM'd then SIGKILL'd. Shared by run_card (agents) and guarded_suite (PR gate) so the
+    two supervision loops can never drift apart again.
+
+    FERROX DIV-01 (phase 18): the retained output is BOUNDED to a tail of _OUT_CAP bytes. Upstream
+    appended every chunk an untrusted child wrote and returned the whole join with nothing bounding
+    it, so a child that writes without stopping grows this supervisor until the machine gives up —
+    a denial of service against the OPERATOR, not against the child. Both callers already slice
+    raw[-200_000:] the moment they get it, so the retained prefix had no consumer whatsoever. The
+    cap sits an order of magnitude above that slice, so any child under it returns byte-identical
+    output and only the unbounded case changes. Dropping is from the FRONT: the tail the callers
+    actually read is exactly the tail they read before."""
+    import select
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    outbuf = []
+    kept = 0
+    reaped = None
+    eof = False
+    def _keep(chunk):                   # bounded ring: evict from the FRONT, never from the tail
+        nonlocal kept
+        outbuf.append(chunk)
+        kept += len(chunk)
+        while kept > _OUT_CAP:
+            over = kept - _OUT_CAP
+            if len(outbuf[0]) <= over:
+                kept -= len(outbuf.pop(0))
+            else:
+                outbuf[0] = outbuf[0][over:]
+                kept -= over
+    def _drain():                       # read whatever is buffered, without waiting for EOF
+        try:
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                _keep(chunk)
+        except (BlockingIOError, OSError):
+            pass
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:              # wall-clock cap: SIGTERM the GROUP, then SIGKILL
+            reaped = "timeout"
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                time.sleep(5)
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            break
+        if proc.poll() is not None:     # exited — drain buffered output, never wait on a held pipe
+            if not eof:
+                _drain()
+            break
+        if eof:
+            time.sleep(min(0.2, remaining)); continue
+        r, _, _ = select.select([fd], [], [], min(1.0, remaining))
+        if r:
+            try:
+                chunk = os.read(fd, 65536)
+            except (BlockingIOError, OSError):
+                chunk = None
+            if chunk == b"":
+                eof = True
+            elif chunk:
+                _keep(chunk)
+    return reaped, b"".join(outbuf)
+
+def _refs(wt):
+    """Every real ref (loose + packed) as {refname: sha}. An untrusted suite shares the common gitdir,
+    so `git update-ref`/`branch -f` from contributor code can move the mainline ref onto the PR head —
+    which BOTH poisons the canonical repo AND makes a later base..head diff empty (defeating the
+    secret scan). We snapshot refs and treat a MOVE or DELETE of a pre-existing ref as a containment
+    violation, reverting it. `refs/ratchet/*` (the sandbox's own gc-pin) is EXCLUDED — it is internal
+    bookkeeping owned by _snapshot/_restore, not part of the containment surface, and including it
+    would fight _restore's own pin cleanup."""
+    rc, out, _ = _git(wt, "for-each-ref", "--format=%(objectname) %(refname)")
+    refs = {}
+    if rc == 0:
+        for ln in out.splitlines():
+            p = ln.split(" ", 1)
+            if len(p) == 2 and not p[1].startswith("refs/ratchet/"):
+                refs[p[1]] = p[0]
+    return refs
+
+def _ref_tamper(before, after):
+    """Pre-existing refs that were MOVED (sha changed) or DELETED during the run — the vectors that
+    poison the canonical mainline or blind a base..head diff. A newly-CREATED ref is deliberately
+    IGNORED: with SHA-pinned diffs it cannot blind a scan or move an existing ref, and reverting it
+    would corrupt a CONCURRENT gate that shares the common gitdir and just created its own tmp branch."""
+    return [name for name, sha in before.items() if after.get(name) != sha]
+
+def _restore_refs(wt, before, tampered):
+    """Put every moved/deleted pre-existing ref back to its snapshot value (recreates a deleted one)."""
+    for name in tampered:
+        _git(wt, "update-ref", name, before[name])
+
+# ── FERROX DIV-03 (phase 18): untrusted code never shares the canonical git directory ────────
+# Upstream ran BOTH untrusted paths with cwd inside a LINKED worktree. A linked worktree's .git is
+# a FILE pointing at the canonical common gitdir, so the child could write the canonical
+# repository's hooks, config and refs directly. Upstream detected that and reverted it — hooks at
+# _snapshot/_restore, refs at _refs/_ref_tamper/_restore_refs, the tree at _restore. Detect and
+# revert is not containment: the window is live while the child runs, the revert itself can fail,
+# and `restore-failed` is a real upstream verdict. Worse, _refs is only ever called by
+# guarded_suite; run_card, the path that runs an AI agent CLI, has no ref containment at all.
+#
+# So both paths now execute against a THROWAWAY CLONE that owns its own git directory. The scope
+# is deliberately the 2 functions that execute untrusted code and NOT the card lifecycle:
+# converting the card tree itself would additionally change 6 sites in the kernel, and its gc and
+# reap paths archive a branch with `git bundle create` against the CANONICAL repository, so after
+# such a conversion the branch would live only in the clone and archive-before-delete would
+# silently bundle nothing. That is a data loss path. The isolation goes where the untrusted
+# process runs.
+#
+# The gate suite needs no transfer at all: upstream already discards every suite write. The agent
+# path transfers back ONLY on a containment-accepted verdict, which is exactly the set of runs
+# upstream left in the worktree.
+
+def _mirror_tree(src, dst):
+    """Copy every working-file entry of src over dst and delete dst entries src does not have,
+    skipping any entry named .git at every level. Symlinks are copied AS symlinks and never
+    followed, so a pre-run symlink stays a symlink and _escapes still sees it as one."""
+    import shutil
+    def _entries(d):
+        try:
+            return {n for n in os.listdir(d) if n != ".git"}
+        except OSError:
+            return set()
+    def _drop(p):
+        try:
+            if os.path.islink(p) or not os.path.isdir(p):
+                os.remove(p)
+            else:
+                shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
+    s_names, d_names = _entries(src), _entries(dst)
+    for name in d_names - s_names:
+        _drop(os.path.join(dst, name))
+    for name in s_names:
+        sp, dp = os.path.join(src, name), os.path.join(dst, name)
+        try:
+            if os.path.islink(sp):
+                if os.path.lexists(dp):
+                    _drop(dp)
+                os.symlink(os.readlink(sp), dp)
+            elif os.path.isdir(sp):
+                if os.path.lexists(dp) and (os.path.islink(dp) or not os.path.isdir(dp)):
+                    _drop(dp)
+                os.makedirs(dp, exist_ok=True)
+                _mirror_tree(sp, dp)
+            else:
+                if os.path.lexists(dp) and os.path.isdir(dp) and not os.path.islink(dp):
+                    _drop(dp)
+                shutil.copy2(sp, dp, follow_symlinks=False)
+        except OSError:
+            pass
+    return True
+
+def _isolated_clone(wt, tag):
+    """Build the throwaway clone. --no-hardlinks and no --shared, so it shares no object file and
+    no alternates with the canonical repository; its .git is a real directory, so its hooks, config
+    and refs are its own. Every local head and tag is replicated with update-ref, because a plain
+    clone materialises only the checked-out branch and the ref containment surface would otherwise
+    be empty. The origin remote points back AT the card tree, so it is REMOVED: leaving it would
+    hand the child `git push origin` straight into the canonical repository. user.name and
+    user.email are carried across so the child can still commit. Returns the path, or None."""
+    parent = os.path.dirname(os.path.abspath(wt.rstrip(os.sep))) or os.path.abspath(os.sep)
+    dst = os.path.join(parent, ".ratchet-iso-%s-%d-%d" % (tag, os.getpid(), int(time.time() * 1000) % 1000000))
+    if os.path.exists(dst):
+        return None
+    rc, _, _ = K.run(["git", "clone", "--no-hardlinks", "-q", wt, dst], timeout=600)
+    if rc != 0 or not os.path.isdir(os.path.join(dst, ".git")):
+        return None
+    head_ref = None
+    rcs, sref, _ = _git(dst, "symbolic-ref", "-q", "HEAD")
+    if rcs == 0:
+        head_ref = sref.strip() or None
+    rcf, refs, _ = _git(wt, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/tags")
+    if rcf == 0:
+        for ln in refs.splitlines():
+            p = ln.split(" ", 1)
+            if len(p) == 2 and p[1] != head_ref:
+                _git(dst, "update-ref", p[1], p[0])
+    _git(dst, "remote", "remove", "origin")
+    for key in ("user.name", "user.email"):
+        rcv, val, _ = _git(wt, "config", "--get", key)
+        if rcv == 0 and val.strip():
+            _git(dst, "config", key, val.strip())
+    _mirror_tree(wt, dst)
+    return dst
+
+def _drop_clone(iso):
+    """Delete the throwaway clone. Runs on EVERY exit path, accepted or rejected."""
+    import shutil
+    if iso and os.path.isdir(iso):
+        shutil.rmtree(iso, ignore_errors=True)
+
+def _transfer_back(wt, iso):
+    """Move the card branch onto the clone's HEAD and mirror the clone's working files over the
+    card tree. Runs ONLY after the containment audit accepted the run. The commit is fetched into
+    a PRIVATE per-process ref first, so a failed fetch can never leave the card branch half moved,
+    and the ref is dropped again immediately (refs/ratchet/* is a COMMON ref namespace, so it is
+    keyed by pid rather than fixed, unlike _snapshot's own pin)."""
+    xref = "refs/ratchet/xfer-%d" % os.getpid()
+    rcf, _, _ = _git(wt, "fetch", "--no-tags", "-q", iso, "+HEAD:" + xref)
+    if rcf != 0:
+        return False
+    rcr, _, _ = _git(wt, "reset", "--hard", "-q", xref)
+    _git(wt, "update-ref", "-d", xref)
+    if rcr != 0:
+        return False
+    _mirror_tree(iso, wt)
+    return True
+
+def guarded_suite(wt, cmd, timeout=600):
+    """Run an UNTRUSTED contributor command `cmd` (a shell string) against worktree `wt` under the
+    same governed sandbox spine as run_card, so a PR gate can execute a repo's test suite without
+    handing it the operator's shell. Guarantees:
+      • FERROX DIV-03: the command executes inside a THROWAWAY CLONE of `wt` that owns its own git
+        directory, so the canonical repository's hooks, config and refs are not reachable at all
+        rather than reachable-and-reverted. The clone is snapshotted, audited and restored exactly
+        as the worktree used to be, and then deleted; upstream already discarded every suite write,
+        so nothing is transferred back and the gate signal is unchanged;
+      • allowlisted clean_env — no GH_TOKEN / *_API_KEY / AWS_* to exfiltrate (the suite sees only
+        PATH/HOME-class vars);
+      • own process group + wall-clock cap (SIGTERM→SIGKILL on the GROUP) enforced by a NON-BLOCKING
+        supervision loop — a bg child holding the stdout pipe, or a partial-line-then-stall, can no
+        longer starve the timeout check — then a group sweep so a non-detached child can't write
+        after we stop watching;
+      • the clone is SNAPSHOTTED first and hard-RESTORED after — the suite's writes are a
+        throwaway, and an injected .git hook / core.fsmonitor command is reverted as well as
+        contained, so the restore path stays exercised rather than becoming dead code;
+      • REFS are snapshotted too and any move/delete is a VIOLATION and is reverted — a suite
+        cannot move a mainline ref onto its own head to blind a later diff or poison the repo;
+      • .git config/hooks tamper and symlink/realpath escapes out of the tree are flagged as
+        containment VIOLATIONS (never legitimate suite behaviour).
+    Unlike run_card this does NOT reject ordinary in-worktree writes — a test suite legitimately
+    writes artifacts, and the tree is discarded. The gate signal is: exited 0, not reaped, no
+    containment violation. HONEST BOUNDARY is identical to run_card's (setsid-detached children and
+    absolute-path writes outside the clone need OS sandboxing — deferred, BUILD-PLAN-V2 §9).
+    Returns {ok, rc, reaped, duration_s, violations, restore_ok, stream_tail}."""
+    iso = _isolated_clone(wt, "gate")
+    if iso is None:
+        return {"ok": False, "rc": 127, "reaped": None, "duration_s": 0.0,
+                "violations": ["<isolation clone failed: refusing to run untrusted code against the canonical git directory>"],
+                "restore_ok": True, "stream_tail": ""}
+    try:
+        snap = _snapshot(iso)
+        refs0 = _refs(iso)
+        env = K.clean_env({"RATCHET_GATE": "1", "RATCHET_WORKTREE": iso})
+        argv = ["bash", "-lc", cmd]
+        t0 = time.time()
+        try:
+            # BYTES (no text=True): the shared non-blocking supervisor reads the raw fd and decodes later.
+            proc = subprocess.Popen(argv, cwd=iso, env=env, start_new_session=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except (FileNotFoundError, OSError) as e:
+            return {"ok": False, "rc": 127, "reaped": None, "duration_s": 0.0,
+                    "violations": ["spawn-failed: %s" % e], "restore_ok": _restore(iso, snap),
+                    "stream_tail": ""}
+        reaped, raw = _supervise(proc, t0 + timeout)
+        rc = proc.wait()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # sweep the group before we inspect / restore the tree
+            time.sleep(0.2)
+        except OSError:
+            pass
+        dur = round(time.time() - t0, 1)
+        stream = raw[-200_000:].decode("utf-8", "replace")
+        # containment audit BEFORE restore: .git tamper, ref tamper, and realpath/symlink escapes are
+        # never legitimate suite behaviour. DIV-02: the audit cannot throw past the restore below.
+        audit = _containment_audit(iso, snap, refs0)
+        ref_tampered = audit["ref_tampered"]
+        violations = list(dict.fromkeys(
+            ([audit["error"]] if audit["error"] else [])
+            + audit["escapes"]
+            + (["<.git config/hooks tampered>"] if audit["meta_tampered"] else [])
+            + (["<git refs moved/deleted: %s>" % ", ".join(ref_tampered[:3])] if ref_tampered else [])))
+        # ALWAYS restore: drops the throwaway suite writes, reverts any injected hook/config, and puts
+        # every moved/deleted ref back. The clone is then deleted, so the canonical repository was
+        # never reachable in the first place — restore is now the second line, not the only one.
+        restore_ok = _restore(iso, snap)
+        if ref_tampered:
+            _restore_refs(iso, refs0, ref_tampered)
+        ok = (rc == 0) and (reaped is None) and (not violations)
+        return {"ok": ok, "rc": rc, "reaped": reaped, "duration_s": dur, "violations": violations,
+                "restore_ok": restore_ok, "stream_tail": K.redact(stream)[-2000:]}
+    finally:
+        _drop_clone(iso)
+
+def run_card(args):
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: ratchet-exec run <work-id> [--cli claude|codex|gemini|mock] [--timeout <s>] [--grant <glob,...>]"); return 1
+    work_id = pos[0]
+    # lane selection (v2 dispatch): explicit --cli wins; otherwise the capability-detected
+    # preference hierarchy — chosen flat-rate sub-CLI, else Wayland Core through Flux, else refuse.
+    if "--cli" in args:
+        cli = args[args.index("--cli") + 1]
+    else:
+        cli, why = K.default_dispatch()
+        if cli is None:
+            print(f"exec: no agent available — {why}. Run `ratchet init` to detect + install one."); return 2
+        print(f"exec: no --cli given; dispatching to '{cli}' — {why}")
+    timeout = int(args[args.index("--timeout") + 1]) if "--timeout" in args else 900
+    extra = args[args.index("--prompt-extra") + 1] if "--prompt-extra" in args else ""
+    # WRITE-manifest scope: --grant "src/**,tests/**" overrides the card's own grant field.
+    # None = ungoverned (permissive, flagged). The repo index (wave 2) computes grant per card.
+    # exec-owned flags are read from positions that are NOT the value of another flag, so an
+    # untrusted --prompt-extra payload can't smuggle in a governance flag (e.g. --no-auto-grant).
+    payload_idx = {args.index("--prompt-extra") + 1} if "--prompt-extra" in args else set()
+    own_flags = {a for i, a in enumerate(args) if a.startswith("--") and i not in payload_idx}
+    grant, grant_source = None, "none"
+    if "--grant" in args:
+        grant = [g for g in args[args.index("--grant") + 1].split(",") if g.strip()]
+        grant_source = "explicit-cli"
+    m = K.load_manifest()
+    cfg, _, _ = K.config_load()
+    if cli in cfg.get("deny_list", []):
+        print(f"exec: REFUSE — '{cli}' is on the config deny-list"); return 2
+    card = next((c for c in K.state_load(K.CARDS, {"cards": []})["cards"]
+                 if c["work_id"] == work_id and c["status"] == "open"), None)
+    if card is None:
+        print(f"exec: no OPEN card {work_id} — ratchet take first (cards are the only doorway)"); return 2
+    wt = K.expand(card["worktree"])
+    if not os.path.isdir(wt):
+        print(f"exec: card {work_id} worktree missing ({wt}) — ratchet reconcile"); return 2
+    r = m["repos"][card["repo"]]
+    if grant is None and card.get("grant"):
+        grant = card["grant"]; grant_source = "explicit-card"
+    if grant is None and "--no-auto-grant" not in own_flags and re.fullmatch(r"[A-Za-z0-9]+", work_id):
+        # ask the repo index to scope the lane (loose coupling: a tolerated subprocess). We do NOT
+        # trust its output: the returned globs are VALIDATED at this boundary (_valid_autogrant) —
+        # a bad/changed index can't turn an ungoverned run into a wide 'governed' one. Run with a
+        # SCRUBBED env so an ambient PYTHONPATH/LD_PRELOAD can't change what the helper computes.
+        idx_bin = os.path.join(HERE, "ratchet-index")
+        if os.path.exists(idx_bin):
+            senv = {k: v for k, v in os.environ.items()
+                    if k in ("PATH", "HOME", "WL_HOME", "WL_MANIFEST", "WL_INSTANCE", "RATCHET_HOME")}
+            outcome = "helper-absent"
+            try:
+                gp = subprocess.run([sys.executable, idx_bin, "grant", work_id], env=senv,
+                                    capture_output=True, text=True, timeout=30)
+                if gp.returncode != 0:
+                    outcome = f"rc={gp.returncode}"
+                else:
+                    auto = json.loads(gp.stdout or "{}").get("grant")
+                    if auto is None:
+                        outcome = "no-confident-scope"
+                    elif _valid_autogrant(auto):
+                        grant, grant_source, outcome = auto, "auto-index", "scoped"
+                        print(f"exec: auto-scoped lane from repo index → {grant}")
+                    else:
+                        outcome = "rejected-invalid-grant"  # stays ungoverned+flagged, never widened
+            except subprocess.TimeoutExpired:
+                outcome = "timeout-30s"
+            except (ValueError, OSError, subprocess.SubprocessError):
+                outcome = "error"
+            if outcome != "scoped":
+                print(f"exec: no auto-grant ({outcome}) — lane ungoverned (permissive, flagged)")
+
+    # brief → file (recorded, hashed)
+    import hashlib
+    brief = build_brief(m, card, r)
+    bdir = os.path.join(K.WL_HOME, "state", "recordings", work_id)
+    os.makedirs(bdir, exist_ok=True)
+    bpath = os.path.join(bdir, f"brief-{int(time.time())}.md")
+    open(bpath, "w").write(K.redact(brief))
+    bhash = hashlib.sha1(brief.encode()).hexdigest()[:12]
+    prompt = (f"Read the work brief at {bpath} and complete that card's work in the current "
+              f"directory (your isolated worktree). Follow its rules exactly. {extra}").strip()
+
+    # spawn in own process group with an ALLOWLISTED env (security-council CRITICAL): the old
+    # blocklist stripped FLUX_/RATCHET_BREAK/WL_BREAK but LEAKED GH_TOKEN, *_API_KEY, AWS_* etc.
+    # to an untrusted agent. clean_env() passes only PATH/HOME-class vars + RATCHET_* identity —
+    # the agent has no secret to exfiltrate. The provider CLI reads its OWN auth from its own
+    # config dir, not our env, so this doesn't break claude/codex/gemini.
+    env = K.clean_env({"RATCHET_CARD": work_id, "RATCHET_WORKTREE": wt, "RATCHET_AGENT": f"exec-{cli}"})
+    if cli == "mock" and os.environ.get("RATCHET_MOCK_CMD"):
+        env["RATCHET_MOCK_CMD"] = os.environ["RATCHET_MOCK_CMD"]  # test adapter only
+    if cli == "mock":
+        argv = ["bash", "-lc", env.get("RATCHET_MOCK_CMD", "true")]
+    elif cli in PROFILES:
+        argv = PROFILES[cli] + [prompt]
+    else:
+        print(f"exec: unknown CLI profile '{cli}'"); return 1
+
+    # SANDBOX: FERROX DIV-03 — the agent NEVER runs inside the linked worktree, whose .git is a
+    # file pointing at the CANONICAL common gitdir. It runs inside a throwaway clone that owns its
+    # own git directory, and the clone is snapshotted before the agent touches it exactly as the
+    # worktree used to be, so every bad exit still restores to here. Nothing reaches the card tree
+    # until the containment audit has accepted the run.
+    iso = _isolated_clone(wt, "run")
+    if iso is None:
+        print(f"exec: could not build the isolation clone beside {wt} — refusing to run an "
+              "untrusted agent against the canonical git directory"); return 2
+    env["RATCHET_WORKTREE"] = iso   # the lane's worktree IS the clone; the brief's rules bind to it
+    snap = _snapshot(iso)
+
+    try:
+        t0 = time.time()
+        try:
+            # BYTES: the shared non-blocking supervisor (_supervise) can't be starved by a partial line
+            # or a bg child holding the pipe — the same hardening guarded_suite uses (one loop, both paths).
+            proc = subprocess.Popen(argv, cwd=iso, env=env, start_new_session=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except FileNotFoundError:
+            print(f"exec: CLI '{cli}' not installed"); return 2
+        # lane identity goes on the record FIRST — kernel kill/pause/resume verbs act on this
+        K.record(work_id, {"event": "exec_spawn", "cli": cli, "pid": proc.pid,
+                           "pid_start": K.pid_start(proc.pid), "brief_hash": bhash, "timeout_s": timeout,
+                           "cost_basis": "ADVISORY — oracle wiring lands with councils (E2); wall-clock is the enforced cap"})
+        reaped, raw = _supervise(proc, t0 + timeout)   # non-blocking wall-clock cap; SIGTERM→SIGKILL the group
+        rc = proc.wait()
+        # sweep the process GROUP before we inspect the tree: a non-detached background child
+        # (`sh -c 'sleep 2; echo pwn > x' &`) would otherwise write AFTER our checks. A setsid-detached
+        # child escapes its group and this sweep — that residual is the OS-sandbox boundary (deferred).
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            time.sleep(0.2)  # let the group die before _changed_paths reads the tree
+        except OSError:
+            pass
+        dur = round(time.time() - t0, 1)
+        stream = raw[-200_000:].decode("utf-8", "replace")
+        spath = os.path.join(bdir, f"stream-{int(t0)}.log")
+        open(spath, "w").write(K.redact(stream))  # redaction-before-capture, same as the kernel
+
+        # evidence: what actually changed in the CLONE (ground truth, never the agent's self-report).
+        # _git (hooks/fsmonitor neutralized, DIV-02 lenient decode) because this is our FIRST git call
+        # after an untrusted run.
+        rcd, dirty, _ = _git(iso, "status", "--porcelain")
+        K.record(work_id, {"event": "exec_exit", "cli": cli, "rc": rc, "reaped": reaped,
+                           "duration_s": dur, "dirty_files": len(dirty.splitlines()) if dirty else 0})
+
+        verdict = "failed"
+        checks = {}
+        governed = grant is not None
+        grant_violations = []
+        restore_ok = True
+        def _reject(reason, msg):
+            nonlocal verdict, grant_violations, restore_ok
+            ok = _restore(iso, snap)
+            restore_ok = restore_ok and ok
+            grant_violations = reason
+            verdict = "restore-failed" if not ok else "grant-violation"
+            tail = "; worktree restored, nothing lands" if ok else "; RESTORE FAILED — worktree may be dirty, ratchet reconcile"
+            print(f"exec: {msg}{tail}; stream: {spath}")
+        if reaped:
+            restore_ok = _restore(iso, snap)  # a timed-out agent leaves NOTHING behind — tree restored
+            verdict = "reaped" if restore_ok else "restore-failed"
+            print(f"exec: REAPED ({reaped}) after {dur}s — "
+                  + ("worktree restored to snapshot" if restore_ok else "RESTORE FAILED — ratchet reconcile")
+                  + f"; stream: {spath}")
+        elif rc != 0:
+            restore_ok = _restore(iso, snap)
+            verdict = "failed" if restore_ok else "restore-failed"
+            print(f"exec: agent exited {rc} after {dur}s — "
+                  + ("worktree restored to snapshot" if restore_ok else "RESTORE FAILED — ratchet reconcile")
+                  + f"; stream: {spath}")
+        else:
+            # WRITE-manifest: did the agent stay inside its lane? A single out-of-lane write rejects the
+            # WHOLE run. Containment breaks (symlink/realpath escape) and the .git config/hooks RCE
+            # surface are violations REGARDLESS of grant — they are never legitimate agent behaviour.
+            # DIV-02: this is the audit that used to raise UnicodeDecodeError before the .git-tamper
+            # check and before any restore, leaving an injected hook live in the CANONICAL hooks dir.
+            audit = _containment_audit(iso, snap)
+            changed = audit["changed"]
+            if grant is not None:
+                grant_violations = _ungranted(changed, grant)
+            violations = list(dict.fromkeys(
+                ([audit["error"]] if audit["error"] else [])
+                + grant_violations + audit["escapes"]
+                + (["<.git config/hooks tampered>"] if audit["meta_tampered"] else [])))
+            if violations:
+                _reject(violations, f"REJECTED — out-of-lane write {violations[:5]}"
+                        + (" …" if len(violations) > 5 else ""))
+            else:
+                # deterministic post-checks — the same gates a human faces, run early. They read the
+                # CLONE, because that is where the agent's work is until the transfer below.
+                rc_d = subprocess.run([sys.executable, os.path.join(HERE, "ratchet"), "doctor",
+                                       card["repo"], "--offline"], capture_output=True, text=True).returncode
+                checks["doctor"] = rc_d
+                rc_c = K.corpus_run(card["repo"], iso)
+                checks["corpus"] = rc_c
+                verdict = "clean" if rc_d in (0, 3) and rc_c == 0 else "failed-checks"
+        # FERROX DIV-03 step 4: the agent's work reaches the card tree ONLY here, and only after the
+        # containment audit accepted the run. `clean` and `failed-checks` are exactly the 2 verdicts
+        # upstream left in the worktree; every other verdict restored it, and here the clone is
+        # dropped instead, which is strictly stronger because the card tree was never written to.
+        transfer_ok = None
+        if verdict in ("clean", "failed-checks"):
+            transfer_ok = _transfer_back(wt, iso)
+            if not transfer_ok:
+                verdict = "restore-failed"
+                print(f"exec: TRANSFER FAILED from the isolation clone into {wt} — nothing landed; "
+                      "ratchet reconcile")
+        # recent_commits reflects the FINAL tree — after a restore the agent's commits are gone, and
+        # after an accepted transfer the card tree carries them
+        rchf, headf, _ = _git(wt, "log", "--oneline", "-5")
+        delivery = {"schema_version": 1, "card": work_id, "cli": cli, "verdict": verdict, "rc": rc,
+                    "reaped": reaped, "duration_s": dur, "brief_hash": bhash, "checks": checks,
+                    "governed": governed, "grant": grant, "grant_source": grant_source,
+                    "grant_violations": grant_violations,
+                    "restore_ok": restore_ok, "isolated": True, "transfer_ok": transfer_ok,
+                    "snapshot_head": (snap["head"] or "none")[:12], "stream": spath,
+                    "recent_commits": headf.splitlines() if rchf == 0 else [],
+                    "next": f"ratchet land {wt}" if verdict == "clean" else "fix or ratchet reconcile"}
+        dpath = os.path.join(bdir, f"delivery-{int(t0)}.json")
+        json.dump(K.redact(delivery), open(dpath, "w"), indent=1)
+        K.record(work_id, {"event": "exec_delivery", "verdict": verdict, "artifact": dpath})
+        lane = f"governed ({len(grant)} glob{'s' if len(grant) != 1 else ''})" if governed else "UNGOVERNED — whole worktree"
+        print(f"exec: verdict {verdict} · lane {lane} · delivery artifact {dpath}")
+        if verdict == "clean":
+            print(f"  next: ratchet land {wt}   (the agent cannot run this — deliver-through-gate only)")
+        return 0 if verdict == "clean" else 2
+    finally:
+        _drop_clone(iso)
+
+def swarm(args):
+    """E4, scoped per §7: dispatch N cards across adapters in PARALLEL LANES. Each lane is a
+    fresh `ratchet-exec run` process — same supervision, same isolation, same gates. Cards
+    already pin their own worktrees (take), so brief and tree describe the same reality.
+    A failed lane halts nothing else; it reports, suggests the debug card, and exits nonzero."""
+    if "--cards" not in args:
+        print("usage: ratchet-exec swarm --cards <id1,id2,...> [--clis <c1,c2>] [--max <n>]"); return 1
+    cards = args[args.index("--cards") + 1].split(",")
+    clis = (args[args.index("--clis") + 1].split(",")) if "--clis" in args else ["claude"]
+    maxp = int(args[args.index("--max") + 1]) if "--max" in args else 3
+    timeout = args[args.index("--timeout") + 1] if "--timeout" in args else "900"
+    me = os.path.abspath(__file__)
+    lanes, results = [], {}
+    queue = [(wid, clis[i % len(clis)]) for i, wid in enumerate(cards)]
+    print(f"swarm: {len(queue)} card(s) across {len(clis)} adapter(s), {maxp} lane(s) max")
+    lane_dir = os.path.join(K.WL_HOME, "state", "recordings")
+    while queue or lanes:
+        while queue and len(lanes) < maxp:
+            wid, cli = queue.pop(0)
+            # lane output goes to a FILE, not a pipe: a lane chattier than the 64KB pipe
+            # buffer blocked before exit while the parent polled forever (final-audit BLOCKER)
+            os.makedirs(os.path.join(lane_dir, wid), exist_ok=True)
+            lpath = os.path.join(lane_dir, wid, f"lane-{int(time.time())}.log")
+            lf = open(lpath, "w")
+            p = subprocess.Popen([sys.executable, me, "run", wid, "--cli", cli, "--timeout", timeout],
+                                 stdout=lf, stderr=subprocess.STDOUT, text=True)
+            lanes.append((wid, cli, p, lf, lpath))
+            print(f"swarm: lane up — {wid} on {cli} (log {lpath})")
+        for wid, cli, p, lf, lpath in lanes[:]:
+            if p.poll() is None:
+                continue
+            lf.close()
+            try:
+                out = open(lpath).read()
+            except OSError:
+                out = ""
+            results[wid] = {"cli": cli, "rc": p.returncode, "tail": out[-160:].strip()}
+            lanes.remove((wid, cli, p, lf, lpath))
+            print(f"swarm: lane down — {wid} ({'clean' if p.returncode == 0 else f'rc {p.returncode}'})")
+        time.sleep(0.3)
+    failed = {w: r for w, r in results.items() if r["rc"] != 0}
+    print(f"\nswarm: {len(results) - len(failed)}/{len(results)} lanes clean")
+    for w, r in failed.items():
+        print(f"  FAILED {w} on {r['cli']} (rc {r['rc']}) — debug it as its own card:")
+        print(f"    ratchet take debug-{w[:6]} --repo <repo> --title 'debug swarm failure {w}'")
+    for w, r in results.items():
+        if r["rc"] == 0:
+            print(f"  CLEAN  {w} — delivery artifact recorded; land it: see `ratchet inbox`")
+    return 0 if not failed else 2
+
+def selftest(args):
+    """Mock-adapter proofs. No network, no models — the supervision loop itself is the target."""
+    import tempfile
+    results = []
+    # FERROX DIV-03: the mock stimuli cd to the lane's OWN worktree, which the engine exports
+    # as RATCHET_WORKTREE, rather than to a hardcoded card tree path. Upstream's linked
+    # worktree and the isolation clone are both correct values of that variable, so every case
+    # below stays behavioural and location agnostic under either workspace strategy.
+    CDW = 'cd "$RATCHET_WORKTREE"'
+    with tempfile.TemporaryDirectory(prefix="rexec-st-") as tmp:
+        # sandbox workspace: upstream + repo + card, mirroring the kernel's own selftest rig
+        up = os.path.join(tmp, "up.git"); seed = os.path.join(tmp, "seed")
+        K.run(["git", "init", "-q", "--bare", up]); K.run(["git", "init", "-q", "-b", "main", seed])
+        K.run(["git", "-C", seed, "config", "user.email", "t@t"]); K.run(["git", "-C", seed, "config", "user.name", "t"])
+        open(os.path.join(seed, "f.txt"), "w").write("x")
+        os.makedirs(os.path.join(seed, "billing"))
+        open(os.path.join(seed, "billing", "invoice.py"), "w").write("def invoice():\n    return 1\n")  # auto-grant target
+        K.run(["git", "-C", seed, "add", "."]); K.run(["git", "-C", seed, "commit", "-qm", "c0"])
+        K.run(["git", "-C", seed, "remote", "add", "origin", up]); K.run(["git", "-C", seed, "push", "-q", "origin", "main"])
+        clone = os.path.join(tmp, "clone"); K.run(["git", "clone", "-q", up, clone])
+        K.run(["git", "-C", clone, "config", "user.email", "t@t"]); K.run(["git", "-C", clone, "config", "user.name", "t"])
+        mpath = os.path.join(tmp, "m.json"); home = os.path.join(tmp, "home")
+        os.makedirs(os.path.join(home, "state"), exist_ok=True)
+        json.dump({"schema_version": 1, "min_wl_plane": "0", "repos": {"sb": {
+            "path": clone, "mainline": "main", "fetch_remote": "origin", "push_remote": "origin",
+            "gh_login": "t", "forbidden_push": [], "remotes": {"origin": up},
+            "worktree_root": os.path.join(tmp, "wts")}},
+            "noise_paths": [], "archive_dir": os.path.join(tmp, "arc"),
+            "fetch_ttl_seconds": 300, "sync_warn_behind": 1, "sync_red_behind": 50}, open(mpath, "w"))
+        env = dict(os.environ, WL_HOME=home, WL_MANIFEST=mpath, WL_INSTANCE="rexec-st")
+        kern = os.path.join(HERE, "ratchet"); me = os.path.abspath(__file__)
+        import signal
+        class _R:
+            __slots__ = ("returncode", "stdout", "stderr")
+        def sh(*a, extra=None, t=120):
+            # Capture to a FILE in a new session, wait on the DIRECT child, then killpg the group. A mock
+            # lane under test can leave a detached/bg child that inherits the output stream; with
+            # capture_output=True (a pipe) communicate() would then block past the timeout — a
+            # nondeterministic CI deadlock that hangs this whole companion (and the kernel waiting on it).
+            # A file has no write-end to hold; p.wait returns when the lane itself exits; killpg reaps the
+            # rest. Deterministic regardless of what a lane leaks.
+            with tempfile.TemporaryFile(mode="w+") as tf:
+                p = subprocess.Popen([sys.executable, *a], env={**env, **(extra or {})},
+                                     stdout=tf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                     start_new_session=True)
+                try:
+                    rc = p.wait(timeout=t)
+                except subprocess.TimeoutExpired:
+                    rc = 124
+                finally:
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        pass
+                    try:
+                        p.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                tf.seek(0); out = tf.read()
+            r = _R(); r.returncode = rc; r.stdout = out; r.stderr = ""
+            return r
+        sh(kern, "take", "exec-proof", "--repo", "sb", "--title", "exec proof")
+        cards = json.load(open(os.path.join(home, "state", "workcards.json")))["cards"]
+        wid = next(c["work_id"] for c in cards if c["slug"] == "exec-proof")
+        pre = open(os.path.join(home, "state", "workcards.json")).read()
+
+        # 1. failing agent ⇒ card state UNCHANGED (the E1 exit criterion)
+        r1 = sh(me, "run", wid, "--cli", "mock", extra={"RATCHET_MOCK_CMD": "echo boom; exit 1"})
+        post = open(os.path.join(home, "state", "workcards.json")).read()
+        results.append(("EXEC failing agent leaves card state UNCHANGED",
+                        r1.returncode == 2 and json.loads(pre)["cards"] == json.loads(post)["cards"],
+                        r1.stdout[-90:]))
+        # 2. timeout ⇒ reaped, no partial deliver
+        r2 = sh(me, "run", wid, "--cli", "mock", "--timeout", "2",
+                extra={"RATCHET_MOCK_CMD": "sleep 30"}, t=180)
+        results.append(("EXEC wall-clock cap reaps the lane",
+                        r2.returncode == 2 and "REAPED" in r2.stdout, r2.stdout[-90:]))
+        # 2b. partial-line-then-stall must NOT starve the cap (the run_card twin-loop hardening)
+        r2p = sh(me, "run", wid, "--cli", "mock", "--timeout", "2",
+                 extra={"RATCHET_MOCK_CMD": "printf partial-no-newline; sleep 30"}, t=60)
+        results.append(("EXEC wall-clock cap reaps a partial-line-then-stall lane (no readline starvation)",
+                        r2p.returncode == 2 and "REAPED" in r2p.stdout, r2p.stdout[-90:]))
+        # 3. clean pass ⇒ delivery artifact, verdict clean, NEXT points at the land gate
+        wtp = os.path.join(tmp, "wts", "wt-exec-proof")
+        r3 = sh(me, "run", wid, "--cli", "mock",
+                extra={"RATCHET_MOCK_CMD":
+                       f"{CDW} && echo work > done.txt && git add . && git commit -qm 'feat: work' && echo done"})
+        deliv = [f for f in os.listdir(os.path.join(home, "state", "recordings", wid)) if f.startswith("delivery")]
+        dj = json.load(open(os.path.join(home, "state", "recordings", wid, sorted(deliv)[-1]))) if deliv else {}
+        results.append(("EXEC clean pass delivers THROUGH the gate (never lands)",
+                        r3.returncode == 0 and dj.get("verdict") == "clean" and "ratchet land" in dj.get("next", ""),
+                        f"verdict={dj.get('verdict')}"))
+        # 3b. GUARDED_SUITE — the PR-gate sandbox primitive (ratchet-maintain routes its untrusted
+        # contributor suite through this). Reproduced-failure proofs, called as a library:
+        os.environ["GH_TOKEN"] = "ghp_" + "z" * 36
+        try:
+            gs = guarded_suite(wtp, 'test -z "$GH_TOKEN"', timeout=30)
+            results.append(("GUARDED suite cannot see GH_TOKEN (clean_env allowlist)",
+                            gs["ok"] and gs["rc"] == 0, str(gs)[-90:]))
+            gs2 = guarded_suite(wtp, 'test -n "$GH_TOKEN"', timeout=30)
+            results.append(("GUARDED control: a suite that REQUIRES the secret fails",
+                            (not gs2["ok"]) and gs2["rc"] != 0, str(gs2)[-90:]))
+        finally:
+            os.environ.pop("GH_TOKEN", None)
+        gst = guarded_suite(wtp, "sleep 30", timeout=2)
+        results.append(("GUARDED hung (silent) suite is reaped, not ok",
+                        gst["reaped"] == "timeout" and not gst["ok"] and gst["duration_s"] < 12, str(gst)[-90:]))
+        # the timeout must NOT be starvable by output — a partial line then a stall
+        gsp = guarded_suite(wtp, "printf partial-no-newline; sleep 30", timeout=2)
+        results.append(("GUARDED partial-line-then-stall is still reaped (no readline starvation)",
+                        gsp["reaped"] == "timeout" and gsp["duration_s"] < 12, str(gsp)[-90:]))
+        # a non-detached bg child holding the stdout pipe open must NOT make us wait for it
+        gsw = guarded_suite(wtp, "sleep 999999 & echo parent-done", timeout=30)
+        results.append(("GUARDED bg child holding the pipe does not stall the supervision loop",
+                        gsw["duration_s"] < 12, str(gsw)[-90:]))
+        # bg child write to a path OUTSIDE the worktree — restore cannot mask an absolute-path write,
+        # so its absence proves the GROUP SWEEP killed the child before its delayed write (not restore)
+        _bgpath = os.path.join(tmp, "BG_PWN_OUTSIDE.txt")
+        guarded_suite(wtp, "sh -c 'sleep 3; echo pwn > %s' &" % _bgpath, timeout=30)
+        results.append(("GUARDED non-detached bg child is swept before it can write (outside wt)",
+                        not os.path.exists(_bgpath), _bgpath))
+        gsh = guarded_suite(wtp, 'HD=$(git rev-parse --git-path hooks) && mkdir -p "$HD" && '
+                            "printf '#!/bin/sh\\necho PWN\\n' > \"$HD/pre-commit\" && chmod +x \"$HD/pre-commit\"",
+                            timeout=30)
+        _hp = os.path.join(_hooks_dir(wtp) or wtp, "pre-commit")
+        _hookgone = (not os.path.exists(_hp)) or ("PWN" not in open(_hp).read())
+        results.append(("GUARDED .git hook injection is flagged + reverted (RCE surface)",
+                        (not gsh["ok"]) and bool(gsh["violations"]) and _hookgone, str(gsh)[-90:]))
+        # ref tamper: MOVING/DELETING a pre-existing ref in the SHARED gitdir (what defeated the scan —
+        # mainline moved onto the PR head) is a violation + reverted. CREATING a ref is intentionally
+        # IGNORED so a concurrent gate's fresh branch in the same gitdir is never clobbered.
+        _git(wtp, "update-ref", "refs/heads/victim", "HEAD")   # a pre-existing ref at wt's own HEAD
+        _pre_refs = _refs(wtp)
+        gsr = guarded_suite(wtp, "git update-ref -d refs/heads/victim", timeout=30)
+        _post_refs = _refs(wtp)
+        results.append(("GUARDED deleting a pre-existing ref is a violation + reverted",
+                        (not gsr["ok"]) and bool(gsr["violations"]) and _post_refs == _pre_refs, str(gsr)[-90:]))
+        gsc = guarded_suite(wtp, "git update-ref refs/heads/peer HEAD", timeout=30)
+        results.append(("GUARDED a CREATED ref is not flagged (concurrency-safe: no concurrent-gate clobber)",
+                        not gsc["violations"], str(gsc)[-90:]))
+        _git(wtp, "update-ref", "-d", "refs/heads/peer")
+        _git(wtp, "update-ref", "-d", "refs/heads/victim")
+        gse = guarded_suite(wtp, "ln -s /etc/passwd ESCAPE_LINK", timeout=30)
+        results.append(("GUARDED symlink escape out of the worktree is a violation",
+                        (not gse["ok"]) and bool(gse["violations"]), str(gse)[-90:]))
+        # 4. captured stream is REDACTED (a leaking agent cannot poison the recording)
+        sh(me, "run", wid, "--cli", "mock",
+           extra={"RATCHET_MOCK_CMD": "echo api_key = 'sk-" + "z" * 24 + "'; exit 1"})
+        rdir = os.path.join(home, "state", "recordings", wid)
+        streams = "".join(open(os.path.join(rdir, f)).read() for f in os.listdir(rdir) if f.startswith("stream"))
+        results.append(("EXEC captured streams are redacted before disk",
+                        "sk-zzzz" not in streams and "[REDACTED" in streams, streams[-60:]))
+        # 5. deny-list refusal (config is policy, exec obeys it)
+        json.dump({"schema_version": 1, "deny_list": ["mock"]}, open(os.path.join(home, "state", "config.json"), "w"))
+        r5 = sh(me, "run", wid, "--cli", "mock", extra={"RATCHET_MOCK_CMD": "true"})
+        results.append(("EXEC honors the config deny-list", r5.returncode == 2 and "deny-list" in r5.stdout, r5.stdout[-70:]))
+        os.remove(os.path.join(home, "state", "config.json"))
+        # 5b. SECRET NON-LEAK (security-council CRITICAL): a secret in the parent env must NOT
+        # reach the agent — the mock echoes $GH_TOKEN and it must come back empty/redacted
+        r5s = sh(me, "run", wid, "--cli", "mock",
+                 extra={"RATCHET_MOCK_CMD": "echo TOKEN_IS=[$GH_TOKEN] KEY=[$OPENAI_API_KEY]; exit 1",
+                        "GH_TOKEN": "ghp_" + "z" * 30, "OPENAI_API_KEY": "sk-" + "z" * 30})
+        rdir = os.path.join(home, "state", "recordings", wid)
+        streams = "".join(open(os.path.join(rdir, f)).read() for f in os.listdir(rdir) if f.startswith("stream"))
+        results.append(("EXEC agent env is allowlisted — parent secrets never reach the lane",
+                        "TOKEN_IS=[]" in streams and "KEY=[]" in streams and "ghp_zzzz" not in streams,
+                        "leak check"))
+        # SANDBOX 1 — grant VIOLATION: a write outside the lane rejects the whole run, hard-restores
+        # the worktree (the forbidden file is gone), and leaves the card byte-identical
+        wtp = os.path.join(tmp, "wts", "wt-exec-proof")
+        preg = open(os.path.join(home, "state", "workcards.json")).read()
+        rg = sh(me, "run", wid, "--cli", "mock", "--grant", "allowed.txt",
+                extra={"RATCHET_MOCK_CMD":
+                       f"{CDW} && echo bad > forbidden.txt && git add . && git commit -qm 'x' && echo done"})
+        postg = open(os.path.join(home, "state", "workcards.json")).read()
+        results.append(("SANDBOX grant violation rejects the run + restores the worktree",
+                        rg.returncode == 2 and "REJECTED" in rg.stdout
+                        and not os.path.exists(os.path.join(wtp, "forbidden.txt"))
+                        and json.loads(preg)["cards"] == json.loads(postg)["cards"],
+                        rg.stdout[-90:]))
+        # SANDBOX 2 — an in-lane write passes and the delivery is stamped governed, zero violations
+        rgi = sh(me, "run", wid, "--cli", "mock", "--grant", "*.txt",
+                 extra={"RATCHET_MOCK_CMD":
+                        f"{CDW} && echo good >> ingrant.txt && git add . && git commit -qm 'y' && echo done"})
+        rdir = os.path.join(home, "state", "recordings", wid)
+        deliv = sorted(f for f in os.listdir(rdir) if f.startswith("delivery"))
+        dj2 = json.load(open(os.path.join(rdir, deliv[-1]))) if deliv else {}
+        results.append(("SANDBOX in-lane write passes + delivery marked governed",
+                        rgi.returncode == 0 and dj2.get("verdict") == "clean"
+                        and dj2.get("governed") is True and dj2.get("grant_violations") == [],
+                        f"verdict={dj2.get('verdict')} governed={dj2.get('governed')}"))
+        # SANDBOX 3 — a timed-out lane leaves NOTHING behind: its partial write is gone after reap
+        rt = sh(me, "run", wid, "--cli", "mock", "--timeout", "2",
+                extra={"RATCHET_MOCK_CMD": f"{CDW} && echo partial > partial.txt && sleep 30"}, t=180)
+        results.append(("SANDBOX reap hard-restores the worktree to snapshot",
+                        rt.returncode == 2 and "REAPED" in rt.stdout
+                        and not os.path.exists(os.path.join(wtp, "partial.txt")), rt.stdout[-90:]))
+        # DISPATCH — no --cli + no agent on PATH ⇒ the capability hierarchy refuses honestly
+        # (points at `ratchet init`), it does not crash or silently pick a missing binary
+        emptybin = os.path.join(tmp, "emptybin"); os.makedirs(emptybin, exist_ok=True)
+        rnd = sh(me, "run", wid, extra={"PATH": emptybin})
+        results.append(("DISPATCH no --cli + no agent available refuses cleanly",
+                        rnd.returncode == 2 and "no agent available" in rnd.stdout, rnd.stdout[-90:]))
+        # AUTO-GRANT — with a repo index present, a card with a confident scope auto-scopes the lane
+        # (no --grant given): exec asks ratchet-index and governs the run against the derived globs.
+        idx_bin = os.path.join(HERE, "ratchet-index")
+        if os.path.exists(idx_bin):
+            sh(idx_bin, "build", "sb")
+            sh(kern, "take", "billing-fix", "--repo", "sb", "--title", "fix the billing invoice")
+            cag = json.load(open(os.path.join(home, "state", "workcards.json")))["cards"]
+            wag = next(c["work_id"] for c in cag if c["slug"] == "billing-fix")
+            wtag = os.path.join(tmp, "wts", "wt-billing-fix")
+            rag = sh(me, "run", wag, "--cli", "mock",  # NO --grant → index scopes it
+                     extra={"RATCHET_MOCK_CMD": f"{CDW} && echo w > billing/new.py && git add . && git commit -qm x && echo done"})
+            rd = os.path.join(home, "state", "recordings", wag)
+            dag = json.load(open(os.path.join(rd, sorted(f for f in os.listdir(rd) if f.startswith("delivery"))[-1])))
+            results.append(("AUTO-GRANT: repo index scopes the lane when no --grant is given",
+                            rag.returncode == 0 and dag.get("governed") is True
+                            and dag.get("grant") and "billing/**" in dag["grant"]
+                            and dag.get("grant_source") == "auto-index" and "auto-scoped" in rag.stdout,
+                            f"grant={dag.get('grant')} src={dag.get('grant_source')}"))
+            # cross-audit: exec VALIDATES the index's output — a wide/escaping glob is never trusted
+            results.append(("AUTO-GRANT validates index globs (rejects **, absolute, ..)",
+                            _valid_autogrant(["billing/**"]) and not _valid_autogrant(["**"])
+                            and not _valid_autogrant(["/etc/**"]) and not _valid_autogrant(["../x/**"])
+                            and not _valid_autogrant("billing/**") and not _valid_autogrant([]), ""))
+            # cross-audit: a --no-auto-grant smuggled in the agent PAYLOAD does not disable governance
+            rpl = sh(me, "run", wag, "--cli", "mock", "--prompt-extra", "--no-auto-grant",
+                     extra={"RATCHET_MOCK_CMD": f"{CDW} && echo w >> billing/new.py && git add . && git commit -qm y && echo done"})
+            dp = json.load(open(os.path.join(rd, sorted(f for f in os.listdir(rd) if f.startswith("delivery"))[-1])))
+            results.append(("AUTO-GRANT: --no-auto-grant in the payload can't disable governance",
+                            dp.get("grant_source") == "auto-index", f"src={dp.get('grant_source')}"))
+        # ── wave-1 cross-audit hardening proofs (each pins a confirmed council finding) ──
+        # AUDIT-1 · .git hooks RCE surface: injecting a hook into the RESOLVED hooks dir (the common
+        # gitdir — a worktree's .git is a file) is a violation even under a matching grant, and the
+        # injected hook is stripped on restore. The agent locates it exactly as git does.
+        hooksdir = os.path.join(clone, ".git", "hooks")
+        rga = sh(me, "run", wid, "--cli", "mock", "--grant", "*",
+                 extra={"RATCHET_MOCK_CMD":
+                        f"{CDW} && HD=$(git rev-parse --git-path hooks) && mkdir -p \"$HD\" && "
+                        "printf '#!/bin/sh\\necho HOOKPWN\\n' > \"$HD/pre-commit\" && chmod +x \"$HD/pre-commit\" && echo done"})
+        hp = os.path.join(hooksdir, "pre-commit")
+        hookbody = open(hp).read() if os.path.exists(hp) else ""
+        results.append(("AUDIT .git hooks tamper is rejected + reverted (added or overwritten)",
+                        rga.returncode == 2 and "REJECTED" in rga.stdout and "HOOKPWN" not in hookbody,
+                        rga.stdout[-90:]))
+        # AUDIT-2 · symlink escape: an in-grant symlink pointing outside the worktree is a violation
+        outside = os.path.join(tmp, "outside_target"); open(outside, "w").write("host")
+        rsy = sh(me, "run", wid, "--cli", "mock", "--grant", "*",
+                 extra={"RATCHET_MOCK_CMD": f"{CDW} && ln -s {outside} escape && echo done"})
+        results.append(("AUDIT symlink escaping the worktree is a violation",
+                        rsy.returncode == 2 and "REJECTED" in rsy.stdout
+                        and not os.path.islink(os.path.join(wtp, "escape"))
+                        and open(outside).read() == "host",  # external target untouched
+                        rsy.stdout[-90:]))
+        # AUDIT-2b · non-ASCII filename must NOT defeat containment: default git C-quotes such a name
+        # (`"caf\303\251_escape"`) so a literal-string parse would look up a name that doesn't exist
+        # and pass the symlink escape through as `clean`. -z parsing hits the REAL file. Same escape,
+        # café name: rejected AND removed on restore.
+        outside2 = os.path.join(tmp, "outside_target2"); open(outside2, "w").write("host2")
+        nm = "café_escape"
+        r2b = sh(me, "run", wid, "--cli", "mock", "--grant", "*",
+                 extra={"RATCHET_MOCK_CMD": f"{CDW} && ln -s {outside2} '{nm}' && echo done"})
+        results.append(("AUDIT non-ASCII symlink escape is a violation + restored (quotePath bypass closed)",
+                        r2b.returncode == 2 and "REJECTED" in r2b.stdout
+                        and not os.path.islink(os.path.join(wtp, nm))
+                        and not os.path.exists(os.path.join(wtp, nm))
+                        and open(outside2).read() == "host2",
+                        r2b.stdout[-90:]))
+        # AUDIT-3 · rename bypass: `git mv` of a forbidden file counts the SOURCE, not just the dest
+        sh(me, "run", wid, "--cli", "mock", "--grant", "*",  # seed a tracked forbidden.py in-lane
+           extra={"RATCHET_MOCK_CMD": f"{CDW} && echo x > forbidden.py && git add . && git commit -qm seed && echo done"})
+        rmv = sh(me, "run", wid, "--cli", "mock", "--grant", "allowed.py",
+                 extra={"RATCHET_MOCK_CMD": f"{CDW} && git mv forbidden.py allowed.py && git commit -qm mv && echo done"})
+        results.append(("AUDIT rename counts the vacated source path (git mv bypass closed)",
+                        rmv.returncode == 2 and "REJECTED" in rmv.stdout
+                        and os.path.exists(os.path.join(wtp, "forbidden.py")),  # restored
+                        rmv.stdout[-90:]))
+        # AUDIT-4 · history evasion: add-then-remove nets to zero in a plain diff but is in history
+        rhx = sh(me, "run", wid, "--cli", "mock", "--grant", "keep.txt",
+                 extra={"RATCHET_MOCK_CMD":
+                        f"{CDW} && echo s > secret.txt && git add . && git commit -qm add && "
+                        f"git rm -q secret.txt && git commit -qm del && echo done"})
+        results.append(("AUDIT add-then-remove (net-zero diff) is still caught via history",
+                        rhx.returncode == 2 and "REJECTED" in rhx.stdout, rhx.stdout[-90:]))
+        # AUDIT-5 · pre-run UNTRACKED file is preserved across a failed run (clean -fd would nuke it)
+        keep = os.path.join(wtp, "user_local.txt"); open(keep, "w").write("mine")
+        rpr = sh(me, "run", wid, "--cli", "mock", "--timeout", "2",
+                 extra={"RATCHET_MOCK_CMD": f"{CDW} && echo junk > agent_tmp.txt && sleep 30"}, t=180)
+        results.append(("AUDIT pre-run untracked file survives restore; agent's is removed",
+                        "REAPED" in rpr.stdout and os.path.exists(keep)
+                        and open(keep).read() == "mine"
+                        and not os.path.exists(os.path.join(wtp, "agent_tmp.txt")), rpr.stdout[-90:]))
+        os.remove(keep)  # tidy so it doesn't pollute later proofs
+        # AUDIT-6 · .git/config tamper: injecting core.hooksPath into the local config is DETECTED
+        # (run rejected) AND the config file is reverted byte-for-byte on restore. A pre-seeded
+        # multi-valued key must survive the restore (byte-restore preserves it; a semantic git-config
+        # rewrite would not — that fidelity concern was why this was deferred).
+        cfgp = os.path.join(clone, ".git", "config")
+        subprocess.run(["git", "-C", clone, "config", "--add", "ratchet.canary", "one"], check=True)
+        subprocess.run(["git", "-C", clone, "config", "--add", "ratchet.canary", "two"], check=True)
+        cfg_before = open(cfgp).read()
+        rcf = sh(me, "run", wid, "--cli", "mock", "--grant", "*",
+                 extra={"RATCHET_MOCK_CMD": f"{CDW} && git config --add core.hooksPath /tmp/evilhooks && echo done"})
+        cfg_after = open(cfgp).read()
+        results.append(("AUDIT .git/config tamper is rejected + reverted byte-for-byte (multi-valued keys kept)",
+                        rcf.returncode == 2 and "REJECTED" in rcf.stdout
+                        and "evilhooks" not in cfg_after and cfg_after == cfg_before
+                        and cfg_after.count("canary") >= 2,
+                        rcf.stdout[-90:]))
+        subprocess.run(["git", "-C", clone, "config", "--unset-all", "ratchet.canary"],
+                       stderr=subprocess.DEVNULL)  # tidy so it doesn't pollute later proofs
+        # 6. E4 swarm: two parallel mock lanes — one clean, one failing; report names both,
+        # neither corrupts state, and the failure suggests its debug card
+        sh(kern, "take", "sw-a", "--repo", "sb", "--title", "swarm a")
+        sh(kern, "take", "sw-b", "--repo", "sb", "--title", "swarm b")
+        cards2 = json.load(open(os.path.join(home, "state", "workcards.json")))["cards"]
+        wa = next(c["work_id"] for c in cards2 if c["slug"] == "sw-a")
+        wb = next(c["work_id"] for c in cards2 if c["slug"] == "sw-b")
+        wta = os.path.join(tmp, "wts", "wt-sw-a")
+        mock = (f"if [ \"$RATCHET_CARD\" = \"{wa}\" ]; then {CDW} && echo w > w.txt && git add . "
+                f"&& git commit -qm 'feat: swarm work' && exit 0; else sleep 1; exit 1; fi")
+        r6 = sh(me, "swarm", "--cards", f"{wa},{wb}", "--clis", "mock,mock", "--timeout", "60",
+                extra={"RATCHET_MOCK_CMD": mock}, t=300)
+        cards3 = json.load(open(os.path.join(home, "state", "workcards.json")))["cards"]
+        both_open = all(c["status"] == "open" for c in cards3 if c["slug"] in ("sw-a", "sw-b"))
+        results.append(("SWARM runs parallel lanes; failure isolated + debug card suggested",
+                        r6.returncode == 2 and "1/2 lanes clean" in r6.stdout
+                        and f"FAILED {wb}" in r6.stdout and "debug-" in r6.stdout and both_open,
+                        r6.stdout[-140:]))
+        # 7. a lane NOISIER than the pipe buffer must not deadlock the swarm (final-audit
+        # BLOCKER: stdout=PIPE read only after exit blocked chatty children forever)
+        try:
+            r7 = sh(me, "swarm", "--cards", wb, "--clis", "mock", "--timeout", "120",
+                    extra={"RATCHET_MOCK_CMD": "seq 1 8000 | sed 's/^/noise padding line number /'"}, t=240)
+            ok7 = r7.returncode == 0 and "1/1 lanes clean" in r7.stdout
+            det7 = r7.stdout[-90:]
+        except subprocess.TimeoutExpired:
+            ok7, det7 = False, "DEADLOCKED — pipe-buffer hang reproduced"
+        results.append(("SWARM survives a lane noisier than the pipe buffer", ok7, det7))
+
+    passed = sum(1 for _, okv, _ in results if okv)
+    for label, okv, detail in results:
+        print(f"  {'OK  ' if okv else 'FAIL'}  {label}" + ("" if okv else f" — {detail}"))
+    print(f"\n  ratchet-exec selftest: {passed}/{len(results)}")
+    return 0 if passed == len(results) else 2
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__); return 0
+    if args[0] == "run":
+        return run_card(args[1:])
+    if args[0] == "swarm":
+        return swarm(args[1:])
+    if args[0] == "selftest":
+        return selftest(args[1:])
+    print(f"ratchet-exec: unknown verb '{args[0]}'", file=sys.stderr); return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

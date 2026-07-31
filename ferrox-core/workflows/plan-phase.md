@@ -1553,6 +1553,39 @@ If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable
 - If `hook.blocking == false` (advisory): if `GATE_RESULT.block == true` or non-empty `table`/`summary`, output the gap table and continue. Advisory gates never block phase completion.
 - If `hook.blocking == true` and `GATE_RESULT.block == false`: continue silently.
 
+## 13f. Parallelism Recommendation (how this phase should be executed)
+
+The plans exist now, so the shape of the phase is finally knowable. **End planning by
+telling the user which execution mode fits, recommendation first**, rather than leaving
+them to ask.
+
+```bash
+# Canonical resolver, see ferrox-core/references/ferrox-script-resolver.md.
+# RUNTIME_DIR first, then the project tree, then the install root per runtime.
+ferrox_script() { _n="$1"; _p="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; for _c in "${_p}/scripts/${_n}" "${_p}/.claude/scripts/${_n}" "${_p}/.codex/scripts/${_n}" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/${_n}" "${HERMES_HOME:-$HOME/.hermes}/scripts/${_n}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}/scripts/${_n}" "${CODEX_HOME:-$HOME/.codex}/scripts/${_n}" "${GEMINI_CONFIG_DIR:-$HOME/.gemini}/scripts/${_n}" "${COPILOT_CONFIG_DIR:-$HOME/.copilot}/scripts/${_n}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}/scripts/${_n}" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}/scripts/${_n}" "${TRAE_CONFIG_DIR:-$HOME/.trae}/scripts/${_n}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}/scripts/${_n}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}/scripts/${_n}" "${CLINE_CONFIG_DIR:-$HOME/.cline}/scripts/${_n}" "${GROK_AGENTS_HOME:-$HOME/.agents}/scripts/${_n}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}/scripts/${_n}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}/scripts/${_n}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}/scripts/${_n}"; do [ -f "$_c" ] && { printf '%s\n' "$_c"; return 0; }; done; printf '%s\n' "${_p}/scripts/${_n}"; return 1; }
+VERDICT=$(ferrox_script parallelism-verdict.cjs)
+node "$VERDICT" "${PHASE_NUMBER}" 2>/dev/null || true
+```
+
+Print its output verbatim. It leads with `Recommendation:` on line 1 and the reason on
+line 2, then the 2 options, then the measures that back the pick. **Do not reorder it and
+do not summarise the pick away.** The order is the point: the pick is read first and the
+numbers back it up.
+
+Then add 1 line naming how to act on it, using the words a person would actually type:
+
+```
+Run it that way with: /ferrox-execute-phase {PHASE_NUMBER} --fleet
+Or just say: "build phase {PHASE_NUMBER} with the ferrox fleet"
+Inline instead: /ferrox-execute-phase {PHASE_NUMBER} --inline, or "run it inline"
+```
+
+**Report the verdict, never act on it here.** Planning does not choose the backend;
+`/ferrox-execute-phase` does, through its own switch, which is where the availability
+check, the refusal and the echo live. If the verdict cannot read the phase graph it exits
+non zero and prints why: say so in 1 line and continue. A missing recommendation never
+blocks planning from completing.
+
 ## 14. Present Final Status
 
 Route to `<offer_next>` OR `auto_advance` depending on flags/config.
