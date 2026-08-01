@@ -20,7 +20,7 @@
  * path and the size unchanged and is still a write.
  *
  * THE FIRING ARM IS THE POINT OF THE FILE. Without it, a `snapshotTree` that
- * returned a constant would make all 3 view arms pass while measuring nothing,
+ * returned a constant would make EVERY view arm pass while measuring nothing,
  * which is the recorded failure where a guard reported green because a nested
  * runner swallowed its exit code. So a variant entry point that performs
  * exactly 1 write is driven through the IDENTICAL comparison and the comparison
@@ -114,7 +114,7 @@ function diffSnapshots(before, after) {
 }
 
 /**
- * The comparison, as ONE function, so the 3 view arms and the firing arm are
+ * The comparison, as ONE function, so every view arm and the firing arm are
  * driven through IDENTICAL code. If the view arms used a different comparison
  * from the firing arm, the firing arm would prove nothing about them.
  */
@@ -167,16 +167,34 @@ function planText(plan, wave, dependsOn) {
 }
 
 /**
- * A scratch tree carrying REAL input for all 3 views: a run log the board and
- * the fold can read, and a phase directory the graph scan can index. A tree
- * with no input would drive every view down its unavailable path, and an
+ * A scratch tree carrying REAL input for every view: a run log the board and
+ * the fold can read, a phase directory the graph scan can index, the write lane
+ * files that scan really reaches, and the TRIAGE LEDGER the findings view reads.
+ * A tree with no input would drive every view down its unavailable path, and an
  * unavailable panel that writes nothing proves nothing about a panel that
  * renders.
+ *
+ * WHY THE LANE FILES AND THE PACKAGE MARKER ARE HERE. Without them the scan has
+ * no language to detect and no endpoint to open, so every declared edge comes
+ * back UNPROVEN and the findings view renders an empty population. It would then
+ * write nothing for the uninteresting reason that it found nothing. With them
+ * the shipped scan really adjudicates the edge as UNBACKED, and the findings arm
+ * measures a view that rendered a real finding.
+ *
+ * WHY THE LEDGER IS HERE. The findings view READS a file no other view reads. A
+ * scratch tree without it would exercise the absent path only, and the read only
+ * property would be proven for every path except the new one.
  */
 function buildScratchTree(tag) {
   const root = makeScratchRoot(tag);
   const phaseDir = path.join(root, '.planning', 'phases', '21-glass-scratch');
   fs.mkdirSync(phaseDir, { recursive: true });
+  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'package.json'),
+    `${JSON.stringify({ name: 'glass-scratch', version: '0.0.0' })}\n`,
+    'utf8',
+  );
   fs.writeFileSync(
     path.join(root, '.planning', 'fleet-runlog.jsonl'),
     `${RUN_EVENTS.map((event) => JSON.stringify(event)).join('\n')}\n`,
@@ -184,6 +202,22 @@ function buildScratchTree(tag) {
   );
   fs.writeFileSync(path.join(phaseDir, '21-01-PLAN.md'), planText('01', 1, []), 'utf8');
   fs.writeFileSync(path.join(phaseDir, '21-02-PLAN.md'), planText('02', 2, ['21-01']), 'utf8');
+  // The 2 write lane files, with NO import between them, so the declared edge is
+  // adjudicated unbacked rather than left unproven.
+  fs.writeFileSync(path.join(root, 'scripts', 'scratch-01.cjs'), "'use strict';\n", 'utf8');
+  fs.writeFileSync(path.join(root, 'scripts', 'scratch-02.cjs'), "'use strict';\n", 'utf8');
+  fs.writeFileSync(
+    path.join(root, '.planning', 'GRAPH-TRIAGE.md'),
+    [
+      '# Graph triage ledger',
+      '',
+      '| phase | dependent | prerequisite | disposition | note |',
+      '|---|---|---|---|---|',
+      '| 21 | 21-02 | 21-01 | untriaged | |',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
   return root;
 }
 
@@ -195,16 +229,24 @@ function runGlass(args, root) {
 }
 
 /**
- * The 4 views, each with the token that proves it really rendered.
+ * The 5 views, each with the token that proves it really rendered.
  *
  * The watch view is here with a BOUNDED frame count and a short interval. A
  * poll is a read repeated, so a loop that reads 3 times must leave the tree
  * exactly as still as a view that reads once. Its token is the concurrency
  * counter, which is the 1 line the whole view exists to paint, so an arm that
  * saw a header and no counter does not count as a render.
+ *
+ * THE FINDINGS VIEW IS HERE BECAUSE IT READS A FILE NO OTHER VIEW READS. Its
+ * token is the triage counter with a population of 1, which is 1 token proving
+ * 2 things at once: the sweep really adjudicated the declared edge as unbacked,
+ * and the ledger really was opened. A view that failed to open the ledger would
+ * paint no counter at all, and a view that found no unbacked edge would paint a
+ * population of 0.
  */
 const VIEWS = [
   { name: 'the graph view', args: ['graph', '21'], token: '21-01' },
+  { name: 'the findings view', args: ['findings'], token: 'triaged 0 of 1' },
   { name: 'the lease view', args: ['leases'], token: 'epoch 2' },
   { name: 'the ask view', args: ['asks'], token: '(Recommended)' },
   {
@@ -215,7 +257,7 @@ const VIEWS = [
 ];
 
 /* ------------------------------------------------------------------------ *
- * 1. The 3 views leave the tree byte identical
+ * 1. EVERY view leaves the tree byte identical
  * ------------------------------------------------------------------------ */
 
 for (const view of VIEWS) {
@@ -284,7 +326,10 @@ test('the watch view POLLS 3 times and still writes NOTHING to the tree', () => 
   assertTreeUnchanged('the watch view polling 3 times', before, after);
 });
 
-test('all 4 views run in sequence leave the tree byte identical', () => {
+// The name carries NO transcribed count. A count written into a string is
+// exactly the class of sentence phase 26 exists to stop shipping, and this file
+// grew a 5th view for that phase.
+test('EVERY view run in sequence leaves the tree byte identical', () => {
   const root = buildScratchTree('sequence');
   const before = snapshotTree(root);
   assert.ok(before.length > 0, 'NON ZERO tree');
@@ -298,7 +343,7 @@ test('all 4 views run in sequence leave the tree byte identical', () => {
   }
   assert.equal(rendered, VIEWS.length, 'NON ZERO and every view ran');
 
-  assertTreeUnchanged('the 3 views in sequence', before, snapshotTree(root));
+  assertTreeUnchanged(`the ${VIEWS.length} views in sequence`, before, snapshotTree(root));
 });
 
 /* ------------------------------------------------------------------------ *
@@ -344,7 +389,7 @@ test('THE FIRING ARM: a write happy variant is OBSERVED FAILING the same compari
 
   const after = snapshotTree(root);
 
-  // The IDENTICAL comparison the 3 view arms use, observed FAILING.
+  // The IDENTICAL comparison every view arm uses, observed FAILING.
   let observed = null;
   try {
     assertTreeUnchanged('the write happy variant', before, after);
@@ -355,7 +400,7 @@ test('THE FIRING ARM: a write happy variant is OBSERVED FAILING the same compari
   assert.ok(
     observed !== null,
     'THE COMPARISON MUST FIRE. If it passes here, then a snapshotTree that '
-      + 'returned a constant would make all 3 view arms green while measuring nothing.',
+      + 'returned a constant would make every view arm green while measuring nothing.',
   );
   assert.match(observed, /fleet-runlog\.jsonl/, 'the failure NAMES the file that was written');
   assert.match(observed, /APPEARED OR CHANGED|VANISHED OR CHANGED/, 'it names the kind of change');

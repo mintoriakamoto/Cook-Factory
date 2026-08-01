@@ -187,6 +187,42 @@ test('the 3 verdicts render with 3 DISTINCT wordings', () => {
   );
 });
 
+/**
+ * THE CLASS GUARD. Phase 25 widened `DEFAULT_SCAN_ROOTS` from 1 root to 5, and
+ * the sentence in `VERDICT_WORDING.unproven` naming `src` went from true to
+ * FALSE without a single test turning red, because A MUTATION BATTERY CANNOT
+ * DETECT A FALSE SENTENCE (FF-B284): a false sentence survives every mutant,
+ * since it is prose and not code.
+ *
+ * So this arm reads the SHIPPED wordings and fails on the CLASS of claim that
+ * rotted, a wording that TRANSCRIBES a scan root rather than deferring to a
+ * value derived from the scan. It was driven against the shipped false string
+ * and OBSERVED FAILING before the fix landed, so it is known to be able to fire
+ * rather than merely known to be green.
+ */
+test('CLASS GUARD: no shipped wording transcribes a specific scan root', () => {
+  const inspected = [
+    ...Object.entries(glass.VERDICT_WORDING).map(([key, value]) => [`VERDICT_WORDING.${key}`, value]),
+    ...Object.entries(glass.REASON_WORDING ?? {}).map(([key, value]) => [`REASON_WORDING.${key}`, value]),
+  ];
+  if (typeof glass.REASON_WORDING_UNKNOWN === 'string') {
+    inspected.push(['REASON_WORDING_UNKNOWN', glass.REASON_WORDING_UNKNOWN]);
+  }
+  // Vacuity: "no wording asserts a scan root" is TRUE of 0 wordings.
+  assert.ok(inspected.length > 0, 'NON ZERO wordings inspected before any claim about them');
+
+  const ROOT_CLAIM = /scan roots?\s+(is|are)/i;
+  for (const [name, value] of inspected) {
+    assert.equal(typeof value, 'string', `${name} is a string`);
+    assert.ok(
+      !ROOT_CLAIM.test(value),
+      `${name} transcribes a scan root: ${JSON.stringify(value)}. `
+        + 'The roots are configuration and they already moved once. The cause belongs '
+        + 'to the per edge reason, which is derived from the scan and cannot rot.',
+    );
+  }
+});
+
 test('an unproven edge is worded as the instrument REACH, never as a defect', () => {
   const document = graphDocument({
     edges: [{
@@ -210,6 +246,95 @@ test('an unproven edge is worded as the instrument REACH, never as a defect', ()
       `unproven is not worded with "${defectWord}"`,
     );
   }
+});
+
+/**
+ * Whitespace flattened, because the renderer breaks a wording into 1 line per
+ * sentence and indents each. Comparing the raw panel against the constant would
+ * measure the LINE BREAKS rather than the claim.
+ */
+function flat(value) {
+  return String(value).replace(/\s+/g, ' ');
+}
+
+/** An unproven edge carrying the reason slug given, for the reason arms below. */
+function unprovenEdgeDocument(reason) {
+  return graphDocument({
+    edges: [{
+      from: '21-05', to: '21-01', declared: true, verdict: 'unproven',
+      backing: [], evidence: [], unproven_reason: reason,
+    }],
+  });
+}
+
+test('EVERY member of the shipped reason vocabulary is worded, and there are 3 of them', () => {
+  // Driven FROM the export and never from a literal list, so a 4th reason added
+  // later turns this red instead of shipping unworded. And the COUNT is
+  // asserted as well as the coverage, because "every reason is worded" is
+  // vacuously TRUE of 0 reasons.
+  const lib = require(path.join(LIB_DIR, 'workgraph.cjs'));
+  const reasons = [...lib.UNPROVEN_REASONS];
+  assert.equal(reasons.length, 3, 'the shipped vocabulary has 3 members, so 3 wordings are owed');
+  assert.deepEqual(
+    reasons.slice().sort(),
+    Object.keys(glass.REASON_WORDING).sort(),
+    'glass words exactly the reasons the shipped scan can emit, no more and no fewer',
+  );
+
+  // THE CONSUMER ARM. A constant nobody reads is invisible to a mutation
+  // battery, so every member is asserted through the RENDERED OUTPUT.
+  for (const reason of reasons) {
+    const text = textOf(glass.renderGraphView(unprovenEdgeDocument(reason)));
+    assert.ok(text.includes(reason), `the ${reason} slug is carried through verbatim`);
+    assert.ok(
+      flat(text).includes(flat(glass.REASON_WORDING[reason])),
+      `the ${reason} wording reaches the panel, not just the map`,
+    );
+  }
+});
+
+test('an UNKNOWN reason renders the fallback sentence and NEVER a bare slug', () => {
+  // The REQUIRED FAILING ARM. Driven once against the bare slug renderer this
+  // plan replaced, and OBSERVED FAILING, so it is known to be able to fire.
+  for (const slug of ['not-a-real-reason', 'constructor', 'toString']) {
+    const lines = glass.renderGraphView(unprovenEdgeDocument(slug));
+    const text = textOf(lines);
+    assert.ok(text.includes(slug), 'the unknown slug is still carried through for a bug report');
+    assert.ok(
+      flat(text).includes(flat(glass.REASON_WORDING_UNKNOWN)),
+      `an unworded reason states that the view cannot word it: ${slug}`,
+    );
+    assert.ok(
+      !lines.some((line) => line.trim() === slug),
+      'no line whose only content is the slug: that is a view that has stopped '
+        + 'reporting it does not understand its own input',
+    );
+  }
+});
+
+test('the dynamic specifier reason is an ADMISSION by the instrument, not an accusation', () => {
+  const text = textOf(glass.renderGraphView(unprovenEdgeDocument('dynamic-specifier-unresolved')));
+
+  // It is the largest unproven population in the graph, so wording it as a
+  // defect would put a false accusation in front of a human once per edge.
+  assert.match(text, /was read/i, 'it states the file WAS read, which is the whole distinction');
+  assert.match(text, /run time/i, 'and that the specifier is computed at run time');
+  for (const accusation of ['fault', 'blame', 'error', 'invalid', 'broken', 'should have']) {
+    assert.ok(
+      !text.toLowerCase().includes(accusation),
+      `the reason panel attributes no "${accusation}" to the planner`,
+    );
+  }
+  // And it does not claim the edge is unproven because of a root that, since
+  // phase 25, now includes the file.
+  assert.ok(
+    !/scan roots?\s+(is|are)/i.test(text),
+    'the rendered panel transcribes no scan root either',
+  );
+  assert.ok(
+    !text.includes('src, scripts, tests, hooks, ferrox-core'),
+    'the configured roots are read from the scan, never baked into a sentence',
+  );
 });
 
 test('an unbacked edge renders as a finding about the PLANNER', () => {
@@ -681,14 +806,25 @@ test('the CLI names the MISSING RUN LOG PATH rather than rendering an empty boar
   }
 });
 
-test('the CLI refuses an unknown verb and names the 4 views', () => {
+test('the CLI refuses an unknown verb and names EVERY view it has', () => {
   const run = runCli(['sideways']);
   const out = `${run.stdout}${run.stderr}`;
   assert.notEqual(run.status, 0, 'an unknown verb exits non zero');
-  for (const verb of ['graph', 'leases', 'asks', 'watch']) {
+
+  // THE COUNT IS DERIVED FROM THE LIST rather than transcribed beside it. This
+  // arm already fired twice for the same reason, once when the watch view landed
+  // and once when phase 26 added findings, and each time the fix moved the
+  // transcribed number by 1 and left the class of defect standing. A count read
+  // off the list it counts cannot disagree with it.
+  const VERBS = ['graph', 'findings', 'leases', 'asks', 'watch'];
+  let named = 0;
+  for (const verb of VERBS) {
     assert.ok(out.includes(verb), `the usage names the ${verb} view`);
+    named += 1;
   }
-  // The COUNT in the refusal is a fact about this CLI, so it is asserted rather
-  // than left to drift the way it did when the watch view was added.
-  assert.match(out, /has 4 views/, 'the refusal counts the views correctly');
+  assert.equal(named, VERBS.length, 'NON ZERO and every verb was checked');
+  assert.ok(
+    out.includes(`has ${VERBS.length} views`),
+    `the refusal counts the views correctly: ${VERBS.length}`,
+  );
 });

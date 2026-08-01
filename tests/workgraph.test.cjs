@@ -604,7 +604,17 @@ test('the assembler emits every contract key, and a zero node phase is not an er
   assert.deepEqual(doc.seam_gaps, []);
   assert.deepEqual(doc.unresolved_imports, []);
   assert.deepEqual(doc.warnings, [], 'an unplanned phase is a legitimate state, not a warning');
-  assert.deepEqual(doc.scan, { files: 0, edges: 0, external: 0, out_of_root: 0 });
+  // `folded` and `unfolded` joined the contract in phase 27. They are additive
+  // counters over the closed grammar specifier folder, and every reader of this
+  // block names its keys, so no schema version moves for them.
+  assert.deepEqual(doc.scan, {
+    files: 0,
+    edges: 0,
+    external: 0,
+    out_of_root: 0,
+    folded: 0,
+    unfolded: 0,
+  });
   assert.deepEqual(doc.generated.scan_roots, ['src']);
 });
 
@@ -1283,9 +1293,16 @@ const KNOWN_ANSWERS = [
     evidence: ['both write lanes name docs/INVENTORY-MANIFEST.json'],
   },
   {
+    // RE-BASELINED by phase 25, and the change of reason is the point. Before
+    // widening, this edge was unprovable because the scan could not REACH its
+    // lane. Now the lane is read, and the edge is unprovable for a different and
+    // more precise reason: the file carries a dynamic specifier the scan cannot
+    // follow. The verdict stays `unproven` either way, which is the honest
+    // answer in both worlds, and is exactly why this edge must never become
+    // `unbacked`.
     label: 'A4 04-06 to 04-05',
     phase: '04', from: '04-06', to: '04-05',
-    verdict: 'unproven', backing: [], evidence: [], reason: 'out-of-scan-scope',
+    verdict: 'unproven', backing: [], evidence: [], reason: 'dynamic-specifier-unresolved',
   },
 ];
 
@@ -1376,7 +1393,14 @@ test('the unresolved list is non-empty on this repository and names only real mi
   assert.ok(document.unresolved_imports.length > 0, 'the scan reports what it could not resolve');
   for (const miss of document.unresolved_imports) {
     assert.equal(miss.reason, 'no-file-resolves');
-    assert.ok(miss.from.startsWith('src/'), `the miss is reported against a scanned file: ${miss.from}`);
+    // Derived from the shipped scan roots rather than pinned to `src/`, because
+    // phase 25 widened what "a scanned file" means. The claim being tested is
+    // that a miss is only ever reported against a file the scan actually READ,
+    // which is what makes the unresolved list a finding rather than noise.
+    assert.ok(
+      SCAN.DEFAULT_SCAN_ROOTS.some((root) => miss.from.startsWith(`${root}/`)),
+      `the miss is reported against a scanned file: ${miss.from}`,
+    );
   }
 });
 
@@ -1516,10 +1540,13 @@ test('the JavaScript only vocabulary indexes nothing at all in a cargo workspace
   });
 
   assert.deepEqual(walk.files, [], 'no file in a cargo workspace carries a JavaScript extension');
+  // Derived from the shipped constant rather than hardcoded, so widening the
+  // root list in a later phase re-baselines this arm automatically instead of
+  // failing it for a reason that has nothing to do with what it is testing.
   assert.deepEqual(
     walk.unreadable.slice().sort(),
-    ['scripts', 'src'],
-    'and neither JavaScript root exists in this tree',
+    SCAN.DEFAULT_INDEX_ROOTS.slice().sort(),
+    'and none of the JavaScript roots exists in this tree',
   );
   assert.equal(scanned.import_edges.length, 0, 'so the import graph contributes ZERO edges');
   assert.equal(scanned.counts.files, 0, 'zero files were read');
@@ -1681,10 +1708,15 @@ test('this repository still detects 1 language and indexes exactly what it alway
   assert.deepEqual(profile.scanRoots, SCAN.DEFAULT_SCAN_ROOTS);
   assert.deepEqual(profile.extensions, SCAN.INDEXED_EXTENSIONS);
 
-  // The historical constants themselves, so a later edit to the profile cannot
-  // move them without this arm saying so.
-  assert.deepEqual(SCAN.DEFAULT_INDEX_ROOTS, ['src', 'scripts']);
-  assert.deepEqual(SCAN.DEFAULT_SCAN_ROOTS, ['src']);
+  // The constants themselves, so a later edit to the profile cannot move them
+  // without this arm saying so. Phase 25 widened both lists from ['src','scripts']
+  // indexed and ['src'] scanned, and this arm reported that change as designed.
+  // THE 2 LISTS MUST MATCH: them disagreeing was the defect, because index roots
+  // decide what a specifier may resolve TO while scan roots decide whose imports
+  // are ever PARSED.
+  const PHASE_25_ROOTS = ['src', 'scripts', 'tests', 'hooks', 'ferrox-core'];
+  assert.deepEqual(SCAN.DEFAULT_INDEX_ROOTS, PHASE_25_ROOTS);
+  assert.deepEqual(SCAN.DEFAULT_SCAN_ROOTS, PHASE_25_ROOTS);
   assert.deepEqual(SCAN.INDEXED_EXTENSIONS, ['.cts', '.mts', '.ts', '.cjs', '.mjs', '.js']);
 });
 

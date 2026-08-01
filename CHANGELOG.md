@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.17.0 (2026-08-01): Graph engineering
+
+Ferrox computed 3 correct signals that nothing read. The adjudicator that scores a
+phase's declared dependencies could only see `src/`, which is 258 files of the 860
+it can reach. `commit_stale` was computed and consumed by nobody, so a graph 30
+commits behind but 3 hours old read as fresh. Offer outcomes were folded by a
+tested function that no shipped surface ever wrote a row for. This release connects
+them, and measures whether any of it helps.
+
+**The scanner reads the repository.** Both the index roots and the scan roots now
+cover `src`, `scripts`, `tests`, `hooks` and `ferrox-core`. Those 2 lists
+disagreeing was the defect: index roots decide what a specifier may resolve TO,
+scan roots decide whose imports are ever PARSED, so `scripts/` files were legal
+targets whose own `require` calls nobody read.
+
+**It stopped manufacturing false accusations.** Widening alone would have called 30
+edges `unbacked`. 21 of them rest on `require(CONSTANT)` the scanner cannot follow:
+real dependencies the instrument could not see, not fictional ones a planner
+invented. Those now degrade to `unproven` with a named reason, and a constant
+folder resolves the statically resolvable ones into ordinary import edges. 123 of
+176 dynamic sites now fold. The genuinely unbacked population is 9.
+
+**The findings reach a human.** `fleet-glass findings` sweeps every phase carrying
+a graph in 1 read and names, for each unbacked edge, the dependent, the
+prerequisite, and what the scan looked for and did not find. It counts how many a
+human has triaged, and an absent ledger reports that nothing was read rather than
+reporting 0 triaged, because those are 2 different facts.
+
+**The scheduler is unchanged, and that is a feature.** An `unbacked` verdict is a
+statement about the scan, not about intent. A test schedules the same nodes 3 times
+under `backed`, `unbacked` and `unproven` labels and requires an identical result,
+so a verdict can never quietly reorder work.
+
+**The planner benefit question was asked, and the answer was no.** A pre registered,
+paired, 48 call comparison across 3 model families measured whether graph context
+improves dependency declaration. It did not: mean recall delta -0.017 against a
++0.05 bar, at 1.61 times the prompt cost. The experiment was built to be capable of
+returning no, and it returned no. 4 successor designs were stopped before spending,
+on selection bias, on power, on a measured 81 percent prompt ceiling, and on a
+variance decomposition showing the corpus cannot resolve the effect at this size.
+The result is published as a finite corpus pilot with its limits stated.
+
 ## 1.16.0 (2026-07-30): The on ramp
 
 Ferrox knew how to build software and was bad at meeting people. 74 commands, of

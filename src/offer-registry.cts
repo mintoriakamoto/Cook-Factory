@@ -317,7 +317,10 @@ export function saveMemory(projectRoot: string, memory: OfferMemory): void {
 
 /**
  * Append one decision to the log. `outcome` is 'shown' at offer time; the
- * accept/decline is recorded later by whatever the user does next.
+ * accept is recorded later by `recordOfferAccepted` below, when the command the
+ * offer named actually runs.
+ *
+ * There is no decline writer, deliberately. See `recordOfferAccepted`.
  */
 export function logDecision(
   projectRoot: string,
@@ -329,6 +332,85 @@ export function logDecision(
     fs.appendFileSync(path.join(projectRoot, LOG_RELPATH), `${JSON.stringify(row)}\n`);
   } catch {
     // Never break a session over telemetry.
+  }
+}
+
+/**
+ * Record that an offer was ACCEPTED, because the command it named has run.
+ *
+ * ─── WHY THIS FUNCTION HAD TO EXIST ──────────────────────────────────────────
+ *
+ * `logDecision` above has always said the accept is "recorded later by whatever
+ * the user does next", and until this was written nothing did. `foldOfferStats`
+ * below was correct the whole time and unit tested the whole time, over data
+ * that never arrived: in the field `acceptanceRate` could only ever be 0 or
+ * null, and `retiredOffers` could therefore never fire on real usage. The fold
+ * was never the defect. The missing writer was.
+ *
+ * There is exactly one honest signal available, and it is already in the
+ * registry: `Offer.command` declares "the command accepting this offer runs".
+ * So the command running IS the acceptance, and no new routing scheme is
+ * invented here.
+ *
+ * ─── THERE IS NO MATCHING DECLINE WRITER, ON PURPOSE ─────────────────────────
+ *
+ * No event means "the user decided against it". Someone who ignores an offer
+ * and someone who rejects it are indistinguishable from this log, and
+ * `foldOfferStats` already folds that population as `missed`, which is its
+ * honest name. Writing a `declined` row on a timeout would manufacture an
+ * outcome nobody observed, so `declined` stays at 0 and this paragraph is the
+ * reason a future reader will not mistake that for an oversight.
+ *
+ * ─── AT MOST ONCE ────────────────────────────────────────────────────────────
+ *
+ * An offer is outstanding only while its recorded outcome is the literal
+ * `shown`. Accepting flips it, so running the same command a second time cannot
+ * append a second row. The flip is PERSISTED BEFORE the row is appended, so a
+ * half completed write under-counts rather than double-counts: a rate inflated
+ * by repetition is worse than one that is merely low.
+ *
+ * Silence is the common case and is not an error: most commands run with no
+ * offer outstanding at all. Returns the offer ids recorded, empty on every
+ * silent path.
+ *
+ * @param projectRoot absolute path to the project
+ * @param commandStem a shipped command stem, matched against `Offer.command`
+ */
+export function recordOfferAccepted(projectRoot: string, commandStem: string): string[] {
+  const accepted: string[] = [];
+  try {
+    if (typeof commandStem !== 'string' || commandStem === '') return accepted;
+
+    // A missing .planning/ and an unreadable memory file both yield the empty
+    // memory, which has no outstanding offers, so both fall out here having
+    // written nothing and thrown nothing.
+    const memory = loadMemory(projectRoot);
+    for (const offer of OFFERS) {
+      if (offer.command !== commandStem) continue;
+      if (memory.outcomes[offer.id] !== 'shown') continue;
+      memory.outcomes[offer.id] = 'accepted';
+      accepted.push(offer.id);
+    }
+    if (accepted.length === 0) return accepted;
+
+    saveMemory(projectRoot, memory);
+    const at = new Date().toISOString();
+    for (const id of accepted) {
+      logDecision(projectRoot, {
+        offer: id,
+        outcome: 'accepted',
+        // The situation at accept time is genuinely not known here. Classifying
+        // it costs a project scan this path cannot afford, and recording a
+        // plausible guess would be the same class of fabrication as a synthetic
+        // decline. Unknown is written as unknown.
+        situation: 'unknown',
+        at,
+      });
+    }
+    return accepted;
+  } catch {
+    // Never break a session over telemetry.
+    return accepted;
   }
 }
 

@@ -304,7 +304,7 @@ function readStructure(file: string): Structure | null {
   const edges = (Array.isArray(o.edges) ? o.edges : [])
     .filter((e): e is string[] => Array.isArray(e) && e.every((x) => typeof x === 'string'))
     .map((e) => e.slice())
-    .sort((a, b) => (a.join(' ') < b.join(' ') ? -1 : a.join(' ') > b.join(' ') ? 1 : 0));
+    .sort((a, b) => (a.join('\u0000') < b.join('\u0000') ? -1 : a.join('\u0000') > b.join('\u0000') ? 1 : 0));
   return {
     task: typeof o.task === 'string' ? o.task : '',
     files: strings(o.files),

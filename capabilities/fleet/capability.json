@@ -1,7 +1,7 @@
 {
   "id": "fleet",
   "role": "feature",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "title": "Fleet engine",
   "description": "Registers the vendored fleet engine under `ferrox-core/bin/vendor/ratchet/`. Off by default. Contributes 0 commands, 0 skills, 0 agents and 0 hooks in phase 18, so a project that never enables it installs exactly what it installed before. Requires a Python 3 interpreter on PATH when enabled; the default inline execution path never needs one.",
   "tier": "full",

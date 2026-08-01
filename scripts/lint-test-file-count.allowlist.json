@@ -10,17 +10,6 @@
       ],
       "issue": "TBD"
     },
-    "graphify": {
-      "files": [
-        "graphify-auto-update.slow.test.cjs",
-        "graphify-command-cutover.test.cjs",
-        "graphify-graph-path.test.cjs",
-        "graphify-query.test.cjs",
-        "graphify-visualization.test.cjs",
-        "graphify.test.cjs"
-      ],
-      "issue": "622"
-    },
     "milestone": {
       "files": [
         "milestone-archive.test.cjs",
@@ -107,6 +96,15 @@
         "federated-config-key-removal.test.cjs"
       ],
       "issue": "TBD"
+    },
+    "workgraph": {
+      "files": [
+        "workgraph-coverage.test.cjs",
+        "workgraph-schedule-invariance.test.cjs",
+        "workgraph-specifier-folding.test.cjs",
+        "workgraph.test.cjs"
+      ],
+      "issue": "FF-B527"
     },
     "host-integration": {
       "files": [

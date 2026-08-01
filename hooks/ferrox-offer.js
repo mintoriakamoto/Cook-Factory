@@ -83,6 +83,17 @@ function run() {
   const libPath = resolveLib(cwd);
   if (!libPath) return;
   const lib = require(libPath);
+
+  // Record an acceptance BEFORE anything else, for 2 reasons. It must not
+  // depend on readState succeeding, because an acceptance is a fact about what
+  // the user just typed rather than about project state. And flipping the
+  // outcome here means the offer being accepted on this very prompt is already
+  // answered by the time decideOffer runs, so it cannot be re-shown.
+  const stem = acceptedCommandStem(prompt);
+  if (stem !== null && typeof lib.recordOfferAccepted === 'function') {
+    lib.recordOfferAccepted(cwd, stem);
+  }
+
   const state = readState(cwd, libPath);
   if (state === null) return;
 
@@ -120,6 +131,32 @@ function run() {
         + '</ferrox-offer>',
     },
   }));
+}
+
+/**
+ * The Ferrox command stem the user just invoked, derived from this hook's own
+ * input rather than guessed.
+ *
+ * HOW THE STEM IS DERIVED. This hook runs on UserPromptSubmit, so `data.prompt`
+ * is the literal text the user submitted. Accepting an offer means running the
+ * command the offer named, and every offer's copy prints that command in its
+ * shipped slash form: `/ferrox-new-project`, `/ferrox-execute-phase`,
+ * `/ferrox-ship`. So the stem is the first token of the prompt with the leading
+ * slash and the `ferrox-` namespace prefix removed, which is exactly the form
+ * `Offer.command` declares in the registry.
+ *
+ * THE `ferrox-` PREFIX IS REQUIRED, not optional. Another tool's `/ship` is not
+ * an acceptance of Ferrox's ship offer, and counting it would be a fabricated
+ * measurement of the same kind this counter exists to replace.
+ *
+ * Returns null when the prompt is not a Ferrox slash invocation, which is the
+ * overwhelmingly common case and must be silent.
+ */
+function acceptedCommandStem(prompt) {
+  if (typeof prompt !== 'string') return null;
+  const m = prompt.match(/^\s*\/ferrox-([a-z0-9][a-z0-9-]*)/i);
+  if (!m) return null;
+  return m[1].toLowerCase();
 }
 
 /** Read the project state the registry needs. Returns null if unreadable. */

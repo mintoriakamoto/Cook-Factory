@@ -66,10 +66,33 @@ const { evaluateSharedWrite, globToRegExp } = coordSharedWrite;
 const { evaluateRiskGrade } = modelRiskGrade;
 const { parseTeamManifest } = teamManifest;
 // ─── the vocabulary ──────────────────────────────────────────────────────────
-/** What the walk INDEXES, so a resolvable target is never a false miss. */
-const DEFAULT_INDEX_ROOTS = ['src', 'scripts'];
+/**
+ * The roots the adjudicator reads, widened by phase 25 from `['src','scripts']`
+ * indexed and `['src']` scanned.
+ *
+ * WHY THE 2 LISTS MUST MATCH, and why they disagreeing was the defect. INDEX
+ * roots decide what a specifier may RESOLVE TO; SCAN roots decide whose imports
+ * are ever PARSED. With `scripts` indexed but not scanned, 95 files were legal
+ * targets whose own `require` calls nobody read, and `tests`, `hooks` and
+ * `ferrox-core` were in neither list. The scan reached 258 files of 859. Every
+ * edge whose lane sat outside `src` therefore returned `out-of-scan-scope`,
+ * which is the instrument reporting its own reach and was measured at 37.5% of
+ * all declared edges.
+ *
+ * `ferrox-core` is included DELIBERATELY even though it is compiled output.
+ * Scripts `require` the compiled lib rather than the TypeScript source, so
+ * excluding it measurably manufactured 3 FALSE unbacked verdicts.
+ *
+ * `commands`, `agents` and `capabilities` are excluded on purpose: they hold 0
+ * files with an indexed extension, so adding them is a no-op until a phase
+ * ships parsers for markdown and manifests.
+ *
+ * `.ferrox` needs no fence because `walkSourceFiles` descends from these NAMED
+ * roots only, so a worktree copy at `.ferrox/.../src` is unreachable.
+ */
+const DEFAULT_INDEX_ROOTS = ['src', 'scripts', 'tests', 'hooks', 'ferrox-core'];
 /** What counts as IN SCOPE for an import edge and for an unbacked verdict. */
-const DEFAULT_SCAN_ROOTS = ['src'];
+const DEFAULT_SCAN_ROOTS = ['src', 'scripts', 'tests', 'hooks', 'ferrox-core'];
 /** File extensions the walk indexes. Everything else is not a module here. */
 const INDEXED_EXTENSIONS = ['.cts', '.mts', '.ts', '.cjs', '.mjs', '.js'];
 /** The 1 extension a cargo crate compiles. */
@@ -375,9 +398,15 @@ function scanImports(input) {
     const importEdges = [];
     const unresolved = [];
     const unreadable = [];
+    const dynamicUnresolved = new Set();
     let external = 0;
     let outOfRoot = 0;
     let read = 0;
+    // Folded and unfolded are counted SEPARATELY and carried out whole. They are
+    // the evidence for a later, separate decision about withdrawing the shield
+    // once folder recall has been measured, and that decision is not this phase's.
+    let foldedSites = 0;
+    let unfoldedSites = 0;
     for (const filePath of files) {
         if (!workgraph.isInScanRoot(filePath, scanRoots))
             continue;
@@ -405,15 +434,37 @@ function scanImports(input) {
             continue;
         }
         for (const spec of workgraph.parseImportSources(text, filePath).results) {
-            if (spec.dynamic)
-                continue;
-            if (spec.external) {
+            let specifier = spec.specifier;
+            if (spec.dynamic) {
+                // THE SHIELD IS NEVER WITHDRAWN, and it is recorded FIRST so no branch
+                // below can skip it. This file's dependencies are not fully knowable
+                // from its text, so any edge resting on it must degrade to unproven
+                // instead of being called unbacked, EVEN WHEN EVERY SITE IN IT FOLDS.
+                // `hasUnfollowableDynamic` is the only thing performing that degrade,
+                // and withdrawing it turns a shielded unproven edge into unbacked
+                // whenever the folded target is not in the prerequisite's lane. 48
+                // files in this tree are exposed to that. Folding is STRICTLY
+                // ADDITIVE: it adds import edges and withdraws no protection.
+                dynamicUnresolved.add(filePath);
+                const folded = workgraph.foldSpecifier(spec.dynamic_argument, filePath, text);
+                if (!folded.ok) {
+                    unfoldedSites += 1;
+                    continue;
+                }
+                foldedSites += 1;
+                specifier = folded.specifier;
+                // `spec.external` is DELIBERATELY not consulted on this path. It is
+                // hardcoded false for a dynamic spec, and a folded repo-relative path
+                // does not begin with a period, so an external test applied here would
+                // swallow every folded edge and move the census 0 with every test green.
+            }
+            else if (spec.external) {
                 external += 1;
                 continue;
             }
-            const resolved = workgraph.resolveSpecifier(filePath, spec.specifier, existing, scanRoots);
+            const resolved = workgraph.resolveSpecifier(filePath, specifier, existing, scanRoots);
             if (!resolved.ok) {
-                unresolved.push({ from: filePath, specifier: spec.specifier, reason: resolved.reason });
+                unresolved.push({ from: filePath, specifier, reason: resolved.reason });
                 continue;
             }
             if (!resolved.in_scan_root) {
@@ -433,8 +484,18 @@ function scanImports(input) {
     return {
         import_edges: importEdges,
         unresolved,
-        counts: { files: read, edges: importEdges.length, external, out_of_root: outOfRoot },
+        counts: {
+            files: read,
+            edges: importEdges.length,
+            external,
+            out_of_root: outOfRoot,
+            folded: foldedSites,
+            unfolded: unfoldedSites,
+        },
         unreadable,
+        // Sorted EXPLICITLY so a filesystem enumeration change cannot alter the
+        // emitted bytes, matching every other array this module returns.
+        dynamic_unresolved: Array.from(dynamicUnresolved).sort(),
     };
 }
 /**
@@ -1404,6 +1465,7 @@ function buildWorkgraph(options) {
         import_edges: scanned.import_edges,
         existing: walk.files,
         scan_roots: scanRoots,
+        dynamic_unresolved: scanned.dynamic_unresolved,
         generated: {
             index_roots: indexRoots,
             index_roots_absent: absentRoots,

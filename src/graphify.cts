@@ -439,6 +439,41 @@ function graphifyQuery(cwd: string, term: string, options: { budget?: number | n
 }
 
 /**
+ * Render the commit-staleness tri-state as ONE of 3 distinct advisory strings
+ * (GRAPH-06).
+ *
+ * `commit_stale` was computed correctly and read by nobody: a grep over src/,
+ * scripts/ and tests/ returned only this file. Meanwhile the TIME-based `stale`
+ * field IS consumed, so a graph 30 commits behind but written 3 hours ago
+ * reported `stale: false` and the sole consumer said nothing. This helper is the
+ * ONE place the tri-state is interpreted; every consumer includes the rendered
+ * string verbatim instead of re-deriving the branch, so no consumer can disagree
+ * with the status surface about what null means.
+ *
+ * UNKNOWN IS NEVER 0. The null rendering must never read as current, because a
+ * graph whose staleness could not be determined is not a graph known to match
+ * the working tree.
+ *
+ * Pure and total: no input throws, and an absent or malformed `commitsBehind`
+ * still yields legible prose rather than an interpolated nullish value.
+ */
+function commitStalenessAdvisory(commitStale: unknown, commitsBehind: unknown): string {
+  if (commitStale === true) {
+    const n = typeof commitsBehind === 'number' && Number.isInteger(commitsBehind) && commitsBehind > 0
+      ? commitsBehind
+      : null;
+    const count = n === null
+      ? 'an unrecorded number of commits'
+      : `${n} commit${n === 1 ? '' : 's'}`;
+    return `Graph is ${count} behind HEAD: it describes an older tree than the code you are reading.`;
+  }
+  if (commitStale === false) {
+    return 'Graph was built at the current commit: 0 commits have landed since.';
+  }
+  return 'Commit staleness was NOT DETERMINED: the graph recorded no build commit, or git HEAD could not be read. Treat the graph as possibly describing an older tree.';
+}
+
+/**
  * Return status information about the knowledge graph (STAT-01, STAT-02).
  *
  * Surfaces the graphify v0.7+ commit-staleness signal as four optional
@@ -446,6 +481,10 @@ function graphifyQuery(cwd: string, term: string, options: { budget?: number | n
  * (#3170). Tri-state on commit_stale: null means "we don't know" (pre-v0.7
  * graph, no git, or unreachable commit), distinct from false ("known
  * fresh").
+ *
+ * `commit_advisory` (GRAPH-06) is that tri-state RENDERED, and is always
+ * present. Consumers include it verbatim; nothing downstream branches on
+ * `commit_stale` itself.
  */
 function graphifyStatus(cwd: string): unknown {
   const planningDir = path.join(cwd, '.planning');
@@ -482,9 +521,12 @@ function graphifyStatus(cwd: string): unknown {
   // Auto-update status (#3347). Read .last-build-status.json written by the
   // hooks/ferrox-graphify-update.sh PostToolUse hook (opt-in via graphify.auto_update,
   // default false). When the most recent auto-build is "failed" or still "running",
-  // fold that into the existing `stale: true` signal so consumers (ferrox-planner,
-  // ferrox-phase-researcher) surface the standard "treat semantic relationships as
-  // approximate" annotation without per-consumer prompt changes. The full state
+  // fold that into the existing `stale: true` signal so the sole consumer of graph
+  // status (ferrox-phase-researcher) surfaces the standard "treat semantic
+  // relationships as approximate" annotation without a per-consumer prompt change.
+  // ferrox-planner was named here previously and consumes graph status NOT AT ALL,
+  // verified by grep; a comment asserting a consumer that does not exist is the same
+  // defect class as a signal with no reader. The full state
   // (running/failed/exit_code/duration_ms/head_at_build) is exposed under
   // `last_build` for callers that want richer context.
   const statusPath = path.join(planningDir, 'graphs', '.last-build-status.json');
@@ -505,6 +547,7 @@ function graphifyStatus(cwd: string): unknown {
     current_commit: head ? head.slice(0, 7) : null,
     commits_behind: commitsBehind,
     commit_stale: commitStale,
+    commit_advisory: commitStalenessAdvisory(commitStale, commitsBehind),
     last_build_auto_update: lastBuildAutoUpdate || null,
   };
 }
@@ -655,6 +698,7 @@ export = {
   applyBudget,
   // Status (Phase 2)
   graphifyStatus,
+  commitStalenessAdvisory,
   // Diff (Phase 2)
   graphifyDiff,
   // Build (Phase 3)

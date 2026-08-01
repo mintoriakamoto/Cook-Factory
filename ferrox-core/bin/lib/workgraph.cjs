@@ -42,8 +42,22 @@ const SCHEMA_VERSION = 'workgraph/v1';
 const NODE_KINDS = ['plan', 'seam'];
 /** The 3 verdicts a declared edge can carry. */
 const VERDICTS = ['backed', 'unbacked', 'unproven'];
-/** The 2 reasons an edge can be unproven rather than unbacked. */
-const UNPROVEN_REASONS = ['out-of-scan-scope', 'endpoint-absent-from-disk'];
+/**
+ * The 3 reasons an edge can be unproven rather than unbacked.
+ *
+ * `dynamic-specifier-unresolved` was added by phase 25. `scanImports` cannot
+ * follow `require(CONSTANT)`, and that form is idiomatic in `scripts/`, which
+ * phase 25 also started reading for the first time. Without this reason a real
+ * dependency carried by a dynamic specifier reads as `unbacked`, which is a
+ * FALSE statement about the planner rather than an honest statement about the
+ * scan. ABSENCE OF VISIBLE EVIDENCE IS NOT EVIDENCE OF ABSENCE, and UNKNOWN IS
+ * NEVER 0.
+ */
+const UNPROVEN_REASONS = [
+    'out-of-scan-scope',
+    'endpoint-absent-from-disk',
+    'dynamic-specifier-unresolved',
+];
 /** The 4 import shapes this repository actually writes. */
 const IMPORT_FORMS = ['import-equals', 'esm', 'side-effect', 'require'];
 /** The 4 extensions a specifier may resolve to, in candidate order. */
@@ -84,7 +98,38 @@ const SIDE_EFFECT_SHAPE = /^\s*import\s*(['"])([^'"]*)\1\s*;?\s*$/;
 const ESM_OPEN_SHAPE = /^\s*import\s+(type\s+)?\{[^}]*$/;
 const ESM_CLOSE_SHAPE = /^\s*\}\s*from\s*(['"])([^'"]*)\1/;
 const BARE_REQUIRE_SHAPE = /require\(\s*(['"])([^'"]*)\1\s*\)/g;
-const DYNAMIC_REQUIRE_SHAPE = /require\(\s*([A-Za-z_$][\w$.]*)\s*\)/g;
+// ─── the closed grammar the constant folder reads ────────────────────────────
+//
+// Phase 27. `DYNAMIC_REQUIRE_SHAPE` used to be
+// `/require\(\s*([A-Za-z_$][\w$.]*)\s*\)/g`, which demanded a closing paren
+// DIRECTLY after the identifier. `require(path.join(LIB_DIR, 'x'))` has an
+// opening paren there, so it matched neither that shape nor
+// `BARE_REQUIRE_SHAPE` and the parser emitted NOTHING for it. A file whose only
+// couplings use that idiom was never recorded as unfollowable, so nothing
+// degraded and an edge resting on it could be adjudicated `unbacked`. That is a
+// latent false accusation generator, and 82 sites in this tree write it.
+//
+// The replacement is a balanced paren scan rather than a wider regex, because
+// the argument text is the input the folder needs and a regex cannot carry a
+// nested call out intact.
+const STRING_LITERAL_SHAPE = /^(['"])((?:[^'"\\]|\\.)*)\1$/;
+const IDENTIFIER_SHAPE = /^[A-Za-z_$][\w$]*$/;
+const PATH_CALL_SHAPE = /^path\s*\.\s*(join|resolve)\s*\(/;
+/**
+ * A whole-line `const` binding, semicolon REQUIRED. The semicolon is the guard
+ * that keeps a continuation line out: `const A = B` followed by `.replace(...)`
+ * on the next line would otherwise fold to whatever `B` folds to, which is a
+ * confidently wrong answer rather than a refusal.
+ */
+const CONST_BINDING_SHAPE = /^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(.+);\s*$/;
+/** A leading separator or a drive letter, both of which leave repo-relative space. */
+const ABSOLUTE_SHAPE = /^(?:[/\\]|[A-Za-z]:)/;
+/**
+ * The identifier chain bound. `LIB_DIR` to `REPO_ROOT` to `path.resolve(__dirname, '..')`
+ * consumes 5, so 8 clears the deepest chain this tree writes with room to spare
+ * while still terminating on a cycle the `seen` set somehow missed.
+ */
+const MAX_FOLD_DEPTH = 8;
 function err(code, message, subject) {
     const e = { ok: false, code, message };
     if (typeof subject === 'string' && subject !== '')
@@ -178,15 +223,242 @@ function stripSourceComments(text) {
 function isDeclarationFile(filename) {
     return typeof filename === 'string' && DECLARATION_MARKER.test(filename);
 }
-function spec(specifier, form, typeOnly, line, dynamic) {
+function spec(specifier, form, typeOnly, line, dynamic, dynamicArgument) {
     return {
         specifier,
         form,
         type_only: typeOnly,
         external: !dynamic && !specifier.startsWith('.'),
         dynamic,
+        dynamic_argument: dynamic && typeof dynamicArgument === 'string' ? dynamicArgument : '',
         line,
     };
+}
+/**
+ * The index of the parenthesis closing the one at `openIndex`, or -1 when the
+ * line does not close it. String literals are skipped whole, so a paren inside
+ * a quoted argument cannot unbalance the count.
+ */
+function matchingParen(text, openIndex) {
+    if (text.charAt(openIndex) !== '(')
+        return -1;
+    let depth = 0;
+    let i = openIndex;
+    while (i < text.length) {
+        const ch = text.charAt(i);
+        if (ch === "'" || ch === '"' || ch === '`') {
+            i += 1;
+            let closed = false;
+            while (i < text.length) {
+                if (text.charAt(i) === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (text.charAt(i) === ch) {
+                    closed = true;
+                    break;
+                }
+                i += 1;
+            }
+            if (!closed)
+                return -1;
+            i += 1;
+            continue;
+        }
+        if (ch === '(')
+            depth += 1;
+        else if (ch === ')') {
+            depth -= 1;
+            if (depth === 0)
+                return i;
+        }
+        i += 1;
+    }
+    return -1;
+}
+/**
+ * The argument text of every `require(...)` call on 1 line of code, balanced
+ * parens honoured. This is the replacement for the old identifier-only dynamic
+ * shape: it SEES `require(path.join(...))` where that shape saw nothing.
+ */
+function dynamicRequireArguments(code) {
+    const found = [];
+    let i = 0;
+    while (i < code.length) {
+        const at = code.indexOf('require(', i);
+        if (at === -1)
+            break;
+        const open = at + 'require('.length - 1;
+        const close = matchingParen(code, open);
+        if (close === -1) {
+            i = open + 1;
+            continue;
+        }
+        const argument = code.slice(open + 1, close).trim();
+        if (argument !== '')
+            found.push(argument);
+        i = close + 1;
+    }
+    return found;
+}
+/**
+ * Every whole-line `const` binding in a file, by name. A name bound more than
+ * once maps to null: 2 bindings mean the folder cannot say which one reaches
+ * the require site, and a folder that guesses is exactly the instrument this
+ * phase exists to avoid building.
+ */
+function collectConstBindings(fileText) {
+    const bindings = new Map();
+    for (const line of splitLines(stripSourceComments(fileText))) {
+        const match = CONST_BINDING_SHAPE.exec(line);
+        if (match === null)
+            continue;
+        const name = match[1];
+        const value = match[2].trim();
+        if (bindings.has(name)) {
+            bindings.set(name, null);
+            continue;
+        }
+        bindings.set(name, value === '' ? null : value);
+    }
+    return bindings;
+}
+/** Top level comma separated arguments, or null when the text is unbalanced. */
+function splitArguments(inner) {
+    const args = [];
+    let depth = 0;
+    let start = 0;
+    let i = 0;
+    while (i < inner.length) {
+        const ch = inner.charAt(i);
+        if (ch === "'" || ch === '"' || ch === '`') {
+            i += 1;
+            let closed = false;
+            while (i < inner.length) {
+                if (inner.charAt(i) === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (inner.charAt(i) === ch) {
+                    closed = true;
+                    break;
+                }
+                i += 1;
+            }
+            if (!closed)
+                return null;
+            i += 1;
+            continue;
+        }
+        if (ch === '(' || ch === '[' || ch === '{')
+            depth += 1;
+        else if (ch === ')' || ch === ']' || ch === '}') {
+            depth -= 1;
+            if (depth < 0)
+                return null;
+        }
+        else if (ch === ',' && depth === 0) {
+            args.push(inner.slice(start, i));
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if (depth !== 0)
+        return null;
+    args.push(inner.slice(start));
+    return args;
+}
+/**
+ * The closed grammar, and NOTHING outside it. 5 forms fold:
+ *
+ *   1. a string literal
+ *   2. `__dirname`, which is known: the directory of the file being scanned
+ *   3. `path.join(a, b, ...)` where every argument folds
+ *   4. `path.resolve(a, b, ...)` where every argument folds
+ *   5. an identifier whose binding in the SAME file is a `const` initialised to
+ *      a form that folds, transitively and depth bounded
+ *
+ * Everything else refuses: a conditional, a function call, a template literal,
+ * an environment read, a member expression, an identifier bound in another
+ * file. `scripts/fleet-glass.cjs:104` binds
+ * `ROOT = process.env.FERROX_GLASS_ROOT ? ... : REPO_ROOT`, and a folder that
+ * resolves that asserts a coupling which is wrong exactly when the variable is
+ * set, which is exactly when the read only battery runs.
+ */
+function foldExpression(expr, dir, bindings, seen, depth) {
+    const text = expr.trim();
+    if (text === '')
+        return { ok: false, reason: 'empty-expression' };
+    if (depth > MAX_FOLD_DEPTH)
+        return { ok: false, reason: 'fold-depth-exceeded' };
+    const literal = STRING_LITERAL_SHAPE.exec(text);
+    if (literal !== null) {
+        const value = literal[2];
+        if (value.indexOf('\\') !== -1)
+            return { ok: false, reason: 'escaped-literal' };
+        if (ABSOLUTE_SHAPE.test(value))
+            return { ok: false, reason: 'absolute-literal' };
+        return { ok: true, specifier: value };
+    }
+    if (text === '__dirname')
+        return { ok: true, specifier: dir };
+    if (PATH_CALL_SHAPE.test(text)) {
+        const open = text.indexOf('(');
+        const close = matchingParen(text, open);
+        // The call must be the WHOLE expression. `path.join(a, b).slice(1)` closes
+        // early, and folding its prefix would answer a question nobody asked.
+        if (close === -1 || close !== text.length - 1)
+            return { ok: false, reason: 'not-a-whole-call' };
+        const args = splitArguments(text.slice(open + 1, close));
+        if (args === null || args.length === 0)
+            return { ok: false, reason: 'unparsable-arguments' };
+        const parts = [];
+        for (const argument of args) {
+            const folded = foldExpression(argument, dir, bindings, seen, depth + 1);
+            if (!folded.ok)
+                return folded;
+            parts.push(folded.specifier);
+        }
+        return { ok: true, specifier: parts.join('/') };
+    }
+    if (IDENTIFIER_SHAPE.test(text)) {
+        if (seen.has(text))
+            return { ok: false, reason: 'self-referential-binding' };
+        const bound = bindings.get(text);
+        if (bound === undefined)
+            return { ok: false, reason: 'no-binding-in-file' };
+        if (bound === null)
+            return { ok: false, reason: 'ambiguous-binding' };
+        const next = new Set(seen);
+        next.add(text);
+        return foldExpression(bound, dir, bindings, next, depth + 1);
+    }
+    return { ok: false, reason: 'outside-the-closed-grammar' };
+}
+/**
+ * Fold 1 dynamic require argument to a repo-relative specifier, or refuse.
+ *
+ * PURE AND TOTAL: it reads no disk, asks no clock and throws on no input. A
+ * folded specifier is handed to `resolveSpecifier`, the SAME resolver a literal
+ * specifier uses, because 2 resolvers can disagree about what a specifier means
+ * and the disagreement is silent.
+ */
+function foldSpecifier(argumentText, fromPath, fileText) {
+    const expr = typeof argumentText === 'string' ? argumentText : '';
+    if (expr === '')
+        return { ok: false, reason: 'no-argument-text' };
+    const dir = dirOf(normalizePath(fromPath));
+    const text = typeof fileText === 'string' ? fileText : '';
+    const folded = foldExpression(expr, dir, collectConstBindings(text), new Set(), 0);
+    if (!folded.ok)
+        return folded;
+    const normalized = normalizePath(folded.specifier);
+    if (normalized === '')
+        return { ok: false, reason: 'folds-to-nothing' };
+    if (normalized === '..' || normalized.startsWith('../')) {
+        return { ok: false, reason: 'escapes-the-repository' };
+    }
+    return { ok: true, specifier: normalized };
 }
 /**
  * Every specifier the source text imports, with its form and its type_only flag.
@@ -253,11 +525,13 @@ function parseImportSources(text, filename) {
         }
         if (matched)
             continue;
-        DYNAMIC_REQUIRE_SHAPE.lastIndex = 0;
-        let d = DYNAMIC_REQUIRE_SHAPE.exec(code);
-        while (d !== null) {
-            results.push(spec('', 'require', declared, lineNo, true));
-            d = DYNAMIC_REQUIRE_SHAPE.exec(code);
+        // The dynamic fallback, WIDENED in phase 27. It now carries the argument
+        // text out so the constant folder has something to read, and it recognizes
+        // any balanced argument rather than a bare identifier alone. The specifier
+        // stays empty and `external` stays false, so the documented invariant on
+        // `ImportSpec.specifier` is preserved exactly.
+        for (const argument of dynamicRequireArguments(code)) {
+            results.push(spec('', 'require', declared, lineNo, true, argument));
         }
     }
     return { ok: true, results };
@@ -373,7 +647,11 @@ function detectImpurity(text, filename) {
 }
 const KIND_SEAM = 'seam';
 const KIND_PLAN = 'plan';
-const PAIR_SEPARATOR = ' ';
+// A NUL cannot occur in a node id, which is why it is the separator. It is written
+// as an ESCAPE rather than a literal byte: a literal NUL makes grep report this
+// file as binary and hides every search in it, which is FF-B273. The runtime value
+// is unchanged. Do not 'simplify' this back to a literal.
+const PAIR_SEPARATOR = '\u0000';
 function asArray(value) {
     return Array.isArray(value) ? value : [];
 }
@@ -416,6 +694,7 @@ function classifyEdges(input) {
     const nodes = asArray(source.nodes).filter((n) => n !== null && typeof n === 'object' && typeof n.id === 'string' && n.id !== '');
     const scanRoots = resolveScanRoots(source.scan_roots);
     const existing = toPathSet(source.existing);
+    const dynamicUnresolved = toPathSet(source.dynamic_unresolved);
     const byId = new Map();
     const lanes = new Map();
     const pathToNodes = new Map();
@@ -459,6 +738,12 @@ function classifyEdges(input) {
     }
     const inScope = (id) => (lanes.get(id) || []).some((p) => isInScanRoot(p, scanRoots));
     const onDisk = (id) => (lanes.get(id) || []).some((p) => isInScanRoot(p, scanRoots) && existing.has(p));
+    /**
+     * True when this node writes a file the scan read but could not fully follow,
+     * because it carries a dynamic specifier. Such a node's missing backing is a
+     * statement about the SCAN, so its edges degrade to unproven.
+     */
+    const hasUnfollowableDynamic = (id) => (lanes.get(id) || []).some((p) => dynamicUnresolved.has(p));
     const edges = [];
     const warnings = [];
     const dependents = nodes.slice().sort((a, b) => compareStrings(a.id, b.id));
@@ -500,6 +785,12 @@ function classifyEdges(input) {
                 else if (!onDisk(dependent.id) || !onDisk(prerequisiteId)) {
                     verdict = 'unproven';
                     unprovenReason = 'endpoint-absent-from-disk';
+                }
+                else if (hasUnfollowableDynamic(dependent.id) || hasUnfollowableDynamic(prerequisiteId)) {
+                    // Ordered AFTER the 2 reach tests on purpose: a node the scan never
+                    // opened cannot be described by what its text contains.
+                    verdict = 'unproven';
+                    unprovenReason = 'dynamic-specifier-unresolved';
                 }
                 else {
                     verdict = 'unbacked';
@@ -658,6 +949,7 @@ function assembleWorkgraph(input) {
         import_edges: source.import_edges,
         existing: source.existing,
         scan_roots: scanRoots,
+        dynamic_unresolved: source.dynamic_unresolved,
     });
     const { schedule, order } = computeSchedule(records);
     const seamViolations = deriveSeamViolations({
@@ -735,6 +1027,11 @@ function assembleWorkgraph(input) {
             edges: countOf(scan.edges),
             external: countOf(scan.external),
             out_of_root: countOf(scan.out_of_root),
+            // Additive counters, phase 27. Every existing reader of this block names
+            // its keys, so 2 more cannot change what any of them reads, and no schema
+            // version moves for a counter.
+            folded: countOf(scan.folded),
+            unfolded: countOf(scan.unfolded),
         },
         warnings,
     };
@@ -960,6 +1257,7 @@ function validateWorkgraph(doc) {
 }
 module.exports = {
     parseImportSources,
+    foldSpecifier,
     resolveSpecifier,
     normalizePath,
     stripSourceComments,

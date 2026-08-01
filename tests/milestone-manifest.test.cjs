@@ -223,8 +223,14 @@ test('the real .planning artifacts all parse and yield exactly one active', () =
   // 16 since phase 14.1 plan 03 reconstructed MILESTONE-v1.0-FOUNDATION.md, which the v1
   // requirement ledger in PROJECT.md points its shipped_in pointers at; 17 since v1.16
   // (the on ramp) added its own artifact to claim 1.16.0 in `shipped`, which
-  // gen-milestones --check requires of every version present in CHANGELOG.md.
-  assert.equal(files.length, 17, `expected 17 artifacts, found ${files.length}`);
+  // gen-milestones --check requires of every version present in CHANGELOG.md;
+  // 18 since v1.17 (graph engineering). v1.17 carried `lifecycle: draft` while
+  // v1.14 held the single active slot this file's own "exactly one active" arm
+  // enforces. On 2026-08-01 v1.14 was closed and v1.17 took the slot, so the
+  // pin below moved 1.14 to 1.17. THE PIN IS KEPT, not loosened: it exists so
+  // that a lifecycle flip is reported by a failing arm rather than absorbed
+  // silently, and it did exactly that on the run that produced this edit.
+  assert.equal(files.length, 18, `expected 18 artifacts, found ${files.length}`);
   const parsed = files.map((f) => lib.parseMilestoneArtifact(f.text, f.name));
   const bad = parsed.filter((p) => !p.ok);
   assert.deepEqual(bad, [], `unparseable artifacts: ${JSON.stringify(bad, null, 2)}`);
@@ -232,5 +238,5 @@ test('the real .planning artifacts all parse and yield exactly one active', () =
   assert.equal(c.ok, true, JSON.stringify(c.errors, null, 2));
   const active = lib.activeMilestone(c.groups);
   assert.ok(active, 'exactly one artifact must be lifecycle: active');
-  assert.equal(active.milestone, '1.14');
+  assert.equal(active.milestone, '1.17');
 });

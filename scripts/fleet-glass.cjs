@@ -4,10 +4,15 @@
 /**
  * fleet-glass.cjs: Phase 21 of milestone v1.14 (Fleet Mode), the read only glass.
  *
- * Four views over data Ferrox already produces:
+ * Five views over data Ferrox already produces:
  *
  *   1. the GRAPH, from the `workgraph/v1` document, every declared edge
  *      carrying its own verdict and its evidence
+ *   1b. the FINDINGS, the same data swept ACROSS every phase carrying a graph:
+ *      every unbacked edge in 1 read, with a counter of how many of them a
+ *      human has triaged. View 1 answers what 1 phase declares, and a planner
+ *      reviewing a milestone does not open 16 phase directories 1 at a time, so
+ *      the gap this view closes is REACH rather than existence.
  *   2. the LEASES, from the board projection, every lease carrying its state,
  *      its epoch, its holder and both of its instants
  *   3. the ASKS, from the fold in `scripts/fleet-ask.cjs`, every ask leading
@@ -26,8 +31,10 @@
  * AND THAT SENTENCE PROVES NOTHING, which is the point of how it is checked.
  * The read only property is proven by `tests/fleet-glass-readonly.test.cjs`,
  * which snapshots the WHOLE scratch tree, every relative path with its size and
- * its modification time, runs each of the 3 views through this CLI as a real
- * child process, snapshots again and compares. It compares the tree rather than
+ * its modification time, runs EVERY view through this CLI as a real child
+ * process, snapshots again and compares. The count is deliberately not written
+ * here: a transcribed count is exactly the class of sentence phase 26 exists to
+ * stop shipping, and the battery's own view list is the authority. It compares the tree rather than
  * counting writes, because a write counter can only see the writes somebody
  * remembered to instrument and the failure that check exists to catch is the
  * write nobody thought of. The same comparison is driven once against a variant
@@ -71,6 +78,7 @@
  *
  * Usage:
  *   node scripts/fleet-glass.cjs graph <phase>   # the work graph and its edges
+ *   node scripts/fleet-glass.cjs findings        # EVERY unbacked edge, all phases
  *   node scripts/fleet-glass.cjs leases          # the leases and the trunk
  *   node scripts/fleet-glass.cjs asks            # the open asks, pick first
  *   node scripts/fleet-glass.cjs watch <phase>   # the LIVE fleet, repainted
@@ -123,11 +131,14 @@ const GLASS_ERROR_CODES = Object.freeze({ UNAVAILABLE: 'E_GLASS_UNAVAILABLE' });
  *   `scripts/gen-workgraph.cjs` already characterises it in its own header, and
  *   it is why an unbacked edge never changes that generator's exit code either.
  * UNPROVEN: the scan could not reach the files involved, so it neither confirms
- *   nor denies. In THIS phase that is the expected verdict on all 3 declared
- *   edges, because the scan root is `src` and every module here is a script. A
- *   view that rendered unproven as a problem would report every edge in its own
- *   phase as broken, which is why this wording names the instrument's REACH and
- *   never the edge.
+ *   nor denies. This wording names the instrument's REACH and never the edge,
+ *   because a view that rendered unproven as a problem would report a whole
+ *   phase as broken on the strength of where the scan happened to be pointed.
+ *   IT NAMES NO CAUSE, and that is the correction rather than an omission: this
+ *   sentence used to assert that the scan root was `src`, phase 25 widened the
+ *   roots, and a sentence transcribing configuration went from true to FALSE
+ *   with no test able to see it. The cause is carried PER EDGE by the reason
+ *   vocabulary below, which is derived from the scan and therefore cannot rot.
  */
 const VERDICT_WORDING = Object.freeze({
   backed: 'BACKED: the scan reached both endpoints and found the coupling.',
@@ -136,11 +147,74 @@ const VERDICT_WORDING = Object.freeze({
     + 'and it changes no exit code anywhere.',
   unproven: 'UNPROVEN: the scan could not reach the files involved, so it neither confirms '
     + 'nor denies this edge. This is the instrument reporting its own reach. '
-    + 'A scripts to scripts edge reads this way because the scan root is src.',
+    + 'The reason line below names which of the 3 reasons applies to this edge.',
 });
+
+/**
+ * The 3 reasons an edge is UNPROVEN rather than UNBACKED, worded for a human.
+ *
+ * `:353` used to print `reason: dynamic-specifier-unresolved` verbatim. That is
+ * the INSTRUMENT'S vocabulary and not a human's, and it covers the single
+ * largest population in the graph, so a human reading it had no way to tell
+ * "the coupling probably exists and I could not follow it" from "this is
+ * broken". The 3 facts are 3 DIFFERENT facts and they get 3 different sentences.
+ *
+ * WHY THE KEYS ARE WRITTEN OUT HERE RATHER THAN READ FROM `UNPROVEN_REASONS` AT
+ * LOAD TIME. This module reaches its built libs at the CLI seam and NEVER at
+ * require time, so that an unbuilt lib renders the UNAVAILABLE panel instead of
+ * throwing before main runs. Keying this map off the export directly would put
+ * that load back at require time and take the refusal path with it. The
+ * coverage is enforced instead by `tests/fleet-glass.test.cjs`, which drives
+ * the comparison FROM the shipped `UNPROVEN_REASONS` export and asserts the
+ * member count, so a 4th reason added later turns that arm red rather than
+ * shipping unworded.
+ *
+ * NAMING THE CONFIGURED ROOTS IS LEGAL ONLY AS A VALUE READ FROM THE SCAN.
+ * Transcribing them into a string is the exact mistake being corrected here, so
+ * `out-of-scan-scope` names the CONCEPT of the configured roots and lists none.
+ */
+const REASON_WORDING = Object.freeze({
+  'out-of-scan-scope': 'OUT OF SCAN SCOPE: the files this edge names sit outside the roots '
+    + 'the scan was configured to read, so it never opened them and holds no opinion '
+    + 'about them either way.',
+  'endpoint-absent-from-disk': 'ENDPOINT ABSENT FROM DISK: an endpoint this edge declares '
+    + 'is not in the tree at all, so there was no file to read.',
+  'dynamic-specifier-unresolved': 'DYNAMIC SPECIFIER UNRESOLVED: the file WAS read, and it '
+    + 'reaches this dependency through a specifier computed at run time. The coupling may '
+    + 'well be real and this instrument cannot follow it, which is a statement about the '
+    + 'instrument and not about the planner who declared the edge.',
+});
+
+/**
+ * The fallback for a reason the view does not word, mirroring the verdict
+ * fallback at the renderer below. Silently printing an unknown slug is how a
+ * view stops reporting that it does not understand its own input.
+ */
+const REASON_WORDING_UNKNOWN = 'this reason is not one the view knows how to word, '
+  + 'so the slug above is carried through untranslated.';
+
+/**
+ * The disposition token a SEEDED triage row carries, and the 1 token that means
+ * a human has not looked at that row yet. Anything else in that column is a
+ * conclusion somebody reached.
+ */
+const TRIAGE_UNTRIAGED = 'untriaged';
+
+/** The ledger the findings counter reads, relative to the resolved root. */
+const TRIAGE_LEDGER_PATH = path.join('.planning', 'GRAPH-TRIAGE.md');
 
 const PANEL_WORDING = Object.freeze({
   UNAVAILABLE: 'UNAVAILABLE: nothing was read, so nothing can be said here.',
+  NO_TRIAGE_LEDGER: 'NO TRIAGE LEDGER WAS READ: the ledger this counter reads is not '
+    + 'there, so this view knows nothing about how much of the population below has '
+    + 'been dealt with. NOBODY LOOKED and NOBODY HAS TRIAGED are 2 different facts, '
+    + 'and reporting the first as a count would be a claim this view cannot support.',
+  UNREADABLE_TRIAGE_LEDGER: 'THE TRIAGE LEDGER COULD NOT BE READ: it is there and this '
+    + 'view failed to open it, which is a fault in the reader rather than a reading. '
+    + 'No count is reported, for the same reason an absent ledger reports none.',
+  NO_UNBACKED_EDGES: 'NONE UNBACKED: every declared edge the scan reached was either '
+    + 'backed or left unproven, so there is no unbacked population to triage at all. '
+    + 'That is a real reading of the graph and not an unread ledger.',
   EMPTY_GRAPH: 'EMPTY: this document was read and it declares no nodes at all.',
   EMPTY_LEASES: 'EMPTY: this projection was read and it carries no lease at all.',
   NO_SIGNAL: 'NO SIGNAL: the fold had no evidence to read at all, which is not an all clear.',
@@ -351,7 +425,17 @@ function renderGraphView(document) {
       ?? `${verdict.toUpperCase()}: this verdict is not one the view knows how to word.`;
     for (const chunk of wording.split(/(?<=\.)\s+/)) lines.push(`      ${chunk}`);
     if (isFilledString(edge.unproven_reason)) {
+      // The slug stays on the line, verbatim, because a machine reader and a bug
+      // report both need the exact token. It is simply no longer the only thing
+      // a human is given.
       lines.push(`      reason: ${edge.unproven_reason}`);
+      // hasOwn and not a bare index: a slug reading `constructor` or `toString`
+      // indexes the PROTOTYPE and hands back a function, which would throw in a
+      // renderer whose whole contract is that no input throws.
+      const reasonWording = Object.hasOwn(REASON_WORDING, edge.unproven_reason)
+        ? REASON_WORDING[edge.unproven_reason]
+        : REASON_WORDING_UNKNOWN;
+      for (const chunk of reasonWording.split(/(?<=\.)\s+/)) lines.push(`        ${chunk}`);
     }
     const evidence = Array.isArray(edge.evidence) ? edge.evidence : [];
     if (evidence.length === 0) {
@@ -366,6 +450,380 @@ function renderGraphView(document) {
     lines.push(`  Instrument notes (${count(warnings.length, 'note', 'notes')})`);
     for (const warning of warnings) lines.push(`    ${shown(warning)}`);
   }
+
+  return lines;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 1b. The FINDINGS view, the cross phase sweep.
+ *
+ * It sits here rather than as a section 5 at the end because it shares the
+ * `loadGraph` seam directly above it and renumbering 3 shipped section banners
+ * would put unrelated churn in this diff.
+ *
+ * WHY THIS VIEW EXISTS WHEN `graph <phase>` ALREADY RENDERS EVERY VERDICT. The
+ * gap is REACH and not existence. `graph <phase>` answers what 1 phase declares,
+ * and a planner or a reviewer looking at a milestone does not open 16 phase
+ * directories 1 at a time, so in practice the unbacked population is invisible.
+ * A finding nobody reaches has not been surfaced.
+ *
+ * IT WRITES NOTHING, exactly like the other 4, and it is covered by the SAME
+ * whole tree snapshot battery. It reads 1 more file than they do, the triage
+ * ledger, which is precisely why it had to be added to that battery's view list:
+ * a read only property proven for 4 views and assumed for the 5th is assumed.
+ * ------------------------------------------------------------------------ */
+
+/**
+ * Every phase that CARRIES A GRAPH, discovered from the filesystem.
+ *
+ * NO LITERAL PHASE LIST. A hardcoded list goes stale the moment the next phase
+ * lands, and a view reporting a smaller population than exists is the narrow
+ * instrument failure this milestone is named after.
+ *
+ * WHAT COUNTS AS CARRYING A GRAPH, stated rather than left to be inferred: the
+ * build returned a document and that document declares AT LEAST 1 EDGE. A phase
+ * whose build throws, or hands back no document, or hands back a document
+ * declaring no edge at all, contributes no verdict to a sweep over verdicts and
+ * is SKIPPED. The count of skipped phases is carried into the model and rendered,
+ * because a view that silently drops phases is reporting a population it has
+ * quietly narrowed.
+ *
+ * IMPURE BY DESIGN and it lives at the CLI seam. The renderer receives a plain
+ * object and discovers nothing.
+ *
+ * @param {{root?: string, load?: Function}} input
+ * @returns {{ok: true, phases: Array<{phase: string, document: object}>,
+ *            considered: number, skipped: number}
+ *          |{ok: false, code: string, missing: string}}
+ */
+function discoverPhaseGraphs(input) {
+  const source = isPlainObject(input) ? input : {};
+  const root = isFilledString(source.root) ? source.root : ROOT;
+  const load = typeof source.load === 'function' ? source.load : undefined;
+  const phasesDir = path.join(root, '.planning', 'phases');
+
+  let names;
+  try {
+    names = fs.readdirSync(phasesDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch (error) {
+    // A phase directory that cannot be read at all is an UNAVAILABLE and never
+    // an empty sweep, because 0 phases found and 0 phases readable are 2
+    // different facts and only 1 of them is a reading.
+    return {
+      ok: false,
+      code: GLASS_ERROR_CODES.UNAVAILABLE,
+      missing: `${phasesDir}\n${error && error.message ? error.message : String(error)}`,
+    };
+  }
+
+  const tokens = [];
+  for (const name of names) {
+    // The directory convention is `<number>-<slug>`, and the number may carry a
+    // point release such as `14.1`.
+    const matched = /^(\d+(?:\.\d+)?)-/.exec(name);
+    if (matched) tokens.push(matched[1]);
+  }
+  // Numeric first so 14.1 lands between 14 and 15 rather than beside 1.
+  tokens.sort((a, b) => (Number(a) - Number(b)) || a.localeCompare(b));
+
+  const phases = [];
+  let skipped = 0;
+  for (const phase of tokens) {
+    let loaded;
+    try {
+      loaded = loadGraph(load ? { root, phase, load } : { root, phase });
+    } catch {
+      // One phase that throws must not take the whole sweep down with it.
+      skipped += 1;
+      continue;
+    }
+    if (!loaded || loaded.ok !== true || !isPlainObject(loaded.document)) {
+      skipped += 1;
+      continue;
+    }
+    const edges = Array.isArray(loaded.document.edges) ? loaded.document.edges : [];
+    if (edges.length === 0) {
+      skipped += 1;
+      continue;
+    }
+    phases.push({ phase, document: loaded.document });
+  }
+
+  return { ok: true, phases, considered: tokens.length, skipped };
+}
+
+/**
+ * The strict shape of a ledger row: 5 pipe delimited cells and nothing else.
+ * Anything that opens with a pipe and does not match this is MALFORMED, counted,
+ * and skipped rather than guessed at.
+ */
+const TRIAGE_ROW = /^\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$/;
+
+/** A markdown table separator cell, `---` or `:--:` and so on. */
+function isSeparatorCell(cell) {
+  return /^:?-{1,}:?$/.test(cell);
+}
+
+/**
+ * Read `.planning/GRAPH-TRIAGE.md` and hand back 1 of 3 states that MUST NEVER
+ * COLLAPSE INTO EACH OTHER: the ledger was absent, it was there and could not be
+ * read, or it was read. Only the third carries rows.
+ *
+ * UNKNOWN IS NEVER 0. Collapsing the first state into an empty row list would
+ * make the first human who runs this before creating the ledger read that the
+ * whole population is untriaged, when the truth is that nothing was read.
+ *
+ * TOTAL: no input throws. A malformed row is counted and skipped.
+ *
+ * The split is `/\r?\n/` and never a bare newline, so a ledger a human edited on
+ * Windows parses as rows rather than as 1 long line with carriage returns glued
+ * to the last cell of each.
+ *
+ * @param {{root?: string, read?: Function}} input
+ * @returns {{state: string, path: string, rows?: object[], skipped?: number,
+ *            message?: string}}
+ */
+function readTriageLedger(input) {
+  const source = isPlainObject(input) ? input : {};
+  const root = isFilledString(source.root) ? source.root : ROOT;
+  const read = typeof source.read === 'function'
+    ? source.read
+    : (target) => fs.readFileSync(target, 'utf8');
+  const target = path.join(root, TRIAGE_LEDGER_PATH);
+
+  let text;
+  try {
+    text = read(target);
+  } catch (error) {
+    const code = error && error.code ? error.code : '';
+    // ENOENT is ABSENT. Every other failure is a reader that could not open a
+    // file that is there, which is a different fact and carries a message.
+    if (code === 'ENOENT') return { state: 'absent', path: target };
+    return {
+      state: 'unreadable',
+      path: target,
+      message: error && error.message ? error.message : String(error),
+    };
+  }
+  if (typeof text !== 'string') {
+    return { state: 'unreadable', path: target, message: 'the read returned no text' };
+  }
+
+  const rows = [];
+  let skipped = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|')) continue;
+    const matched = TRIAGE_ROW.exec(trimmed);
+    if (!matched) {
+      skipped += 1;
+      continue;
+    }
+    const cells = matched.slice(1, 6).map((cell) => cell.trim());
+    if (cells.every(isSeparatorCell)) continue;
+    if (cells[0].toLowerCase() === 'phase' && cells[1].toLowerCase() === 'dependent') continue;
+    if (!isFilledString(cells[0]) || !isFilledString(cells[1])
+      || !isFilledString(cells[2]) || !isFilledString(cells[3])) {
+      skipped += 1;
+      continue;
+    }
+    rows.push({
+      phase: cells[0],
+      dependent: cells[1],
+      prerequisite: cells[2],
+      disposition: cells[3],
+      note: cells[4],
+    });
+  }
+
+  return { state: 'read', path: target, rows, skipped };
+}
+
+/**
+ * The identity of an edge, for matching a ledger row against the population.
+ *
+ * A NUL cannot occur in a phase or plan id, which is why it is the separator. It is
+ * written as an ESCAPE rather than a literal byte: a literal NUL makes grep report
+ * this file as binary and hides every search in it, which is FF-B273. The runtime
+ * value is unchanged. Do not "simplify" this back to a literal.
+ */
+function triageKey(phase, dependent, prerequisite) {
+  return `${String(phase)}\u0000${String(dependent)}\u0000${String(prerequisite)}`;
+}
+
+/**
+ * A write lane a human can read, capped so 9 edges do not print 9 full lanes.
+ * An EMPTY lane says so rather than rendering as a blank, because a blank there
+ * reads as a rendering fault instead of as the fact that the node writes nothing.
+ */
+function lanePreview(lane, cap) {
+  if (!Array.isArray(lane) || lane.length === 0) return 'no file at all';
+  const head = lane.slice(0, cap).map(shown);
+  const rest = lane.length - head.length;
+  return rest > 0
+    ? `${head.join(', ')} and ${count(rest, 'more file', 'more files')}`
+    : head.join(', ');
+}
+
+/**
+ * Render the whole unbacked population in 1 read. PURE over a plain model: no
+ * file, no clock, and the argument is never mutated.
+ *
+ * THE COUNTER IS THE CRITERION AND IT IS A COUNTER RATHER THAN A FLAG, because a
+ * flag assertion passes for an implementation that reports a refusal and does
+ * the thing anyway. It counts ONLY rows whose phase, dependent and prerequisite
+ * triple matches an edge in the CURRENT population, so a triage row for an edge
+ * that no longer exists cannot inflate it. Rows matching nothing are reported
+ * SEPARATELY as stale. A duplicate row for 1 edge counts once, or 2 rows about
+ * the same edge would carry the counter past the population it measures.
+ *
+ * THE UNBACKED WORDING IS THE SHIPPED CONSTANT, rendered once above the list
+ * rather than copied into a sentence of this view's own. A copied string is how
+ * 2 panels start saying the same thing about 2 different facts.
+ *
+ * @param {object} model {phases, skipped_phases, considered_phases, ledger}
+ * @returns {string[]} lines
+ */
+function renderFindingsView(model) {
+  if (!isPlainObject(model)) {
+    return unavailablePanel(
+      'FINDINGS',
+      'the findings model is absent or malformed, so no phase could be swept',
+    );
+  }
+
+  const phases = Array.isArray(model.phases) ? model.phases.filter(isPlainObject) : [];
+  const skippedPhases = typeof model.skipped_phases === 'number'
+    && Number.isFinite(model.skipped_phases)
+    ? model.skipped_phases
+    : 0;
+  const ledger = isPlainObject(model.ledger) ? model.ledger : { state: 'absent' };
+
+  // The population, derived from the documents. The renderer discovers nothing:
+  // it reads the objects it was handed.
+  const population = [];
+  for (const entry of phases) {
+    const phase = isFilledString(entry.phase) ? entry.phase : 'unnamed';
+    const document = isPlainObject(entry.document) ? entry.document : {};
+    const nodes = Array.isArray(document.nodes) ? document.nodes.filter(isPlainObject) : [];
+    const lanes = new Map();
+    for (const node of nodes) {
+      lanes.set(shown(node.id), Array.isArray(node.write_lane) ? node.write_lane : []);
+    }
+    const edges = Array.isArray(document.edges) ? document.edges.filter(isPlainObject) : [];
+    for (const edge of edges) {
+      if (edge.verdict !== 'unbacked') continue;
+      const dependent = shown(edge.from);
+      const prerequisite = shown(edge.to);
+      population.push({
+        phase,
+        dependent,
+        prerequisite,
+        dependent_lane: lanes.get(dependent) ?? [],
+        prerequisite_lane: lanes.get(prerequisite) ?? [],
+      });
+    }
+  }
+
+  const populationKeys = new Set(
+    population.map((edge) => triageKey(edge.phase, edge.dependent, edge.prerequisite)),
+  );
+
+  let triaged = 0;
+  let stale = 0;
+  const counted = new Set();
+  const ledgerRows = ledger.state === 'read' && Array.isArray(ledger.rows) ? ledger.rows : [];
+  for (const row of ledgerRows) {
+    if (!isPlainObject(row)) continue;
+    const key = triageKey(row.phase, row.dependent, row.prerequisite);
+    if (!populationKeys.has(key)) {
+      stale += 1;
+      continue;
+    }
+    if (String(row.disposition).trim().toLowerCase() === TRIAGE_UNTRIAGED) continue;
+    if (counted.has(key)) continue;
+    counted.add(key);
+    triaged += 1;
+  }
+
+  const lines = [
+    RULE,
+    'FINDINGS  every unbacked edge, across every phase carrying a graph',
+    RULE,
+    `  ${count(phases.length, 'phase carries a graph', 'phases carry a graph')}. `
+      + `${count(skippedPhases, 'phase was skipped', 'phases were skipped')} `
+      + 'for declaring no edge at all, so the scan had nothing there to adjudicate.',
+    `  ${count(population.length, 'unbacked edge', 'unbacked edges')}.`,
+  ];
+
+  // THE COUNTER, and ONLY when a ledger was really read.
+  if (ledger.state === 'read') {
+    lines.push(`  triaged ${triaged} of ${population.length}`);
+    if (stale > 0) {
+      lines.push(
+        `  STALE: ${count(stale, 'ledger row names', 'ledger rows name')} an edge that is `
+          + 'not in the current unbacked population, so it is reported here and counted '
+          + 'in the number above nowhere.',
+      );
+    }
+    if (typeof ledger.skipped === 'number' && ledger.skipped > 0) {
+      lines.push(
+        `  MALFORMED: ${count(ledger.skipped, 'ledger row', 'ledger rows')} could not be `
+          + 'parsed and was skipped rather than guessed at.',
+      );
+    }
+  } else if (ledger.state === 'unreadable') {
+    lines.push('');
+    for (const chunk of PANEL_WORDING.UNREADABLE_TRIAGE_LEDGER.split(/(?<=\.)\s+/)) {
+      lines.push(`  ${chunk}`);
+    }
+    if (isFilledString(ledger.message)) lines.push(`  the reader said: ${ledger.message}`);
+  } else {
+    lines.push('');
+    for (const chunk of PANEL_WORDING.NO_TRIAGE_LEDGER.split(/(?<=\.)\s+/)) {
+      lines.push(`  ${chunk}`);
+    }
+    if (isFilledString(ledger.path)) lines.push(`  it would be read from: ${ledger.path}`);
+  }
+
+  lines.push('');
+
+  if (population.length === 0) {
+    for (const chunk of PANEL_WORDING.NO_UNBACKED_EDGES.split(/(?<=\.)\s+/)) {
+      lines.push(`  ${chunk}`);
+    }
+    return lines;
+  }
+
+  lines.push('  What this verdict means, in the words this repository already ships');
+  for (const chunk of VERDICT_WORDING.unbacked.split(/(?<=\.)\s+/)) lines.push(`    ${chunk}`);
+  lines.push('');
+
+  let current = null;
+  for (const edge of population) {
+    if (edge.phase !== current) {
+      current = edge.phase;
+      lines.push(`  phase ${current}`);
+    }
+    lines.push(`    ${edge.dependent} depends on ${edge.prerequisite}`);
+    // WHAT THE SCAN LOOKED FOR AND DID NOT FIND, named per edge. A verdict with
+    // no account of what was searched is an accusation rather than a finding.
+    lines.push(
+      `      the scan looked for a coupling from the `
+        + `${count(edge.dependent_lane.length, 'file', 'files')} `
+        + `${edge.dependent} writes to the `
+        + `${count(edge.prerequisite_lane.length, 'file', 'files')} `
+        + `${edge.prerequisite} writes, and found none.`,
+    );
+    lines.push(`      ${edge.dependent} writes: ${lanePreview(edge.dependent_lane, 4)}`);
+    lines.push(`      ${edge.prerequisite} writes: ${lanePreview(edge.prerequisite_lane, 4)}`);
+  }
+
+  lines.push('');
+  lines.push(`  A human adjudicates these in ${TRIAGE_LEDGER_PATH}, 1 row per edge.`);
+  lines.push('  Nothing here reorders any work: this milestone REPORTS, it does not reorder.');
 
   return lines;
 }
@@ -1138,6 +1596,7 @@ function provenanceLines(run) {
 
 const USAGE = [
   '  node scripts/fleet-glass.cjs graph <phase>   # the work graph and its edges',
+  '  node scripts/fleet-glass.cjs findings        # EVERY unbacked edge, all phases',
   '  node scripts/fleet-glass.cjs leases          # the leases and the trunk',
   '  node scripts/fleet-glass.cjs asks            # the open asks, pick first',
   '  node scripts/fleet-glass.cjs watch <phase>   # the LIVE fleet, repainted',
@@ -1275,6 +1734,18 @@ async function main() {
     lines = loaded.ok
       ? renderGraphView(loaded.document)
       : unavailablePanel(`GRAPH  phase ${phase}`, loaded.missing);
+  } else if (verb === 'findings') {
+    // NO PHASE ARGUMENT: this view sweeps every phase, which is the whole point
+    // of it. The seam does the loading and the renderer stays pure.
+    const discovered = discoverPhaseGraphs({ root: ROOT });
+    lines = discovered.ok
+      ? renderFindingsView({
+        phases: discovered.phases,
+        skipped_phases: discovered.skipped,
+        considered_phases: discovered.considered,
+        ledger: readTriageLedger({ root: ROOT }),
+      })
+      : unavailablePanel('FINDINGS', discovered.missing);
   } else if (verb === 'leases' || verb === 'asks') {
     const run = loadRun(ROOT);
     if (!run.ok) {
@@ -1290,7 +1761,7 @@ async function main() {
   } else {
     throw new ExitError(
       1,
-      `fleet-glass.cjs has 4 views and ${JSON.stringify(verb)} is not one of them. Run:\n`
+      `fleet-glass.cjs has 5 views and ${JSON.stringify(verb)} is not one of them. Run:\n`
         + USAGE,
     );
   }
@@ -1303,12 +1774,19 @@ if (require.main === module) runMain(main);
 module.exports = {
   GLASS_ERROR_CODES,
   VERDICT_WORDING,
+  REASON_WORDING,
+  REASON_WORDING_UNKNOWN,
   PANEL_WORDING,
   WATCH_WORDING,
   WATCH_NODE_STATES,
   WATCH_UNKNOWN,
+  TRIAGE_UNTRIAGED,
+  TRIAGE_LEDGER_PATH,
   loadGraph,
   renderGraphView,
+  discoverPhaseGraphs,
+  readTriageLedger,
+  renderFindingsView,
   renderLeaseView,
   renderAskView,
   unavailablePanel,

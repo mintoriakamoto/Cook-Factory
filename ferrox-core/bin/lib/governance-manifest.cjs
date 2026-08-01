@@ -587,7 +587,7 @@ function checkStateStructure(text, filename) {
         }
     }
     // ---- body ----
-    const FORBIDDEN = ' forbidden';
+    const FORBIDDEN = '\u0000forbidden';
     let section = null;
     for (let i = bodyStart; i < lines.length; i++) {
         const line = lines[i].replace(/\r$/, '');

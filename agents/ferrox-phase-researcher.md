@@ -567,6 +567,10 @@ ferrox_run graphify status
 
 If the status response has `stale: true`, note for later: "Graph is {age_hours}h old -- treat semantic relationships as approximate." Include this annotation inline with any graph context injected below.
 
+Also copy the status response's `commit_advisory` string VERBATIM into that same inline annotation, always, whatever it says. Do not paraphrase it, do not re-derive it from the raw tri-state field it came from, and do not decide for yourself what an undetermined result means. The status surface already rendered that verdict, and it renders it in exactly one place so that nothing downstream can disagree with it.
+
+The two signals are INDEPENDENT and you need both. `stale` measures wall-clock age on disk; `commit_advisory` measures how far the graph has drifted from HEAD. A graph written 3 hours ago can sit 30 commits behind while still reporting `stale: false`, and that is precisely the case where the advisory is the only thing telling you the graph describes an older tree.
+
 Query the graph for each major capability in the phase scope (2-3 queries per D-05, discovery-focused):
 
 ```bash

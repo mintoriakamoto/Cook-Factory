@@ -689,7 +689,7 @@ function checkStateStructure(text: unknown, filename: unknown): GovError[] {
   }
 
   // ---- body ----
-  const FORBIDDEN = ' forbidden';
+  const FORBIDDEN = '\u0000forbidden';
   let section: string | null = null;
 
   for (let i = bodyStart; i < lines.length; i++) {
